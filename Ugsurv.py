@@ -25,7 +25,19 @@ from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtCore import Qt
-from qgis.core import QgsPointXY
+from qgis.core import (
+    QgsVectorLayer,
+    QgsProject,
+    QgsFeature,
+    QgsGeometry,
+    QgsPointXY,
+    QgsField,
+    QgsWkbTypes
+)
+from PyQt5.QtCore import QVariant
+from qgis.gui import QgsRubberBand
+from PyQt5.QtWidgets import QShortcut
+from PyQt5.QtGui import QKeySequence
 
 
 
@@ -34,6 +46,7 @@ from .resources import *
 # Import the code for the dialog
 from .modules.terminal import TerminalDialog
 from .Ugsurv_dialog import UgsurvDialog
+from .modules.module_ui.parcelplotter_dialog import ParcelPlotterDialog
 import os.path
 from .modules.cursorcords import CoordinateTracker
 from .modules.keymap import KeyPressFilter
@@ -74,6 +87,21 @@ class Ugsurv:
         # Check if plugin was started the first time in current QGIS session
         # Must be set in initGui() to survive plugin reloads
         self.first_start = None
+        
+        
+         # ====================================================================================
+        # plugin intanstisions
+        self.canvas = self.iface.mapCanvas()
+        self.tracker = CoordinateTracker(self.canvas)
+        self.command_list = ['track'] # was created for suggection purposes.
+        self.currentcommand = [] # was created for suggection purposes.
+        self.cursor_cords = []
+        self.radius = 0
+        
+        # ====================================================================================
+        
+        
+        
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -211,12 +239,11 @@ class Ugsurv:
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.iface.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
         
+        # self.createScratchLayer()  # ✅ add this
+        
         # Connect these functions to ui
         self.terminal_dock.command.returnPressed.connect(self.acceptInput)
         
-        from PyQt5.QtWidgets import QShortcut
-        from PyQt5.QtGui import QKeySequence
-
         # in your run() after creating the dock:
         shortcut_escape = QShortcut(QKeySequence("Escape"), self.terminal_dock)
         shortcut_escape.activated.connect(self.stopMapTools)
@@ -290,17 +317,83 @@ class Ugsurv:
                     self.terminal_dock.commandOutputText += f'\nCircle radius: {round(circle_radius,3)}'
                     self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
                     self.canvas.unsetMapTool(self.tracker)
+                    # self.addCircleToLayer(circle_points[0][0], circle_points[0][1], circle_radius)
                 
             # connect signal to your handler
             self.tracker.cursor_cords.connect(cursorCordsStream)
             self.tracker.leftClicked.connect(handleLeftCanvasClick)
             
-            
-            
-            
-            
         
+        if self.prevCommand == 'pp':
+            self.dlg = ParcelPlotterDialog()
+            self.dlg.show()
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+    # def createCircleGeometry(self, center_x, center_y, radius, segments=72):
+    #     points = []
 
+    #     for i in range(segments):
+    #         angle = 2 * math.pi * i / segments
+    #         x = center_x + radius * math.cos(angle)
+    #         y = center_y + radius * math.sin(angle)
+    #         points.append(QgsPointXY(x, y))
+
+    #     points.append(points[0])  # close polygon
+
+    #     return QgsGeometry.fromPolygonXY([points])
+
+    # def addCircleToLayer(self, center_x, center_y, radius):
+    #     geom = self.createCircleGeometry(center_x, center_y, radius)
+
+    #     feature = QgsFeature()
+    #     feature.setGeometry(geom)
+    #     feature.setAttributes([radius])
+
+    #     self.scratch_layer.dataProvider().addFeature(feature)
+    #     self.scratch_layer.updateExtents()
+    #     self.scratch_layer.triggerRepaint()
 
 
 
@@ -321,3 +414,17 @@ class Ugsurv:
             self.tracker.leftClicked.disconnect()
         except:
             pass
+        
+    
+    # def createScratchLayer(self):
+    #     self.scratch_layer = QgsVectorLayer(
+    #         "Polygon?crs=" + self.canvas.mapSettings().destinationCrs().authid(),
+    #         "temp_layer",
+    #         "memory"
+    #     )
+
+    #     provider = self.scratch_layer.dataProvider()
+    #     provider.addAttributes([QgsField("radius", QVariant.Double)])
+    #     self.scratch_layer.updateFields()
+
+    #     QgsProject.instance().addMapLayer(self.scratch_layer)
