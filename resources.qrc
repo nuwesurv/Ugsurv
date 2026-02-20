@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/Ugsurv" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>
