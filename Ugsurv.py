@@ -55,6 +55,7 @@ import os.path
 from .modules.cursorcords import CoordinateTracker
 from .modules.keymap import KeyPressFilter
 import math
+from .modules.dimension_drawer import DimensionDrawer
 
 
 
@@ -97,8 +98,7 @@ class Ugsurv:
          # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.tracker = CoordinateTracker(self.canvas)
-        self.command_list = ['track'] # was created for suggection purposes.
+        self.command_list = ['track', 'dim', 'circle'] # was created for suggection purposes.
         self.currentcommand = [] # was created for suggection purposes.
         self.cursor_cords = []
         self.radius = 0
@@ -244,14 +244,8 @@ class Ugsurv:
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.iface.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
         
-        # self.createScratchLayer()  # ✅ add this
-        
         # Connect these functions to ui
         self.terminal_dock.command.returnPressed.connect(self.acceptInput)
-        
-        # in your run() after creating the dock:
-        shortcut_escape = QShortcut(QKeySequence("Escape"), self.terminal_dock)
-        shortcut_escape.activated.connect(self.stopMapTools)
         
     
     
@@ -336,152 +330,8 @@ class Ugsurv:
             
             
         # Fourth command is for adding dimesnions.
-        if self.prevCommand == 'dim':
-            dim_points = []
-            
-            # --- Step 0: Create/get layer ---
-            layer_name = "dimension_layer"
-            layers = QgsProject.instance().mapLayersByName(layer_name)
-            
-            if not layers:
-                dim_layer = QgsVectorLayer("LineString?crs=EPSG:32636", layer_name, "memory")
-                provider = dim_layer.dataProvider()
-                provider.addAttributes([QgsField("distance", QVariant.Double)])
-                dim_layer.updateFields()
-                QgsProject.instance().addMapLayer(dim_layer)
-            else:
-                dim_layer = layers[0]
-                # Ensure the layer has the 'distance' field
-                if 'distance' not in [f.name() for f in dim_layer.fields()]:
-                    dim_layer.startEditing()
-                    dim_layer.dataProvider().addAttributes([QgsField("distance", QVariant.Double)])
-                    dim_layer.updateFields()
-                    dim_layer.commitChanges()
-
-            dim_layer.startEditing()
-            self.canvas.setMapTool(self.tracker)
-            
-            # create it once when initializing your tool
-            self.snap_marker = QgsVertexMarker(self.canvas)
-            self.snap_marker.setColor(QColor(255, 0, 0))  # red
-            self.snap_marker.setIconSize(10)
-            self.snap_marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
-            self.snap_marker.setPenWidth(2)
-            self.snap_marker.setVisible(False)  # start hidden
-                        
-            # --- Cursor tracking ---
-            def cursorCordsStream(x, y):
-                # Use the canvas to snap
-                point = QgsPointXY(x, y)
-                snap_result = self.canvas.snappingUtils().snapToMap(point)
-                if snap_result.isValid():
-                    snapped_point = snap_result.point()
-                    point = snapped_point
-                    # print(snapped_point)
-                    self.snap_marker.setCenter(snapped_point)
-                    self.snap_marker.setVisible(True)
-                else:
-                    self.snap_marker.setCenter(point)
-                    self.snap_marker.setVisible(True)
-                    
-                if len(dim_points) == 0:
-                    self.terminal_dock.commandDisplay.setText(
-                        self.terminal_dock.commandOutputText + f'\nSelect start point: {round(x,3)}, {round(y,3)}\n'
-                    )
-                elif len(dim_points) == 1:
-                    dim_dist = math.sqrt((dim_points[0][0]-x)**2 + (dim_points[0][1]-y)**2)
-                    self.terminal_dock.commandDisplay.setText(
-                        self.terminal_dock.commandOutputText + f'\nSelect end point: {round(dim_dist,3)}\n'
-                    )
-
-            # --- Handle left click ---
-            def handleLeftCanvasClick(x, y):
-                point = QgsPointXY(x, y)
-                self.snap_marker.setVisible(False)
-                snap_result = self.canvas.snappingUtils().snapToMap(point)
-                if snap_result.isValid():
-                    snapped_point = snap_result.point()
-                    point = snapped_point
-                    x = snapped_point.x()
-                    y = snapped_point.y()
-                    print(x,y)
-                    
-                dim_points.append([x, y])
-                if len(dim_points) == 1:
-                    self.terminal_dock.commandOutputText += f'\nStart point: {round(x,3)}, {round(y,3)}'
-                    self.terminal_dock.commandDisplay.setText(
-                        self.terminal_dock.commandOutputText + f'\nSelect end point: ... \n'
-                    )
-                elif len(dim_points) == 2:
-                    dim_dist = math.sqrt((dim_points[0][0]-x)**2 + (dim_points[0][1]-y)**2)
-                    self.terminal_dock.commandOutputText += f'\nEnd point: {round(x,3)}, {round(y,3)} \nDistance: {round(dim_dist,3)}'
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                    self.canvas.unsetMapTool(self.tracker)
-                    
-                    # --- Add feature ---
-                    feature = QgsFeature(dim_layer.fields())  # Important: initialize feature with layer fields
-                    feature.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(dim_points[0][0], dim_points[0][1]), QgsPointXY(dim_points[1][0], dim_points[1][1])]))
-                    # feature.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
-                    feature.setAttribute("distance", round(dim_dist, 3))  # Use field name instead of index
-                    
-                    
-                    # dim_layer.startEditing()
-                    dim_layer.addFeature(feature)  # simplified; no need to go through provider directly
-                    symbol = QgsLineSymbol.createSimple({
-                        'color': 'transparent',
-                        'width': '0',
-                        'line_style': 'dashed'
-                    })
-                    dim_layer.renderer().setSymbol(symbol)
-                    dim_layer.triggerRepaint()
-                    
-                    # Create label settings
-                    label_settings = QgsPalLayerSettings()
-                    label_settings.fieldName = 'distance'  # field to show
-                    label_settings.placement = QgsPalLayerSettings.Line  # place labels along lines
-                    
-                    text_format = QgsTextFormat()
-                    text_format.setFont(QFont("Arial", 10))  # font + size
-                    text_format.setColor(QColor("#41b4e0"))      # text color
-                    text_format.setSize(10)                  # size in points
-
-                    label_settings.setFormat(text_format)
-                    
-                    labeling = QgsVectorLayerSimpleLabeling(label_settings)
-                    dim_layer.setLabelsEnabled(True)
-                    dim_layer.setLabeling(labeling)
-                    dim_layer.triggerRepaint()
-                    
-                    
-                    dim_layer.updateExtents()
-                    dim_layer.commitChanges()
-
-            # --- Connect signals only once ---
-            try:
-                self.tracker.cursor_cords.disconnect()
-            except Exception:
-                pass
-            try:
-                self.tracker.leftClicked.disconnect()
-            except Exception:
-                pass
-
-            self.tracker.cursor_cords.connect(cursorCordsStream)
-            self.tracker.leftClicked.connect(handleLeftCanvasClick)
-                    
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
+        if self.prevCommand.lower() == 'dim':
+            DimensionDrawer(self.canvas, self.terminal_dock)
             
             
             
@@ -539,10 +389,6 @@ class Ugsurv:
         except:
             pass
         
-        try:
-            self.snap_marker.setVisible(False)
-        except:
-            pass
         
     
     # def createScratchLayer(self):
