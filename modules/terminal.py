@@ -58,7 +58,7 @@ class TerminalDialog(QDockWidget):
         
         self.key_filter1 = KeyPressFilter( 'up',self.commandRepeatUp)
         self.key_filter2 = KeyPressFilter( 'down',self.commandRepeatDown)
-        self.key_filter3 = KeyPressFilter( 'space',self.commandRepeatUp)
+        self.key_filter3 = KeyPressFilter( 'space',self.commandRepeatPrevCommand)
         self.command.installEventFilter(self.key_filter1)
         self.command.installEventFilter(self.key_filter2)
         self.command.installEventFilter(self.key_filter3)
@@ -80,6 +80,12 @@ class TerminalDialog(QDockWidget):
         self.commandDisplay.ensureCursorVisible()
         
         
+    def commandRepeatPrevCommand(self):
+        if self.historyIndex > 0:
+            self.historyIndex -= 1
+            self.command.setText(self.previousCommand())
+            self.command.returnPressed.emit()
+            
     def commandRepeatUp(self):
         if self.historyIndex > 0:
             self.historyIndex -= 1

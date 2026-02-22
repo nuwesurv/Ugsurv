@@ -46,9 +46,6 @@ class ParcelPlotterDialog(QDialog):
         # Main Layout.
         self.templayout = QVBoxLayout()
 
-        # Heading
-        self.heading = QLabel("Plotting Parcels")
-        self.templayout.addWidget(self.heading)
 
         # FilePicking Button.
         self.filepicker = QPushButton('Select csv or excel file:')

@@ -3,8 +3,9 @@ from qgis.PyQt.QtCore import pyqtSignal, Qt
 from qgis.core import QgsPointXY
 
 class CoordinateTracker(QgsMapTool):
-    cursor_cords = pyqtSignal(float, float)  # define signal
-    leftClicked = pyqtSignal(float, float)  # custom signal
+    # cursor_cords = pyqtSignal(float, float)  # define signal
+    # leftClicked = pyqtSignal(float, float)  # custom signal
+    cursor_cords = []
 
     def __init__(self, canvas):
         super().__init__(canvas)
@@ -15,7 +16,6 @@ class CoordinateTracker(QgsMapTool):
         x = point.x()
         y = point.y()
 
-        self.cursor_cords.emit(x, y)  # emit live coordinates
         
     def canvasPressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -23,4 +23,6 @@ class CoordinateTracker(QgsMapTool):
             x = point.x()
             y = point.y()
 
-            self.leftClicked.emit(x, y)  # fire signal
+            # self.leftClicked.emit(x, y)  # fire signal
+            
+            
