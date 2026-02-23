@@ -35,18 +35,19 @@ class TerminalDialog(QDockWidget):
         # --- Terminal output ---
         self.commandDisplay = QTextEdit()
         self.commandDisplay.setReadOnly(True)
-        self.commandDisplay.setText("Loading plugin...\nPlugin has been loaded...")
+        self.commandDisplay.setText("Loading plugin...\nPlugin has been loaded 🧪...")
         self.commandDisplay.setStyleSheet("color: #5f5f5f;")
         self.commandDisplay.setMinimumHeight(30)
         self.commandDisplay.textChanged.connect(self.scrollUpcommandDisplay)
         main_layout.addWidget(self.commandDisplay)
+        
 
 
         # Spacer
         main_layout.addItem(QSpacerItem(0, 10, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         # --- Command entry ---
-        self.commandOutputText = "Loading plugin...\nPlugin has been loaded..."
+        self.commandOutputText = "Loading plugin...\nPlugin has been loaded 🧪..."
         self.commandHistory = ['']
         self.historyIndex = len(self.commandHistory)-1
 

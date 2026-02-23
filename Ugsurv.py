@@ -37,11 +37,14 @@ from qgis.core import (
     QgsPalLayerSettings, 
     QgsTextFormat, 
     QgsVectorLayerSimpleLabeling,
+    QgsProject,
+    QgsSnappingConfig
 )
 from PyQt5.QtCore import QVariant
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtGui import QKeySequence
+from qgis.gui import QgsMapCanvas
 
 
 
@@ -56,6 +59,8 @@ from .modules.cursorcords import CoordinateTracker
 from .modules.keymap import KeyPressFilter
 import math
 from .modules.dimension_drawer import DimensionDrawer
+from .modules.snapSettingConfig import snapSettingConfig
+from .modules.topology_solver import TopologySolver
 
 
 
@@ -95,13 +100,13 @@ class Ugsurv:
         self.first_start = None
         
         
-         # ====================================================================================
+        # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['track', 'dim', 'circle'] # was created for suggection purposes.
-        self.currentcommand = [] # was created for suggection purposes.
-        self.cursor_cords = []
-        self.radius = 0
+        self.command_list = ['pp' 'dim', 'circle'] # was created for suggection purposes.
+        ...
+        self.active = False  # Track plugin toggle state
+        ...
         
         # ====================================================================================
         
@@ -195,6 +200,10 @@ class Ugsurv:
                 action)
 
         self.actions.append(action)
+        
+        ...
+        action.setCheckable(True)  # <-- Make it toggleable
+        ...
 
         return action
 
@@ -222,7 +231,7 @@ class Ugsurv:
             self.iface.removeToolBarIcon(action)
         # Removes the plugin from the docks.
         if hasattr(self, "terminal_dock") and self.terminal_dock:
-            self.stopMapTools()
+            self.destroyAllTools()
             self.iface.removeDockWidget(self.terminal_dock)
             self.terminal_dock.deleteLater()
             self.terminal_dock = None
@@ -230,7 +239,20 @@ class Ugsurv:
 
     def run(self):
         """Run method that performs all the real work"""
-
+        if self.active:
+            # Plugin is already active → deactivate
+            self.destroyAllTools()  # deactivate map tools
+            if hasattr(self, "terminal_dock") and self.terminal_dock:
+                self.iface.removeDockWidget(self.terminal_dock)
+                self.terminal_dock.deleteLater()
+                self.terminal_dock = None
+            
+            self.active = False
+            return  # Exit early
+        
+        # If we get here → plugin is inactive → activate it
+        self.active = True
+        
         # 🔥 remove old dock if it already exists (important for reloads)
         if hasattr(self, "terminal_dock") and self.terminal_dock:
             try:
@@ -243,9 +265,13 @@ class Ugsurv:
         # terminal dock
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.iface.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+        self.terminal_dock.command.setFocus()
         
         # Connect these functions to ui
         self.terminal_dock.command.returnPressed.connect(self.acceptInput)
+        
+        # This will help to setup the required snap settings.
+        snapSettingConfig()
         
     
     
@@ -271,28 +297,6 @@ class Ugsurv:
         # =================================================================================================
         # then caryyout operations.
         # our first command is tracking the cursor cordinates.
-        if self.prevCommand == 'track':
-            self.currentcommand = 'track'
-            self.canvas.setMapTool(self.tracker)
-            def cursorCordsStream(x, y):
-                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText + f'\ncursor_xy: {round(x,3)}, {round(y,3)}\n' )
-                # print(x, y)
-            
-            # connect signal to your handler
-            self.tracker.cursor_cords.connect(cursorCordsStream)
-            
-        # Second command is for unsetting the cursor cordinates tracker
-        self.command_list.append('untrack')
-        if self.prevCommand == 'untrack':
-            self.canvas.unsetMapTool(self.tracker)
-            
-        # Second command is for unsetting the cursor cordinates tracker
-        if self.prevCommand == 'cls':
-            self.terminal_dock.commandOutputText = 'Terminal cleared...'
-            self.terminal_dock.commandDisplay.setText('Terminal cleared...')
-            
-            
-        # The above functions are gimmicky just for demo purposes
         # The function we have here below is for drawing a circle at the cursor cords
         if self.prevCommand == 'circle':
             # step1: get the center where cordinates shall be placed.
@@ -315,30 +319,49 @@ class Ugsurv:
                     circle_radius = math.sqrt((circle_points[0][0]-circle_points[1][0])**2 + (circle_points[0][1]-circle_points[1][1])**2)
                     self.terminal_dock.commandOutputText += f'\nCircle radius: {round(circle_radius,3)}'
                     self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                    self.canvas.unsetMapTool(self.tracker)
                     # self.addCircleToLayer(circle_points[0][0], circle_points[0][1], circle_radius)
                 
             # connect signal to your handler
             self.tracker.cursor_cords.connect(cursorCordsStream)
             self.tracker.leftClicked.connect(handleLeftCanvasClick)
             
-        # THird command is for automatic plotting of parcels.
+        # Second command is for clearing the terminal.
+        if self.prevCommand == 'cls':
+            self.terminal_dock.commandHistory = ['']
+            self.terminal_dock.historyIndex = 0
+            self.terminal_dock.commandOutputText = 'Terminal cleared...'
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+            
+        # Second command is for automatic plotting of parcels.
         if self.prevCommand == 'pp':
             self.dlg = ParcelPlotterDialog()
             self.dlg.show()
             
-            
-            
-        # Fourth command is for adding dimesnions.
+        # Third command is for adding dimesnions.
         if self.prevCommand.lower() == 'dim':
-            DimensionDrawer(self.canvas, self.terminal_dock)
+            self.dimension_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'single')
+            self.canvas.setMapTool(self.dimension_tool)
+            
+        # Fourth command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'adim':
+            self.dimension_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'selected')
+            self.canvas.setMapTool(self.dimension_tool)
+            
+        # Fifth command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'ts':
+            self.dimension_tool = TopologySolver(self.canvas, self.terminal_dock)
+            self.canvas.setMapTool(self.dimension_tool)
             
             
             
             
             
             
-            
+    def destroyAllTools(self):
+        try:
+            self.dimension_tool.deactivate()
+        except:
+            pass
             
             
             
@@ -368,28 +391,6 @@ class Ugsurv:
     #     self.scratch_layer.dataProvider().addFeature(feature)
     #     self.scratch_layer.updateExtents()
     #     self.scratch_layer.triggerRepaint()
-
-
-
-
-
-    def stopMapTools(self):
-        try:
-            self.canvas.unsetMapTool(self.tracker)
-        except:
-            pass
-
-        try:
-            self.tracker.cursor_cords.disconnect()
-        except:
-            pass
-
-        try:
-            self.tracker.leftClicked.disconnect()
-        except:
-            pass
-        
-        
     
     # def createScratchLayer(self):
     #     self.scratch_layer = QgsVectorLayer(
