@@ -103,7 +103,7 @@ class Ugsurv:
         # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['pp' 'dim', 'circle'] # was created for suggection purposes.
+        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts'] # was created for suggection purposes.
         ...
         self.active = False  # Track plugin toggle state
         ...
@@ -198,13 +198,9 @@ class Ugsurv:
             self.iface.addPluginToMenu(
                 self.menu,
                 action)
-
         self.actions.append(action)
         
-        ...
         action.setCheckable(True)  # <-- Make it toggleable
-        ...
-
         return action
 
     def initGui(self):
@@ -285,8 +281,9 @@ class Ugsurv:
         self.terminal_dock.command.setText('')
         
         try:
-            answer = eval(self.prevCommand)
-            self.terminal_dock.commandOutputText += f' = {answer}'
+            if self.prevCommand.lower() != 'help':
+                answer = eval(self.prevCommand)
+                self.terminal_dock.commandOutputText += f' = {answer}'
         except Exception as e:
             # print(f"{self.prevCommand} can't be evaluated")
             ...
@@ -351,6 +348,19 @@ class Ugsurv:
         if self.prevCommand.lower() == 'ts':
             self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
             self.canvas.setMapTool(self.map_tool)
+            
+            
+            
+        # Fifth command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'help':
+            self.terminal_dock.commandOutputText += '''
+            Command >>>>>
+            dim - \tadd Dimesion on segment or between two points.
+            adim - \tadd Dimensions on entire feature selected
+            ts - \ttopologysolver
+            pp - \tparcelploter
+            '''
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
             
             
