@@ -1,5 +1,5 @@
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import pyqtSignal, Qt
+from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsVectorLayer,
     QgsProject,
@@ -21,8 +21,6 @@ from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snapSettingConfig import snapSettingConfig
 
 class DimensionDrawer(QgsMapTool):
-    cursor_cords = pyqtSignal(float, float)  # define signal
-    leftClicked = pyqtSignal(float, float)  # custom signal
 
     def __init__(self, canvas, terminal_dock, operation_type):
         super().__init__(canvas)
@@ -69,7 +67,7 @@ class DimensionDrawer(QgsMapTool):
         self.snap_marker.setVisible(False)
         self.dim_points.clear()
         self.terminal_dock.commandDisplay.setText(
-            self.terminal_dock.commandOutputText + "\nCommand exited and changes saved 😊.\n"
+            self.terminal_dock.commandOutputText + "\n........\n"
         )
         # Call parent
         super().deactivate()

@@ -339,18 +339,18 @@ class Ugsurv:
             
         # Third command is for adding dimesnions.
         if self.prevCommand.lower() == 'dim':
-            self.dimension_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'single')
-            self.canvas.setMapTool(self.dimension_tool)
+            self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'single')
+            self.canvas.setMapTool(self.map_tool)
             
         # Fourth command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'adim':
-            self.dimension_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'selected')
-            self.canvas.setMapTool(self.dimension_tool)
+            self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'selected')
+            self.canvas.setMapTool(self.map_tool)
             
         # Fifth command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'ts':
-            self.dimension_tool = TopologySolver(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.dimension_tool)
+            self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
+            self.canvas.setMapTool(self.map_tool)
             
             
             
@@ -359,7 +359,7 @@ class Ugsurv:
             
     def destroyAllTools(self):
         try:
-            self.dimension_tool.deactivate()
+            self.map_tool.deactivate()
         except:
             pass
             
