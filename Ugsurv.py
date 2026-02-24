@@ -55,13 +55,13 @@ from .modules.terminal import TerminalDialog
 from .Ugsurv_dialog import UgsurvDialog
 from .modules.module_ui.parcelplotter_dialog import ParcelPlotterDialog
 import os.path
-from .modules.cursorcords import CoordinateTracker
 from .modules.keymap import KeyPressFilter
 import math
 from .modules.dimension_drawer import DimensionDrawer
 from .modules.snapSettingConfig import snapSettingConfig
 from .modules.topology_solver import TopologySolver
-
+from .modules.circle_drawer import CircleDrawer
+from .modules.GlobalKeyPressFilter import GlobalKeyPressFilter
 
 
 class Ugsurv:
@@ -269,6 +269,10 @@ class Ugsurv:
         # This will help to setup the required snap settings.
         snapSettingConfig()
         
+        # # Install global key filter so any key goes to terminal
+        # self.key_filter = GlobalKeyPressFilter(self.terminal_dock)
+        # self.iface.mainWindow().installEventFilter(self.key_filter)
+        
     
     
     def acceptInput(self):
@@ -297,30 +301,8 @@ class Ugsurv:
         # The function we have here below is for drawing a circle at the cursor cords
         if self.prevCommand == 'circle':
             # step1: get the center where cordinates shall be placed.
-            circle_points = []
-            circle_radius = 0
-            self.canvas.setMapTool(self.tracker)
-            def cursorCordsStream(x, y):
-                self.cursor_cords = [x,y]
-                if circle_points.__len__() == 0:
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText + f'\nSelect circle center: {round(x,3)}, {round(y,3)}\n' )
-                if circle_points.__len__() == 1:
-                    circle_radius = math.sqrt((circle_points[0][0]-self.cursor_cords[0])**2 + (circle_points[0][1]-self.cursor_cords[1])**2)
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText + f'\nCircle radius: {round(circle_radius,3)}\n' )
-            def handleLeftCanvasClick(x, y):
-                circle_points.append([x, y])
-                if circle_points.__len__() == 1:
-                    self.terminal_dock.commandOutputText += f'\nCircle center: {round(x,3)}, {round(y,3)}'
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText + f'\nSelect circle radius: ... \n' )
-                if circle_points.__len__() == 2:
-                    circle_radius = math.sqrt((circle_points[0][0]-circle_points[1][0])**2 + (circle_points[0][1]-circle_points[1][1])**2)
-                    self.terminal_dock.commandOutputText += f'\nCircle radius: {round(circle_radius,3)}'
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                    # self.addCircleToLayer(circle_points[0][0], circle_points[0][1], circle_radius)
-                
-            # connect signal to your handler
-            self.tracker.cursor_cords.connect(cursorCordsStream)
-            self.tracker.leftClicked.connect(handleLeftCanvasClick)
+            self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
+            self.canvas.setMapTool(self.map_tool)
             
         # Second command is for clearing the terminal.
         if self.prevCommand == 'cls':
