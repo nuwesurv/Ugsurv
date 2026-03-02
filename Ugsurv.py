@@ -54,6 +54,7 @@ from .resources import *
 from .modules.terminal import TerminalDialog
 from .Ugsurv_dialog import UgsurvDialog
 from .modules.module_ui.parcelplotter_dialog import ParcelPlotterDialog
+from .modules.module_ui.import_print import ImportPrintDialog
 import os.path
 from .modules.keymap import KeyPressFilter
 import math
@@ -227,10 +228,12 @@ class Ugsurv:
             self.iface.removeToolBarIcon(action)
         # Removes the plugin from the docks.
         if hasattr(self, "terminal_dock") and self.terminal_dock:
-            self.destroyAllTools()
             self.iface.removeDockWidget(self.terminal_dock)
             self.terminal_dock.deleteLater()
             self.terminal_dock = None
+        
+        # Remove all tools
+        self.destroyAllTools()
 
 
     def run(self):
@@ -298,51 +301,55 @@ class Ugsurv:
         # =================================================================================================
         # then caryyout operations.
         # our first command is tracking the cursor cordinates.
-        # The function we have here below is for drawing a circle at the cursor cords
-        if self.prevCommand == 'circle':
-            # step1: get the center where cordinates shall be placed.
-            self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
+        # Fifth command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'help':
+            self.terminal_dock.commandOutputText += "\nCommands:"
+            self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
+            self.terminal_dock.commandOutputText += "\nadim - add Dimensions on entire feature selected"
+            self.terminal_dock.commandOutputText += "\nts - topologysolver"
+            self.terminal_dock.commandOutputText += "\npp - parcelploter"
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
-        # Second command is for clearing the terminal.
+        # Command is for clearing the terminal.
         if self.prevCommand == 'cls':
             self.terminal_dock.commandHistory = ['']
             self.terminal_dock.historyIndex = 0
             self.terminal_dock.commandOutputText = 'Terminal cleared...'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
-        # Second command is for automatic plotting of parcels.
+        # Command is for automatic plotting of parcels.
         if self.prevCommand == 'pp':
             self.dlg = ParcelPlotterDialog()
+            # self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
             self.dlg.show()
             
-        # Third command is for adding dimesnions.
+        # Command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'imp':
+            self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
+            self.dlg.show()
+            
+        # Command is for adding dimesnions.
         if self.prevCommand.lower() == 'dim':
             self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'single')
             self.canvas.setMapTool(self.map_tool)
             
-        # Fourth command is for adding dimesnions to entire geometries selected
+        # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'adim':
             self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'selected')
             self.canvas.setMapTool(self.map_tool)
             
-        # Fifth command is for adding dimesnions to entire geometries selected
+        # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'ts':
             self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
             self.canvas.setMapTool(self.map_tool)
             
+        # The function we have here below is for drawing a circle at the cursor cords
+        if self.prevCommand == 'circle':
+            # step1: get the center where cordinates shall be placed.
+            self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
+            self.canvas.setMapTool(self.map_tool)
             
             
-        # Fifth command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'help':
-            self.terminal_dock.commandOutputText += '''
-            Command >>>>>
-            dim - \tadd Dimesion on segment or between two points.
-            adim - \tadd Dimensions on entire feature selected
-            ts - \ttopologysolver
-            pp - \tparcelploter
-            '''
-            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
             
             
@@ -355,44 +362,13 @@ class Ugsurv:
         except:
             pass
             
+        try:
+            self.dlg.close()
+            self.dlg.deleteLater()
+            self.dlg = None
+        except:
+            pass
             
             
             
             
-            
-    # def createCircleGeometry(self, center_x, center_y, radius, segments=72):
-    #     points = []
-
-    #     for i in range(segments):
-    #         angle = 2 * math.pi * i / segments
-    #         x = center_x + radius * math.cos(angle)
-    #         y = center_y + radius * math.sin(angle)
-    #         points.append(QgsPointXY(x, y))
-
-    #     points.append(points[0])  # close polygon
-
-    #     return QgsGeometry.fromPolygonXY([points])
-
-    # def addCircleToLayer(self, center_x, center_y, radius):
-    #     geom = self.createCircleGeometry(center_x, center_y, radius)
-
-    #     feature = QgsFeature()
-    #     feature.setGeometry(geom)
-    #     feature.setAttributes([radius])
-
-    #     self.scratch_layer.dataProvider().addFeature(feature)
-    #     self.scratch_layer.updateExtents()
-    #     self.scratch_layer.triggerRepaint()
-    
-    # def createScratchLayer(self):
-    #     self.scratch_layer = QgsVectorLayer(
-    #         "Polygon?crs=" + self.canvas.mapSettings().destinationCrs().authid(),
-    #         "temp_layer",
-    #         "memory"
-    #     )
-
-    #     provider = self.scratch_layer.dataProvider()
-    #     provider.addAttributes([QgsField("radius", QVariant.Double)])
-    #     self.scratch_layer.updateFields()
-
-    #     QgsProject.instance().addMapLayer(self.scratch_layer)

@@ -148,6 +148,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             self.terminal_dock.commandDisplay.setText(
                 self.terminal_dock.commandOutputText + f'\nSelect reference feature no:{len(self.cursor_points)+1}\n'
             )
+            
                 
                 
                 
@@ -185,15 +186,20 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         # Step 2#  =======================================
         # Solve gaps
         union = adj_feature1.combine(merged_features)
+        
+        hole_geoms = []
         if not union.isMultipart():  # single polygon
             polygons = union.asPolygon()
             inner_rings = polygons[1:]  # list of list[QgsPointXY]
             # Convert each hole to QgsGeometry
-            hole_geoms = []
             for ring in inner_rings:
                 hole_geom = QgsGeometry.fromPolygonXY([ring])
                 hole_geoms.append(hole_geom)
-
+        
+        if hole_geoms.__len__() == 0:
+            self.terminal_dock.commandOutputText += f'\nThe polygons selcted dont touch each other'
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+            return
         # Merge the holes into one Multipart gap.
         merged_gaps = QgsGeometry.unaryUnion(hole_geoms)
         adj_feature2 = adj_feature1.combine(merged_gaps)
