@@ -59,6 +59,7 @@ import os.path
 from .modules.keymap import KeyPressFilter
 import math
 from .modules.dimension_drawer import DimensionDrawer
+from .modules.game1 import Game1
 from .modules.snapSettingConfig import snapSettingConfig
 from .modules.topology_solver import TopologySolver
 from .modules.circle_drawer import CircleDrawer
@@ -306,15 +307,16 @@ class Ugsurv:
             self.terminal_dock.commandOutputText += "\nCommands:"
             self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
             self.terminal_dock.commandOutputText += "\nadim - add Dimensions on entire feature selected"
-            self.terminal_dock.commandOutputText += "\nts - topologysolver"
+            # self.terminal_dock.commandOutputText += "\nts - topologysolver"
             self.terminal_dock.commandOutputText += "\npp - parcelploter"
+            self.terminal_dock.commandOutputText += "\ngm - Starts GIS game"
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
         # Command is for clearing the terminal.
         if self.prevCommand == 'cls':
             self.terminal_dock.commandHistory = ['']
             self.terminal_dock.historyIndex = 0
-            self.terminal_dock.commandOutputText = 'Terminal cleared...'
+            self.terminal_dock.commandOutputText = 'Loading plugin...\nPlugin has been loaded 🧪...\nTerminal cleared...'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
         # Command is for automatic plotting of parcels.
@@ -323,10 +325,15 @@ class Ugsurv:
             # self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
             self.dlg.show()
             
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'imp':
-            self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
-            self.dlg.show()
+        # # Command is for adding dimesnions to entire geometries selected
+        # if self.prevCommand.lower() == 'imp':
+        #     self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
+        #     self.dlg.show()
+            
+        # Command is for playing QGIS game.
+        if self.prevCommand.lower() == 'gm':
+            self.map_tool = Game1(self.canvas, self.terminal_dock, 'single')
+            self.canvas.setMapTool(self.map_tool)
             
         # Command is for adding dimesnions.
         if self.prevCommand.lower() == 'dim':
@@ -338,16 +345,16 @@ class Ugsurv:
             self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'selected')
             self.canvas.setMapTool(self.map_tool)
             
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'ts':
-            self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
+        # # Command is for adding dimesnions to entire geometries selected
+        # if self.prevCommand.lower() == 'ts':
+        #     self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
+        #     self.canvas.setMapTool(self.map_tool)
             
-        # The function we have here below is for drawing a circle at the cursor cords
-        if self.prevCommand == 'circle':
-            # step1: get the center where cordinates shall be placed.
-            self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
+        # # The function we have here below is for drawing a circle at the cursor cords
+        # if self.prevCommand == 'circle':
+        #     # step1: get the center where cordinates shall be placed.
+        #     self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
+        #     self.canvas.setMapTool(self.map_tool)
             
             
             
