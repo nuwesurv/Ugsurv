@@ -106,6 +106,13 @@ class Target():
 
 
 
+    def reset_target(self, start_cords):
+        """Reset the rubberband"""
+        self.prev_x, self.prev_y = start_cords
+        self.curr_x, self.curr_y = start_cords
+        self.rb.reset(QgsWkbTypes.PolygonGeometry)
+    
+    
     def remove(self):
         """Delete the rubberband"""
         self.rb.reset(QgsWkbTypes.PolygonGeometry)

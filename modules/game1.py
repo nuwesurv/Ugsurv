@@ -35,11 +35,14 @@ class Game1(QgsMapTool):
 
     def __init__(self, canvas, terminal_dock, operation_type):
         super().__init__(canvas)
+        self.canvas = canvas
+        extent = self.canvas.extent()
+        canvas_width = extent.width()
+        canvas_height = extent.height()
         self.game_extent = QgsRectangle(445200, 25200, 446800, 26200)
         self.telescope_center = QgsPointXY(self.game_extent.xMinimum() + (self.game_extent.xMaximum() - self.game_extent.xMinimum()) / 2, 
                                            self.game_extent.yMinimum() + 90)
         
-        self.canvas = canvas
         self.terminal_dock = terminal_dock
         self.operation_type = operation_type
         self.cursor_points = []
@@ -49,9 +52,10 @@ class Game1(QgsMapTool):
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.game_loop)
         self.animation_interval = 20  # milliseconds
-        self.targets = [Target('Target1' ,self.canvas, self.get_rand_startxy(), self.game_extent, [0, -10]),
-                        Target('Target2', self.canvas, self.get_rand_startxy(), self.game_extent,[0,-9]),
-                        Target('Target3', self.canvas, self.get_rand_startxy(), self.game_extent, [0, -8]),
+        self.targets = [
+                        Target('Target1' ,self.canvas, self.get_rand_startxy(), self.game_extent, [0, -7]),
+                        Target('Target2', self.canvas, self.get_rand_startxy(), self.game_extent,[0,-6]),
+                        Target('Target3', self.canvas, self.get_rand_startxy(), self.game_extent, [0, -5]),
                         ]
         self.laserphotons = []
         self.start_game()
@@ -73,6 +77,10 @@ class Game1(QgsMapTool):
             random.randint(int(self.game_extent.xMinimum()), int(self.game_extent.xMaximum())),
             random.randint(int(self.game_extent.yMaximum()), int(self.game_extent.yMaximum()) + 100)
         ]
+    
+    def zoom_to_extent(self):
+        self.canvas.setExtent(self.game_extent)
+        self.canvas.refresh()
 
     def create_laser_telescope(self, angle):
         half_h = 10
@@ -240,7 +248,7 @@ class Game1(QgsMapTool):
             dy = speed * math.sin(angle_rad)
             
             
-            self.laserphotons.append(LaserPhoton('Target1' ,self.canvas, angle_rad, self.telescope_center, self.game_extent, [dx, dy]))
+            self.laserphotons.append(LaserPhoton(f'laser_photon{len(self.laserphotons)}' ,self.canvas, angle_rad, self.telescope_center, self.game_extent, [dx, dy]))
             
             
             
@@ -248,29 +256,42 @@ class Game1(QgsMapTool):
             
             
             
-
-    def zoom_to_extent(self):
-        self.canvas.setExtent(self.game_extent)
-        self.canvas.refresh()
-        
-        
-
+    # This is the game loop running the objects.
     def game_loop(self):
         if not self.is_playing:
             return
 
-        # Check if object is still in the game extents
+        # ---- Move targets ----
         for target in self.targets:
             if target.got_hit():
-                print(f'{target.name}Has been hit')
-                # target.remove()
-                target.prev_x, target.prev_y = self.get_rand_startxy()
-                target.curr_x, target.curr_y = self.get_rand_startxy()
+                print(f"{target.name} has been hit")
+                target.reset_target(self.get_rand_startxy())
             else:
                 target.move()
-                
-        # Move all laser_photons.
+
+        # ---- Move photons ----
+        photons_to_remove = []
         for photon in self.laserphotons:
+            if photon.got_hit():
+                print(f"{photon.name} has been hit")
+                photons_to_remove.append(photon)
+                continue
+
             photon.move()
-        
-        
+            photon_geom = photon.geometry
+
+            # ---- Collision detection ----
+            for target in self.targets:
+                if target.geometry.intersects(photon_geom):
+
+                    target.reset_target(self.get_rand_startxy())
+
+                    photons_to_remove.append(photon)
+                    break  # stop checking other targets
+
+        # ---- Remove photons safely ----
+        for photon in photons_to_remove:
+            if photon in self.laserphotons:
+                self.laserphotons.remove(photon)
+                photon.remove()
+                

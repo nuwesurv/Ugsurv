@@ -66,7 +66,7 @@ class LaserPhoton():
 
         cx = self.curr_x
         cy = self.curr_y
-        laser_photon_length = 100
+        laser_photon_length = 200
         dx = laser_photon_length * math.cos(self.angle)
         dy = laser_photon_length * math.sin(self.angle)
 
@@ -107,5 +107,7 @@ class LaserPhoton():
 
     def remove(self):
         """Delete the rubberband"""
-        self.rb.reset(QgsWkbTypes.LineGeometry)
+        # self.rb.reset(QgsWkbTypes.LineGeometry)
+        self.rb.hide()
+        self.rb = None
     
