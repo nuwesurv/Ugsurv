@@ -31,7 +31,7 @@ class Target():
                  game_extent,
                  speed_vector,
                  geom_type=QgsWkbTypes.PolygonGeometry,
-                 color=QColor(0,0,255), width=1,
+                 color=QColor(190, 96, 23), width=1,
                  linestyle=Qt.SolidLine, fill_color=QColor(255,255,255)):
 
         self.name = name
@@ -43,8 +43,10 @@ class Target():
         self.curr_x, self.curr_y = start_cords
 
         # Size
-        self.half_h = 20
-        self.half_w = 20
+        self.half_w = self.half_h = 0.04*(self.game_extent.yMaximum() - self.game_extent.yMinimum())
+        # self.half_w = 40
+        self.half_w1 = self.half_h1 = 0.008*(self.game_extent.yMaximum() - self.game_extent.yMinimum())
+        # self.half_w1 = 8
         
         # Speed
         self.dx, self.dy = speed_vector
@@ -66,22 +68,32 @@ class Target():
         cx = self.curr_x
         cy = self.curr_y
 
-        points = [
+        outer_points = [
             QgsPointXY(cx - self.half_w, cy + self.half_h),
             QgsPointXY(cx + self.half_w, cy + self.half_h),
             QgsPointXY(cx + self.half_w, cy - self.half_h),
             QgsPointXY(cx - self.half_w, cy - self.half_h),
             QgsPointXY(cx - self.half_w, cy + self.half_h)
         ]
+        inner_points = [
+            QgsPointXY(cx - self.half_w1, cy),
+            QgsPointXY(cx, cy ),
+            QgsPointXY(cx, cy + self.half_h1),
+            QgsPointXY(cx, cy ),
+            QgsPointXY(cx + self.half_w1, cy),
+            QgsPointXY(cx, cy ),
+            QgsPointXY(cx, cy - self.half_h1),
+            QgsPointXY(cx, cy ),
+            QgsPointXY(cx - self.half_w1, cy),
+        ]
 
-        poly = QgsGeometry.fromPolygonXY([points])
+        poly = QgsGeometry.fromPolygonXY([outer_points, inner_points])
         self.geometry = poly
         self.rb.setToGeometry(poly, None)
 
 
     def move(self):
         """Move target by dx dy"""
-
         self.prev_x = self.curr_x
         self.prev_y = self.curr_y
         

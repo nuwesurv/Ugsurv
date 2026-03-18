@@ -32,6 +32,7 @@ class LaserPhoton():
                  speed_vector,
                  geom_type=QgsWkbTypes.LineGeometry,
                  color=QColor(255,0,0), width=2,
+                 linestyle=Qt.SolidLine,
                  fill_color=QColor(255,255,255)):
 
         self.name = name
@@ -54,6 +55,7 @@ class LaserPhoton():
         self.rb = QgsRubberBand(canvas, geom_type)
         self.rb.setColor(color)
         self.rb.setWidth(width)
+        self.rb.setLineStyle(linestyle)
         self.geometry = QgsGeometry()
 
         if fill_color and geom_type == QgsWkbTypes.LineGeometry:
@@ -82,9 +84,6 @@ class LaserPhoton():
 
     def move(self):
         """Move target by dx dy"""
-        if self.got_hit():
-            self.remove()
-            return
 
         self.prev_x = self.curr_x
         self.prev_y = self.curr_y
@@ -107,7 +106,7 @@ class LaserPhoton():
 
     def remove(self):
         """Delete the rubberband"""
-        # self.rb.reset(QgsWkbTypes.LineGeometry)
+        self.rb.reset(QgsWkbTypes.LineGeometry)
         self.rb.hide()
         self.rb = None
     
