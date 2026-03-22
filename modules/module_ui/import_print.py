@@ -187,7 +187,7 @@ class ImportPrintDialog(QDialog):
     def fileselector(self):
         self.refresh()
         filepath, _ = QFileDialog.getOpenFileName(self, 'Select files...','',"Image Files (*.png *.jpg *.jpeg)")
-
+        
         if os.path.exists(filepath) :
             self.response.setText(f'File selected: {filepath} 👍')
             self.filepath_store.setText(filepath)
@@ -303,11 +303,13 @@ class ImportPrintDialog(QDialog):
         # --------------------------------------------------
         # Compute translation correctly
         # --------------------------------------------------
-        x1_trans = a * px1 + b * py1
-        y1_trans = c * px1 + d * py1
+        x1_trans = scale * px1
+        y1_trans = scale * (height - py1)
+        # x1_trans = a * px1 + b * py1
+        # y1_trans = c * px1 + d * py1
 
         Tx = x1 - x1_trans
-        Ty = y1 - y1_trans
+        Ty = y1 + y1_trans
 
         # --------------------------------------------------
         # Build GDAL geotransform
@@ -332,7 +334,7 @@ class ImportPrintDialog(QDialog):
         # --------------------------------------------------
         output_raster = os.path.join(
             os.path.dirname(filepath),
-            "aligned_2point.tif"
+            f"{filepath.split('/')[-1].split('.')[0]}.tif"
         )
 
         ds_out = gdal.Translate(output_raster, ds, format="GTiff")

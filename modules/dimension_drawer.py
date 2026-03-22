@@ -13,18 +13,30 @@ from qgis.core import (
     QgsTextFormat, 
     QgsVectorLayerSimpleLabeling,
     QgsPointLocator,
-    QgsWkbTypes
+    QgsWkbTypes,
+    QgsCoordinateReferenceSystem
 )
 from PyQt5.QtCore import QVariant
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snapSettingConfig import snapSettingConfig
+from . import get_appropriate_crs_str
+
 
 class DimensionDrawer(QgsMapTool):
 
     def __init__(self, canvas, terminal_dock, operation_type):
         super().__init__(canvas)
         self.canvas = canvas
+        extent = self.canvas.extent()
+
+        # Set the coordinate sytem to 36N
+        self.appropriate_crs = get_appropriate_crs_str.get_canvas_epsg(self.canvas)
+        self.crs = QgsCoordinateReferenceSystem(f"EPSG:{self.appropriate_crs}")
+        QgsProject.instance().setCrs(self.crs)
+        
+        
+        
         self.terminal_dock = terminal_dock
         self.operation_type = operation_type
         self.dim_points = []
@@ -84,7 +96,7 @@ class DimensionDrawer(QgsMapTool):
         if layers:
             return layers[0]
 
-        self.dim_layer = QgsVectorLayer("LineString?crs=EPSG:32636", layer_name, "memory")
+        self.dim_layer = QgsVectorLayer(f"LineString?crs=EPSG:{self.appropriate_crs}", layer_name, "memory")
         provider = self.dim_layer.dataProvider()
         # provider.addAttributes([QgsField("distance", "double")])
         provider.addAttributes([QgsField("distance", QVariant.Double)])

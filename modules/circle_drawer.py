@@ -20,13 +20,15 @@ from qgis.core import (
     QgsCurvePolygon, 
     QgsGeometry, 
     QgsFeature,
-    QgsPoint
+    QgsPoint,
+    QgsCoordinateReferenceSystem
 )
 from PyQt5.QtCore import QVariant
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snapSettingConfig import snapSettingConfig
 import math
+from . import get_appropriate_crs_str
 
 
 class CircleDrawer(QgsMapTool):
@@ -34,6 +36,14 @@ class CircleDrawer(QgsMapTool):
     def __init__(self, canvas, terminal_dock):
         super().__init__(canvas)
         self.canvas = canvas
+        extent = self.canvas.extent()
+
+        # Set the coordinate sytem to 36N
+        self.appropriate_crs = get_appropriate_crs_str.get_canvas_epsg(self.canvas)
+        crs = QgsCoordinateReferenceSystem(f"EPSG:{self.appropriate_crs}")
+        QgsProject.instance().setCrs(crs)
+        
+        
         self.terminal_dock = terminal_dock
         self.cursor_points = []
         self.dim_layer = self.getDimensionLayer()
@@ -102,7 +112,7 @@ class CircleDrawer(QgsMapTool):
 
         # Notice 'curve=yes' for circular strings support
         self.dim_layer = QgsVectorLayer(
-            "CurvePolygon?crs=EPSG:32636&curve=yes", layer_name, "memory"
+            f"CurvePolygon?crs=EPSG:{self.appropriate_crs}&curve=yes", layer_name, "memory"
         )
         provider = self.dim_layer.dataProvider()
         provider.addAttributes([QgsField("distance", QVariant.Double)])
