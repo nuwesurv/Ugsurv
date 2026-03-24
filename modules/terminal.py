@@ -82,15 +82,20 @@ class TerminalDialog(QDockWidget):
         
         
     def commandRepeatPrevCommand(self):
-        if self.historyIndex > 0:
-            self.historyIndex -= 1
-            self.command.setText(self.previousCommand())
+        if self.command.text() == '':
+            if self.historyIndex > 0:
+                self.historyIndex -= 1
+                self.command.setText(self.previousCommand())
+                self.command.returnPressed.emit()
+        else:
             self.command.returnPressed.emit()
+            
             
     def commandRepeatUp(self):
         if self.historyIndex > 0:
             self.historyIndex -= 1
             self.command.setText(self.previousCommand())
+            
             
     def commandRepeatDown(self):
         if self.historyIndex < len(self.commandHistory)-1:

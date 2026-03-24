@@ -276,7 +276,6 @@ class Ugsurv:
         # # Install global key filter so any key goes to terminal
         # self.key_filter = GlobalKeyPressFilter(self.terminal_dock)
         # self.iface.mainWindow().installEventFilter(self.key_filter)
-        
     
     
     def acceptInput(self):
