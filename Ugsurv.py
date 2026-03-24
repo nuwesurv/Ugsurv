@@ -53,17 +53,18 @@ from .resources import *
 # Import the code for the dialog
 from .modules.terminal import TerminalDialog
 from .Ugsurv_dialog import UgsurvDialog
-from .modules.module_ui.parcelplotter_dialog import ParcelPlotterDialog
-from .modules.module_ui.import_print import ImportPrintDialog
+from .module_wz_dialogs.parcelplotter_dialog import ParcelPlotterDialog
+from .module_wz_dialogs.import_print import ImportPrintDialog
+
 import os.path
 from .modules.keymap import KeyPressFilter
 import math
 from .modules.dimension_drawer import DimensionDrawer
-from .modules.game1 import Game1
+from .modules.totalstation_laser_game import Game1
 from .modules.snapSettingConfig import snapSettingConfig
 from .modules.topology_solver import TopologySolver
 from .modules.circle_drawer import CircleDrawer
-from .modules.GlobalKeyPressFilter import GlobalKeyPressFilter
+from .modules.ugsurv_maptool import UgsurvMaptool
 
 
 class Ugsurv:
@@ -273,9 +274,9 @@ class Ugsurv:
         # This will help to setup the required snap settings.
         snapSettingConfig()
         
-        # # Install global key filter so any key goes to terminal
-        # self.key_filter = GlobalKeyPressFilter(self.terminal_dock)
-        # self.iface.mainWindow().installEventFilter(self.key_filter)
+        # Install global maptool to handle inputs at first entry
+        self.map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
+        self.canvas.setMapTool(self.map_tool)
     
     
     def acceptInput(self):

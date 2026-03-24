@@ -31,7 +31,7 @@ import math
 from . import get_appropriate_crs_str
 
 
-class CircleDrawer(QgsMapTool):
+class UgsurvMaptool(QgsMapTool):
 
     def __init__(self, canvas, terminal_dock):
         super().__init__(canvas)
@@ -97,6 +97,10 @@ class CircleDrawer(QgsMapTool):
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
             self.deactivate()
+            
+        if event.key() in (Qt.Key_D, Qt.Key_S):
+            self.terminal_dock.command.setText('D')
+            
             
             
             
@@ -179,7 +183,7 @@ class CircleDrawer(QgsMapTool):
     
     
     
-
+    
 
 
 
@@ -268,38 +272,3 @@ class CircleDrawer(QgsMapTool):
                 self.cursor_points.clear()
                 
                 
-                
-         
-    # def createCircleFeature(self):
-    #     if self.cursor_points.__len__() != 2:
-    #         print(f'The dimension points required are two(2) but instead got{self.cursor_points.__len__()}')
-    #         return
-        
-    #     p1 = self.cursor_points[0]
-    #     p2 = self.cursor_points[1]
-
-    #     geom1 = QgsGeometry.fromPolylineXY([p1, p2])
-    #     geom2 = QgsGeometry.fromPolylineXY([p2, p1])
-
-    #     # 🔎 Check for duplicate
-    #     for feat in self.dim_layer.getFeatures():
-    #         existing_geom = feat.geometry()
-
-    #         if not existing_geom:
-    #             continue
-
-    #         # Compare both directions
-    #         if existing_geom.equals(geom1) or existing_geom.equals(geom2):
-    #             print("Circle already exists. Skipping.")
-    #             return  # 🚫 Stop — duplicate found
-        
-    #     circle_radius = self.cursor_points[0].distance(self.cursor_points[1])
-    #     center_point = self.cursor_points[0]
-    #     circle_geom = QgsGeometry.fromPointXY(center_point).buffer(circle_radius, 72)
-        
-    #     # --- Add feature ---
-    #     self.feature = QgsFeature(self.dim_layer.fields())  # Important: initialize feature with layer fields
-    #     self.feature.setGeometry(circle_geom)
-    #     self.feature.setAttribute("distance", round(circle_radius, 3))  # Use field name instead of index
-    #     self.dim_layer.addFeature(self.feature)  # simplified; no need to go through provider directly
-    #     self.dim_layer.triggerRepaint()

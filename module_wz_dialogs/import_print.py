@@ -213,6 +213,7 @@ class ImportPrintDialog(QDialog):
         
     def updatePageView(self):
         self.scene.clear()
+        self.align_points.clear()
 
         self.pixmap = QPixmap(self.image_holder[self.choosen_pagenumber])
         self.pixmap_item = self.scene.addPixmap(self.pixmap)
@@ -221,7 +222,7 @@ class ImportPrintDialog(QDialog):
         # ✅ update label
         total = len(self.image_holder)
         self.choosen_pagenumber_label.setText(
-            f"{self.choosen_pagenumber} / {total}"
+            f"{self.choosen_pagenumber+1} / {total}"
         )
         
         # 👇 UX polish
@@ -288,16 +289,15 @@ class ImportPrintDialog(QDialog):
             # Read file
             if filepath.endswith('.pdf'):
                 self.load_pdf_images(filepath)
+                self.updatePageView()
                 
-                self.scene.clear()
-                self.pixmap = QPixmap(self.image_holder[self.choosen_pagenumber])
-                self.pixmap_item = self.scene.addPixmap(self.pixmap)
-                self.pixmap_item.setCursor(Qt.CrossCursor)
             else:
                 self.scene.clear()
-                self.pixmap = QPixmap(filepath)
-                self.pixmap_item = self.scene.addPixmap(self.pixmap)
-                self.pixmap_item.setCursor(Qt.CrossCursor)
+                self.image_holder = {}
+                self.image_holder = {0: filepath}
+                self.choosen_pagenumber = 0
+                self.updatePageView()
+                
 
         except Exception as e:
             self.response.setText(f"Error: {str(e)}")
@@ -333,11 +333,7 @@ class ImportPrintDialog(QDialog):
         # --------------------------------------------------
         # Open raster FIRST (needed for height)
         # --------------------------------------------------
-        if filepath.endswith('.pdf'):
-            ds = gdal.Open(self.image_holder[self.choosen_pagenumber])
-        else:
-            ds = gdal.Open(filepath)
-            
+        ds = gdal.Open(self.image_holder[self.choosen_pagenumber])
         if ds is None:
             self.response.setText("Failed to open raster.")
             return
