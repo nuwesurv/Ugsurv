@@ -57,9 +57,6 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QTextEdit
 from PyQt5.QtGui import QFont, QIcon, QPainter, QColor
 from PyQt5.QtCore import QSize
-import math
-from osgeo import gdal, osr
-from qgis.core import QgsRasterLayer, QgsProject
 
 import fitz
 import tempfile
@@ -122,8 +119,8 @@ class ImportPrintDialog(QDialog):
     def __init__(self, terminal_dock=None, parent = None):
         super().__init__(parent)
         self.setWindowTitle('Import Print')
-        self.setMinimumWidth(800)
-        self.setMinimumHeight(600)
+        self.setMinimumWidth(1000)
+        self.setMinimumHeight(700)
         # self.setFixedWidth(400)
         self.terminal_dock = terminal_dock
         self.align_points = []   # store active alignment points
@@ -203,21 +200,6 @@ class ImportPrintDialog(QDialog):
         self.setLayout(self.templayout)
         self.plotbutton.clicked.connect(self.align_raster)
 
-    def go_prev_page(self):
-        if self.chosen_page_number > 0:
-            self.chosen_page_number -= 1
-            self.chosen_page_number_label.setText(str(self.chosen_page_number))
-            self.response.setText(f'Page {str(self.chosen_page_number)} has been selected')
-            self.update_page_display()
-    def go_next_page(self):
-        if self.chosen_page_number < len(self.image_holder) - 1:
-            self.chosen_page_number += 1
-            self.chosen_page_number_label.setText(str(self.chosen_page_number))
-            self.response.setText(f'Page {str(self.chosen_page_number)} has been selected')
-            self.update_page_display()
-    def update_page_display(self):
-        self.scene.clear()
-        self.align_points = []   # store active alignment points
 
     def nextpage(self):
         if self.choosen_pagenumber < len(self.image_holder) - 1:
@@ -289,45 +271,7 @@ class ImportPrintDialog(QDialog):
         self.scene.clear()
         self.align_points = []
 
-    def open_image_with_gdal(self):
-        img_data = base64.b64decode(self.image_holder[self.chosen_page_number])
 
-        vsimem_path = f"/vsimem/page_{self.chosen_page_number}.png"
-
-        # Write to GDAL virtual memory
-        gdal.FileFromMemBuffer(vsimem_path, img_data)
-
-        # Now GDAL can open it
-        ds = gdal.Open(vsimem_path)
-        return ds
-
-
-    # Function to read and add images to the gridview.
-    def load_pdf_images(self, pdf_path):
-        pdf = fitz.open(pdf_path)
-
-        n_pages = len(pdf)
-        for page_number in range(n_pages):
-            # Load the page
-            page_obj = pdf[page_number]
-            
-            # Render page as an image (pixmap)
-            pix = page_obj.get_pixmap(
-                matrix=fitz.Matrix(2, 2),  # Scale factor (2x for higher resolution)
-                alpha=False,  # No transparency
-                annots=True  # Include annotations and form fields
-            )
-            
-            # Convert pixmap to PIL Image
-            pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            # save pdf images.
-            buffered = BytesIO()
-            pil_image.save(buffered, format="PNG")
-            image_path = base64.b64encode(buffered.getvalue()).decode("utf-8")
-            self.image_holder[page_number] = image_path
-
-        pdf.close()
 
 
 
@@ -337,10 +281,8 @@ class ImportPrintDialog(QDialog):
         filepath, _ = QFileDialog.getOpenFileName(self, 'Select files...','',"Image Files (*.png *.jpg *.jpeg *.pdf)")
         
         if os.path.exists(filepath) :
-            self.response.setText(f'File selected: {filepath} 👍.')
+            self.response.setText(f'File selected: {filepath} 👍')
             self.filepath_store.setText(filepath)
-        else:
-            self.response.setText(f'Failed to select File 👎.')
             
         try:
             # Read file
@@ -362,7 +304,20 @@ class ImportPrintDialog(QDialog):
 
 
 
+
+
+
+
+
+
+
     def align_raster(self):
+
+        import os
+        import math
+        from osgeo import gdal, osr
+        from qgis.core import QgsRasterLayer, QgsProject
+
         filepath = self.filepath_store.text()
 
         if not os.path.exists(filepath) or filepath == "No file selected":
@@ -414,7 +369,7 @@ class ImportPrintDialog(QDialog):
         gcp2 = parse_gcp(self.align_points[1]['text_edit'].text())
 
         if not gcp1 or not gcp2:
-            self.response.setText("Incorrect coordinate format. Use 'E, N'")
+            self.response.setText("Incorrect coordinate format. Use 'E,N'")
             return
 
         x1, y1 = gcp1
@@ -525,6 +480,7 @@ class ImportPrintDialog(QDialog):
     def add_align_point(self, x, y):
         self.terminal_dock.commandOutputText += f'\nAlign_point: {[x, y]}'
         self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+        
         
         self.add_textedit_at(x, y)
 
