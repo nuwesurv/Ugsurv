@@ -58,7 +58,11 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QTextEdit
 from PyQt5.QtGui import QFont, QIcon, QPainter, QColor
 from PyQt5.QtCore import QSize
 
-
+import fitz
+import tempfile
+from PIL import Image
+import base64
+from io import BytesIO
 
 
 
@@ -123,6 +127,10 @@ class ImportPrintDialog(QDialog):
 
         # Main Layout.
         self.templayout = QVBoxLayout()
+        
+        # Pdf tools setup
+        self.image_holder = {}
+        self.choosen_pagenumber = 0
 
 
         # FilePicking Button.
@@ -155,20 +163,104 @@ class ImportPrintDialog(QDialog):
         self.templayout.addWidget(self.view)
 
 
+        # Add the next and prev pages.
+        self.buttongrouper1 = QHBoxLayout()
+        self.hspacer1 = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.hspacer2 = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.prevbutton = QPushButton('<< Prev')
+        self.prevbutton.setFixedWidth(100)
+        
+        self.choosen_pagenumber_label = QLabel(f"{self.choosen_pagenumber}")
+        
+        self.nextbutton = QPushButton('Next >>')
+        self.nextbutton.setFixedWidth(100)
+
+        self.buttongrouper1.addItem(self.hspacer1)
+        self.buttongrouper1.addWidget(self.prevbutton)
+        self.buttongrouper1.addWidget(self.choosen_pagenumber_label)
+        self.buttongrouper1.addWidget(self.nextbutton)
+        self.buttongrouper1.addItem(self.hspacer2)
+        self.buttongrouper1.setSpacing(10)
+        self.templayout.addLayout(self.buttongrouper1)
+        self.prevbutton.clicked.connect(self.prevpage)
+        self.nextbutton.clicked.connect(self.nextpage)
+
+
         # Add the close and run buttons.
-        self.buttongrouper = QHBoxLayout()
-        self.hspacer = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.buttongrouper2 = QHBoxLayout()
+        self.hspacer3 = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.plotbutton = QPushButton('Align print')
         self.plotbutton.setFixedWidth(100)
 
-        self.buttongrouper.addItem(self.hspacer)
-        self.buttongrouper.addWidget(self.plotbutton)
-        self.buttongrouper.setSpacing(10)
-        self.templayout.addItem(self.buttongrouper)
+        self.buttongrouper2.addItem(self.hspacer3)
+        self.buttongrouper2.addWidget(self.plotbutton)
+        self.buttongrouper2.setSpacing(10)
+        self.templayout.addLayout(self.buttongrouper2)
 
         self.setLayout(self.templayout)
         self.plotbutton.clicked.connect(self.align_raster)
 
+
+    def nextpage(self):
+        if self.choosen_pagenumber < len(self.image_holder) - 1:
+            self.choosen_pagenumber += 1
+            self.updatePageView()
+
+    def prevpage(self):
+        if self.choosen_pagenumber > 0:
+            self.choosen_pagenumber -= 1
+            self.updatePageView()
+        
+    def updatePageView(self):
+        self.scene.clear()
+
+        self.pixmap = QPixmap(self.image_holder[self.choosen_pagenumber])
+        self.pixmap_item = self.scene.addPixmap(self.pixmap)
+        self.pixmap_item.setCursor(Qt.CrossCursor)
+
+        # ✅ update label
+        total = len(self.image_holder)
+        self.choosen_pagenumber_label.setText(
+            f"{self.choosen_pagenumber} / {total}"
+        )
+        
+        # 👇 UX polish
+        self.prevbutton.setEnabled(self.choosen_pagenumber > 0)
+        self.nextbutton.setEnabled(self.choosen_pagenumber < total - 1)
+
+
+
+
+
+
+    # Function to read and add images to the gridview.
+    def load_pdf_images(self, pdf_path):
+        pdf = fitz.open(pdf_path)
+        n_pages = len(pdf)
+        # Create ONE temp directory for all pages
+        self.temp_dir = tempfile.mkdtemp(prefix="Ugsurv_pdf_pages_")
+
+        for page_number in range(n_pages):
+            # Load the page
+            page_obj = pdf[page_number]
+            
+            # Render page as an image (pixmap)
+            pix = page_obj.get_pixmap(
+                matrix=fitz.Matrix(2, 2),  # Scale factor (2x for higher resolution)
+                alpha=False,  # No transparency
+                annots=True  # Include annotations and form fields
+            )
+
+            # save pdf images.
+            # Convert to PIL
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            # Save to temp file
+            image_path = os.path.join(self.temp_dir, f"page_{page_number}.png")
+            img.save(image_path, "PNG")
+            self.image_holder[page_number] = image_path
+            
+        pdf.close()
 
 
 
@@ -186,7 +278,7 @@ class ImportPrintDialog(QDialog):
     # ===================================================================================================
     def fileselector(self):
         self.refresh()
-        filepath, _ = QFileDialog.getOpenFileName(self, 'Select files...','',"Image Files (*.png *.jpg *.jpeg)")
+        filepath, _ = QFileDialog.getOpenFileName(self, 'Select files...','',"Image Files (*.png *.jpg *.jpeg *.pdf)")
         
         if os.path.exists(filepath) :
             self.response.setText(f'File selected: {filepath} 👍')
@@ -194,10 +286,18 @@ class ImportPrintDialog(QDialog):
             
         try:
             # Read file
-            self.scene.clear()
-            self.pixmap = QPixmap(filepath)
-            self.pixmap_item = self.scene.addPixmap(self.pixmap)
-            self.pixmap_item.setCursor(Qt.CrossCursor)
+            if filepath.endswith('.pdf'):
+                self.load_pdf_images(filepath)
+                
+                self.scene.clear()
+                self.pixmap = QPixmap(self.image_holder[self.choosen_pagenumber])
+                self.pixmap_item = self.scene.addPixmap(self.pixmap)
+                self.pixmap_item.setCursor(Qt.CrossCursor)
+            else:
+                self.scene.clear()
+                self.pixmap = QPixmap(filepath)
+                self.pixmap_item = self.scene.addPixmap(self.pixmap)
+                self.pixmap_item.setCursor(Qt.CrossCursor)
 
         except Exception as e:
             self.response.setText(f"Error: {str(e)}")
@@ -233,7 +333,11 @@ class ImportPrintDialog(QDialog):
         # --------------------------------------------------
         # Open raster FIRST (needed for height)
         # --------------------------------------------------
-        ds = gdal.Open(filepath)
+        if filepath.endswith('.pdf'):
+            ds = gdal.Open(self.image_holder[self.choosen_pagenumber])
+        else:
+            ds = gdal.Open(filepath)
+            
         if ds is None:
             self.response.setText("Failed to open raster.")
             return
