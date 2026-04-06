@@ -63,6 +63,7 @@ from .modules.dimension_drawer import DimensionDrawer
 from .modules.totalstation_laser_game import Game1
 from .modules.snapSettingConfig import snapSettingConfig
 from .modules.topology_solver import TopologySolver
+from .modules.fix_geometry import FixGeometry
 from .modules.circle_drawer import CircleDrawer
 from .modules.ugsurv_maptool import UgsurvMaptool
 
@@ -351,6 +352,11 @@ class Ugsurv:
         # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'ts':
             self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
+            self.canvas.setMapTool(self.map_tool)
+            
+        # Command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'fix':
+            self.map_tool = FixGeometry(self.canvas, self.terminal_dock)
             self.canvas.setMapTool(self.map_tool)
             
         # The function we have here below is for drawing a circle at the cursor cords

@@ -40,13 +40,6 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         self.rubber_band2.setLineStyle(Qt.DashLine)
         self.rubber_band2.setFillColor(QColor(0, 0, 255, 10))
         
-        # Style the rubberband
-        self.rubber_band3 = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
-        self.rubber_band3.setColor(QColor(224, 154, 72))  # Blue
-        self.rubber_band3.setWidth(2)
-        self.rubber_band3.setLineStyle(Qt.DashLine)
-        self.rubber_band3.setFillColor(QColor(224, 154, 72, 30))
-        
         
     def showRubberBandPolygon(self, geometry, rubber_band):
         rubber_band.reset(QgsWkbTypes.PolygonGeometry)
@@ -66,7 +59,6 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         # Remove rubberbands
         self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
         self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)
-        self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
         
         # Clean variables
         self.cursor_points.clear()
@@ -92,26 +84,10 @@ class TopologySolver(QgsMapToolIdentifyFeature):
     def canvasMoveEvent(self, event):
         point = self.toMapCoordinates(event.pos())
         
-        # Call identify from parent class
-        results = self.identify(
-            event.x(),
-            event.y(),
-            [layer for layer in QgsProject.instance().mapLayers().values()],
-            QgsMapToolIdentifyFeature.TopDownAll
-        )
-        self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
-            
-        
         if len(self.cursor_points) == 0:
             self.terminal_dock.commandDisplay.setText(
                 self.terminal_dock.commandOutputText + f'\nSelect adjust feature:\n'
             )
-            if len(results)>0:
-                feature = results[0].mFeature
-                self.showRubberBandPolygon(feature.geometry(), self.rubber_band3)
-            else:
-                self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
-                
         elif len(self.cursor_points) >= 1:
             # Clear it
             self.terminal_dock.commandDisplay.setText(
@@ -128,7 +104,6 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             # Reset the rubberbands
             self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
             self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)
-            self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
             
             # Clean variables
             self.cursor_points.clear()
@@ -274,7 +249,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
 
     #     return self.s_layer
     
-    def snap_function(self, geom1: QgsGeometry, ref_geom: QgsGeometry, tolerance=0.1):
+    def snap_function(self, geom1: QgsGeometry, ref_geom: QgsGeometry, tolerance=0.2):
         # Work on a copy (important)
         geom1 = QgsGeometry(geom1)
 
