@@ -95,8 +95,8 @@ class UgsurvMaptool(QgsMapTool):
         super().deactivate()
         
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
-            self.deactivate()
+        # if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
+        #     self.deactivate()
             
         if event.key() in (Qt.Key_D, Qt.Key_S):
             self.terminal_dock.command.setText('D')

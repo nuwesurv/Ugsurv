@@ -40,6 +40,13 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         self.rubber_band2.setLineStyle(Qt.DashLine)
         self.rubber_band2.setFillColor(QColor(0, 0, 255, 10))
         
+        # Style the rubberband
+        self.rubber_band3 = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+        self.rubber_band3.setColor(QColor(224, 154, 72))  # Blue
+        self.rubber_band3.setWidth(2)
+        self.rubber_band3.setLineStyle(Qt.DashLine)
+        self.rubber_band3.setFillColor(QColor(224, 154, 72, 30))
+        
         
     def showRubberBandPolygon(self, geometry, rubber_band):
         rubber_band.reset(QgsWkbTypes.PolygonGeometry)
@@ -59,6 +66,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         # Remove rubberbands
         self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
         self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)
+        self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
         
         # Clean variables
         self.cursor_points.clear()
@@ -84,10 +92,25 @@ class TopologySolver(QgsMapToolIdentifyFeature):
     def canvasMoveEvent(self, event):
         point = self.toMapCoordinates(event.pos())
         
+        # Call identify from parent class
+        results = self.identify(
+            event.x(),
+            event.y(),
+            [layer for layer in QgsProject.instance().mapLayers().values()],
+            QgsMapToolIdentifyFeature.TopDownAll
+        )
+        self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
+            
+        
         if len(self.cursor_points) == 0:
             self.terminal_dock.commandDisplay.setText(
                 self.terminal_dock.commandOutputText + f'\nSelect adjust feature:\n'
             )
+            if len(results)>0:
+                feature = results[0].mFeature
+                self.showRubberBandPolygon(feature.geometry(), self.rubber_band3)
+            else:
+                self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
                 
         elif len(self.cursor_points) >= 1:
             # Clear it
@@ -100,11 +123,12 @@ class TopologySolver(QgsMapToolIdentifyFeature):
     def canvasPressEvent(self, event):
         if event.button() == Qt.RightButton:
             self.solveTopology()
-            self.solveTopology()
+            # self.solveTopology()
             
-            # Reste the rubberbands
+            # Reset the rubberbands
             self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
             self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)
+            self.rubber_band3.reset(QgsWkbTypes.PolygonGeometry)
             
             # Clean variables
             self.cursor_points.clear()
@@ -115,6 +139,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             self.terminal_dock.commandOutputText += f'\n------Next >>>'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             return
+
 
         if event.button() == Qt.LeftButton:
             point = self.toMapCoordinates(event.pos())
@@ -149,6 +174,8 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                 self.terminal_dock.commandOutputText + f'\nSelect reference feature no:{len(self.cursor_points)+1}\n'
             )
             
+                
+                
                 
                 
                 
@@ -199,21 +226,27 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         if hole_geoms.__len__() == 0:
             self.terminal_dock.commandOutputText += f'\nThe polygons selcted dont touch each other'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            return
-        # Merge the holes into one Multipart gap.
-        merged_gaps = QgsGeometry.unaryUnion(hole_geoms)
-        adj_feature2 = adj_feature1.combine(merged_gaps)
+            adj_feature2 = adj_feature1
+            # return
+        else:
+            # Merge the holes into one Multipart gap.
+            merged_gaps = QgsGeometry.unaryUnion(hole_geoms)
+            adj_feature2 = adj_feature1.combine(merged_gaps)
+        
+        # Clean up the Geometries.
         adj_feature2 = adj_feature2.makeValid()
         adj_feature2 = adj_feature2.simplify(0.001)
         
         # Step 2#  =======================================
         # Solve topological relation.
+        # i want to use qgis processing to snap adj_feature2 to merged_features
+        adj_feature3 = self.snap_function(adj_feature2, merged_features)
         
             
         layer.startEditing()
         layer.beginEditCommand("Fix parcel topology")
         
-        layer.changeGeometry(self.adj_feature_properties['fid'], adj_feature2)
+        layer.changeGeometry(self.adj_feature_properties['fid'], adj_feature3)
         layer.endEditCommand()
         layer.triggerRepaint()
         
@@ -240,3 +273,46 @@ class TopologySolver(QgsMapToolIdentifyFeature):
     #     self.s_layer.startEditing()
 
     #     return self.s_layer
+    
+    def snap_function(self, geom1: QgsGeometry, ref_geom: QgsGeometry, tolerance=0.1):
+        # Work on a copy (important)
+        geom1 = QgsGeometry(geom1)
+
+        # This handles when reference geomerty node is interacting with adjustment shape node or segment
+        for ref_qpoint in ref_geom.asPolygon()[0]:
+            dist, closest_pt, after_vertex, left_or_right = geom1.closestSegmentWithContext(ref_qpoint)
+
+            # Only act if within snapping tolerance
+            if dist <= tolerance**2:
+                
+                # Case A: Check if there's already a nearby vertex → move it
+                vertex_id = geom1.closestVertex(ref_qpoint)[1]
+                vertex_point = geom1.closestVertex(ref_qpoint)[0]
+
+                if vertex_point.distance(ref_qpoint) <= tolerance:
+                    # Move existing vertex
+                    geom1.moveVertex(ref_qpoint.x(), ref_qpoint.y(), vertex_id)
+
+                else:
+                    # Case B: No nearby vertex → insert new one on segment
+                    geom1.insertVertex(closest_pt.x(), closest_pt.y(), after_vertex)
+
+                    # Then move it exactly onto reference node
+                    new_vid = after_vertex
+                    geom1.moveVertex(ref_qpoint.x(), ref_qpoint.y(), new_vid)
+                    
+        # This handles when reference geomerty segment is interacting with adjustment shape node
+        # ==========================================
+        # Case: Adjustment vertex → Reference segment
+
+        # Get all vertices of geom1
+        for vertex_id, adj_point in enumerate(geom1.asPolygon()[0]):
+            dist, closest_pt, after_vertex, left_or_right = ref_geom.closestSegmentWithContext(adj_point)
+
+            if dist <= tolerance**2:
+                # Move the adjustment vertex onto the reference segment
+                geom1.moveVertex(closest_pt.x(), closest_pt.y(), vertex_id)
+        
+        return geom1
+            
+        

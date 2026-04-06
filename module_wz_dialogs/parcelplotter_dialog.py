@@ -137,7 +137,12 @@ class ParcelPlotterDialog(QDialog):
                     item = QTableWidgetItem(str(value))
                     self.tableview.setItem(idx, idy, item)
             
+            # First remove Add items.
+            self.northings.clear()
+            self.eastings.clear()
+            self.code.clear()
             
+            # Then Add items.
             self.northings.addItems(columns)
             self.eastings.addItems(columns)
             self.code.addItems(columns)

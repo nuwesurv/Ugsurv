@@ -274,9 +274,10 @@ class Ugsurv:
         # This will help to setup the required snap settings.
         snapSettingConfig()
         
-        # Install global maptool to handle inputs at first entry
-        self.map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
-        self.canvas.setMapTool(self.map_tool)
+        # # Install global maptool to handle inputs at first entry
+        # self.global_map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
+        # self.canvas.setMapTool(self.global_map_tool)
+        
     
     
     def acceptInput(self):
