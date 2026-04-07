@@ -38,7 +38,10 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsProject,
     QgsWkbTypes,
-    QgsGeometry,QgsVectorLayer, QgsField
+    QgsGeometry,
+    QgsVectorLayer,
+    QgsField,
+    QgsSpatialIndex
 )
 
 
@@ -116,6 +119,12 @@ class GeometryAppenderDialog(QDialog):
         if not selected_features:
             self.update_result_label(self.response, "No features selected in 'From' layer!", "red")
             return
+        
+        # Build spatial index for target layer
+        index = QgsSpatialIndex(to_layer.getFeatures())
+
+        # Store existing geometries
+        existing_geoms = {f.id(): f.geometry() for f in to_layer.getFeatures()}
 
         try:
             # Start editing target layer if not already
@@ -147,6 +156,33 @@ class GeometryAppenderDialog(QDialog):
                 # --- 2. Fix invalid geometry (important in real data) ---
                 if not geom.isGeosValid():
                     geom = geom.makeValid()
+                    
+                # Here we try to avoid spatial duplication of parcels.
+                # --- 🔍 CHECK IF EXISTS ---
+                candidate_ids = index.intersects(geom.boundingBox())
+                exists = False
+                for cid in candidate_ids:
+                    existing_geom = existing_geoms[cid]
+
+                    # Strict check
+                    if geom.equals(existing_geom):
+                        exists = True
+                        break
+
+                    # Optional: fuzzy match (real-world safer)
+                    if geom.intersects(existing_geom):
+                        overlap = geom.intersection(existing_geom).area()
+                        if overlap / geom.area() > 0.95:  # 95% overlap
+                            exists = True
+                            break
+
+                if exists:
+                    self.update_result_label(
+                        self.response,
+                        f"Selected feature already exists in the To layer.",
+                        "green"
+                    )
+                    continue  # 🚫 skip duplicate
                 
                 # here we reassign new_feature a geometry that has been transformed
                 new_feat = QgsFeature(to_fields)
