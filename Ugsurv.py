@@ -64,6 +64,7 @@ from .modules.totalstation_laser_game import Game1
 from .modules.snapSettingConfig import snapSettingConfig
 from .modules.topology_solver import TopologySolver
 from .modules.fix_geometry import FixGeometry
+from .module_wz_dialogs.append_geometry import GeometryAppenderDialog
 from .modules.circle_drawer import CircleDrawer
 from .modules.ugsurv_maptool import UgsurvMaptool
 
@@ -330,6 +331,11 @@ class Ugsurv:
             self.dlg.show()
             
         # Command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'add':
+            self.dlg = GeometryAppenderDialog()
+            self.dlg.show()
+            
+        # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'import':
             self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
             self.dlg.show()
@@ -364,7 +370,6 @@ class Ugsurv:
             # step1: get the center where cordinates shall be placed.
             self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
             self.canvas.setMapTool(self.map_tool)
-            
             
             
             
