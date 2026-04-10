@@ -133,6 +133,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                 if len(self.selected_geoms) == 1:
                     self.adj_feature_properties['layer'] = results[0].mLayer.name()
                     self.adj_feature_properties['fid'] = results[0].mFeature.id()
+                    print(['adj_feature',results[0].mLayer.name(), results[0].mFeature.id()])
                     self.showRubberBandPolygon(feature.geometry(), self.rubber_band1)
                 else:
                     merged_geom = QgsGeometry.unaryUnion(self.selected_geoms[1:])
@@ -160,70 +161,76 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             return
         
-        # Setup the adj_feature
-        # adj_feature = self.selected_geoms[0]
-        layer_name = self.adj_feature_properties['layer']
-        fid = self.adj_feature_properties['fid']
-        layers = QgsProject.instance().mapLayersByName(layer_name)
+        try:
+            # Setup the adj_feature
+            # adj_feature = self.selected_geoms[0]
+            layer_name = self.adj_feature_properties['layer']
+            fid = self.adj_feature_properties['fid']
+            layers = QgsProject.instance().mapLayersByName(layer_name)
 
-        if layers:
-            layer =  layers[0]
-        else:
-            self.terminal_dock.commandOutputText += f'\nSelect layer not found!'
-            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            return
-        adj_feature = layer.getFeature(fid).geometry()
-        
-        # Merge all other features
-        other_features = self.selected_geoms[1:]
-        merged_features = QgsGeometry.unaryUnion(other_features)
-          
-        # Step 1# ========================================
-        # Solve overlaps
-        adj_feature1 = adj_feature.difference(merged_features)
-        if adj_feature1.isEmpty():
-            # Nothing was subtracted
-            adj_feature1 = adj_feature 
-        
-        # Step 2#  =======================================
-        # Solve gaps
-        union = adj_feature1.combine(merged_features)
-        
-        hole_geoms = []
-        if not union.isMultipart():  # single polygon
-            polygons = union.asPolygon()
-            inner_rings = polygons[1:]  # list of list[QgsPointXY]
-            # Convert each hole to QgsGeometry
-            for ring in inner_rings:
-                hole_geom = QgsGeometry.fromPolygonXY([ring])
-                hole_geoms.append(hole_geom)
-        
-        if hole_geoms.__len__() == 0:
-            self.terminal_dock.commandOutputText += f'\nThe polygons selcted dont touch each other'
-            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            adj_feature2 = adj_feature1
-            # return
-        else:
-            # Merge the holes into one Multipart gap.
-            merged_gaps = QgsGeometry.unaryUnion(hole_geoms)
-            adj_feature2 = adj_feature1.combine(merged_gaps)
-        
-        # Clean up the Geometries.
-        adj_feature2 = adj_feature2.makeValid()
-        adj_feature2 = adj_feature2.simplify(0.001)
-        
-        # Step 2#  =======================================
-        # Solve topological relation.
-        # i want to use qgis processing to snap adj_feature2 to merged_features
-        adj_feature3 = self.snap_function(adj_feature2, merged_features)
-        
+            if layers:
+                layer =  layers[0]
+            else:
+                self.terminal_dock.commandOutputText += f'\nSelect layer not found!'
+                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                return
+            adj_feature = layer.getFeature(fid).geometry()
+            # print(['adj_feature',adj_feature])
             
-        layer.startEditing()
-        layer.beginEditCommand("Fix parcel topology")
-        
-        layer.changeGeometry(self.adj_feature_properties['fid'], adj_feature3)
-        layer.endEditCommand()
-        layer.triggerRepaint()
+            # Merge all other features
+            other_features = self.selected_geoms[1:]
+            merged_features = QgsGeometry.unaryUnion(other_features)
+            
+            # Step 1# ========================================
+            # Solve overlaps
+            adj_feature1 = adj_feature.difference(merged_features)
+            if adj_feature1.isEmpty():
+                # Nothing was subtracted
+                adj_feature1 = adj_feature 
+            
+            # Step 2#  =======================================
+            # Solve gaps
+            union = adj_feature1.combine(merged_features)
+            
+            hole_geoms = []
+            if not union.isMultipart():  # single polygon
+                polygons = union.asPolygon()
+                inner_rings = polygons[1:]  # list of list[QgsPointXY]
+                # Convert each hole to QgsGeometry
+                for ring in inner_rings:
+                    hole_geom = QgsGeometry.fromPolygonXY([ring])
+                    hole_geoms.append(hole_geom)
+            
+            if hole_geoms.__len__() == 0:
+                self.terminal_dock.commandOutputText += f'\nThe polygons selcted dont touch each other'
+                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                adj_feature2 = adj_feature1
+                # return
+            else:
+                # Merge the holes into one Multipart gap.
+                merged_gaps = QgsGeometry.unaryUnion(hole_geoms)
+                adj_feature2 = adj_feature1.combine(merged_gaps)
+            
+            # Clean up the Geometries.
+            adj_feature2 = adj_feature2.makeValid()
+            adj_feature2 = adj_feature2.simplify(0.001)
+            
+            # Step 2#  =======================================
+            # Solve topological relation.
+            # i want to use qgis processing to snap adj_feature2 to merged_features
+            adj_feature3 = self.snap_function(adj_feature2, merged_features)
+            
+                
+            layer.startEditing()
+            layer.beginEditCommand("Fix parcel topology")
+            
+            layer.changeGeometry(self.adj_feature_properties['fid'], adj_feature3)
+            layer.endEditCommand()
+            layer.triggerRepaint()
+        except Exception as e:
+            self.terminal_dock.commandOutputText += f'\nExperienced error while proccesing:\nerror: {e}'
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+            
         
         
         # new_feature = QgsFeature(self.s_layer.fields())
@@ -249,7 +256,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
 
     #     return self.s_layer
     
-    def snap_function(self, geom1: QgsGeometry, ref_geom: QgsGeometry, tolerance=0.2):
+    def snap_function(self, geom1: QgsGeometry, ref_geom: QgsGeometry, tolerance=0.1):
         # Work on a copy (important)
         geom1 = QgsGeometry(geom1)
 

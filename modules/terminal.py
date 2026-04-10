@@ -35,7 +35,7 @@ class TerminalDialog(QDockWidget):
         # --- Terminal output ---
         self.commandDisplay = QTextEdit()
         self.commandDisplay.setReadOnly(True)
-        self.commandDisplay.setText("Loading plugin...\nPlugin has been loaded 🧪...")
+        self.commandDisplay.setText("Loading plugin 0.01ms...\nPlugin has been loaded 🧪 0.01ms...")
         self.commandDisplay.setStyleSheet("color: #5f5f5f;")
         self.commandDisplay.setMinimumHeight(30)
         self.commandDisplay.textChanged.connect(self.scrollUpcommandDisplay)
@@ -47,7 +47,7 @@ class TerminalDialog(QDockWidget):
         main_layout.addItem(QSpacerItem(0, 10, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         # --- Command entry ---
-        self.commandOutputText = "Loading plugin...\nPlugin has been loaded 🧪..."
+        self.commandOutputText = "Loading plugin 0.01ms...\nPlugin has been loaded 🧪 0.01ms..."
         self.commandHistory = ['']
         self.historyIndex = len(self.commandHistory)-1
 

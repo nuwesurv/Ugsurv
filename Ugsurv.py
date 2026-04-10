@@ -308,13 +308,20 @@ class Ugsurv:
         # Fifth command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'help':
             self.terminal_dock.commandOutputText += "\nCommands:"
+            self.terminal_dock.commandOutputText += "\nDialog box->"
+            self.terminal_dock.commandOutputText += "\nadd - adds selected features in one layer to another"
+            self.terminal_dock.commandOutputText += "\npp - parcelploter"
+            self.terminal_dock.commandOutputText += "\nprint - Import cadastral print"
+            self.terminal_dock.commandOutputText += "\n"
+            self.terminal_dock.commandOutputText += "\nWithout Dialog box->"
             self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
             self.terminal_dock.commandOutputText += "\nadim - add Dimensions on entire feature selected"
-            self.terminal_dock.commandOutputText += "\nts - topologysolver"
-            self.terminal_dock.commandOutputText += "\nplot - parcelploter"
             self.terminal_dock.commandOutputText += "\ngame - Starts GIS game"
-            self.terminal_dock.commandOutputText += "\nc - topologysolver"
-            self.terminal_dock.commandOutputText += "\nimport - topologysolver"
+            self.terminal_dock.commandOutputText += "\nts - topologysolver"
+            self.terminal_dock.commandOutputText += "\nfix - Fix geometry in layer."
+            self.terminal_dock.commandOutputText += "\n"
+            self.terminal_dock.commandOutputText += "\ncls - Clear command line"
+            self.terminal_dock.commandOutputText += "\n"
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
         # Command is for clearing the terminal.
@@ -336,7 +343,7 @@ class Ugsurv:
             self.dlg.show()
             
         # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'import':
+        if self.prevCommand.lower() == 'print':
             self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
             self.dlg.show()
             
