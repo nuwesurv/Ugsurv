@@ -60,7 +60,7 @@ class FixGeometry(QgsMapToolIdentifyFeature):
         # Hide snap marker and clear state
         self.cursor_points.clear()
         self.terminal_dock.commandDisplay.setText(
-            self.terminal_dock.commandOutputText + "\n........\n"
+            self.terminal_dock.commandOutputText + "\n...\n"
         )
         # Call parent
         super().deactivate()
@@ -83,51 +83,54 @@ class FixGeometry(QgsMapToolIdentifyFeature):
         
         
     def canvasPressEvent(self, event):
-        if event.button() == Qt.RightButton:
-            self.fixGeometry()
-            
-            # Reset the rubberbands
-            self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
-            
-            # Clean variables
-            self.cursor_points.clear()
-            self.selected_geoms.clear()
-            self.adj_feature_properties = {}
-            
-            self.terminal_dock.commandOutputText += f'\n------Next >>>'
-            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            return
-
-
-        if event.button() == Qt.LeftButton:
-            point = self.toMapCoordinates(event.pos())
-            self.cursor_points.append(point)
-            # Call identify from parent class
-            results = self.identify(
-                event.x(),
-                event.y(),
-                [layer for layer in QgsProject.instance().mapLayers().values()],
-                QgsMapToolIdentifyFeature.TopDownAll
-            )
-
-            if results:
-                feature = results[0].mFeature
-                self.selected_geoms.append(feature.geometry())
-                if len(self.selected_geoms) == 1:
-                    self.adj_feature_properties['layer'] = results[0].mLayer.name()
-                    self.adj_feature_properties['fid'] = results[0].mFeature.id()
-            else:
-                if len(self.selected_geoms) == 1:
-                    self.adj_feature_properties['layer'] = results[0].mLayer.name()
-                    self.adj_feature_properties['fid'] = results[0].mFeature.id()
-                    self.terminal_dock.commandOutputText += f'\nNo feature detected?'
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+        try:
+            if event.button() == Qt.RightButton:
+                self.fixGeometry()
                 
-            self.terminal_dock.commandOutputText += f'\nFeature{len(self.cursor_points)}: {results[0].mLayer.name()}'
-            self.terminal_dock.commandDisplay.setText(
-                self.terminal_dock.commandOutputText + '\n'
-            )
-            
+                # Reset the rubberbands
+                self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+                
+                # Clean variables
+                self.cursor_points.clear()
+                self.selected_geoms.clear()
+                self.adj_feature_properties = {}
+                
+                self.terminal_dock.commandOutputText += f'\n------Next >>>'
+                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                return
+
+
+            if event.button() == Qt.LeftButton:
+                point = self.toMapCoordinates(event.pos())
+                # Call identify from parent class
+                results = self.identify(
+                    event.x(),
+                    event.y(),
+                    [layer for layer in QgsProject.instance().mapLayers().values()],
+                    QgsMapToolIdentifyFeature.TopDownAll
+                )
+
+                if results:
+                    self.cursor_points.append(point)
+                    feature = results[0].mFeature
+                    self.selected_geoms.append(feature.geometry())
+                    if len(self.selected_geoms) == 1:
+                        self.adj_feature_properties['layer'] = results[0].mLayer.name()
+                        self.adj_feature_properties['fid'] = results[0].mFeature.id()
+                else:
+                    if len(self.selected_geoms) == 1:
+                        self.adj_feature_properties['layer'] = results[0].mLayer.name()
+                        self.adj_feature_properties['fid'] = results[0].mFeature.id()
+                        self.terminal_dock.commandOutputText += f'\nNo feature detected?'
+                        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                    
+                self.terminal_dock.commandOutputText += f'\nFeature{len(self.cursor_points)}: {results[0].mLayer.name()}'
+                self.terminal_dock.commandDisplay.setText(
+                    self.terminal_dock.commandOutputText + '\n'
+                )
+        except Exception as e:
+            self.terminal_dock.commandOutputText += f'\nExperienced error: {e}'
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
                 
                 
                 

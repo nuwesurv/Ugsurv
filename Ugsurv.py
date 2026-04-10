@@ -364,7 +364,7 @@ class Ugsurv:
             
         # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'ts':
-            self.map_tool = TopologySolver(self.canvas, self.terminal_dock)
+            self.map_tool = TopologySolver(self.canvas, self.iface, self.terminal_dock)
             self.canvas.setMapTool(self.map_tool)
             
         # Command is for adding dimesnions to entire geometries selected
