@@ -53,8 +53,6 @@ from .resources import *
 # Import the code for the dialog
 from .modules.terminal import TerminalDialog
 from .Ugsurv_dialog import UgsurvDialog
-from .module_wz_dialogs.parcelplotter_dialog import ParcelPlotterDialog
-from .module_wz_dialogs.import_print import ImportPrintDialog
 
 import os.path
 from .modules.keymap import KeyPressFilter
@@ -64,7 +62,10 @@ from .modules.totalstation_laser_game import Game1
 from .modules.snapSettingConfig import snapSettingConfig
 from .modules.topology_solver import TopologySolver
 from .modules.fix_geometry import FixGeometry
+from .module_wz_dialogs.parcelplotter_dialog import ParcelPlotterDialog
+from .module_wz_dialogs.import_print import ImportPrintDialog
 from .module_wz_dialogs.append_geometry import GeometryAppenderDialog
+from .module_wz_dialogs.crs_adjust import CrsAdjustDialog
 from .modules.circle_drawer import CircleDrawer
 from .modules.ugsurv_maptool import UgsurvMaptool
 
@@ -312,6 +313,7 @@ class Ugsurv:
             self.terminal_dock.commandOutputText += "\nadd - adds selected features in one layer to another"
             self.terminal_dock.commandOutputText += "\npp - parcelploter"
             self.terminal_dock.commandOutputText += "\nprint - Import cadastral print"
+            self.terminal_dock.commandOutputText += "\nadcrs - Import cadastral print"
             self.terminal_dock.commandOutputText += "\n"
             self.terminal_dock.commandOutputText += "\nWithout Dialog box->"
             self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
@@ -340,6 +342,11 @@ class Ugsurv:
         # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'add':
             self.dlg = GeometryAppenderDialog()
+            self.dlg.show()
+            
+        # Command is for adding dimesnions to entire geometries selected
+        if self.prevCommand.lower() == 'adcrs':
+            self.dlg = CrsAdjustDialog(parent=self.iface.mainWindow())
             self.dlg.show()
             
         # Command is for adding dimesnions to entire geometries selected

@@ -134,7 +134,6 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                     self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
                     return
                 
-
                 if results:
                     self.cursor_points.append(point)
                     feature = results[0].mFeature
@@ -142,7 +141,6 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                     if len(self.selected_geoms) == 1:
                         self.adj_feature_properties['layer'] = results[0].mLayer.name()
                         self.adj_feature_properties['fid'] = results[0].mFeature.id()
-                        print([results[0].mLayer.name(), results[0].mFeature.id()])
                         self.showRubberBandPolygon(feature.geometry(), self.rubber_band1)
                     else:
                         merged_geom = QgsGeometry.unaryUnion(self.selected_geoms[1:])
@@ -161,7 +159,6 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         except Exception as e:
             self.terminal_dock.commandOutputText += f'\nExperienced error: {e}'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            
                 
                 
                 

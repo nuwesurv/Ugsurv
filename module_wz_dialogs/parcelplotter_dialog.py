@@ -224,7 +224,7 @@ class ParcelPlotterDialog(QDialog):
             epsg_code = self.crsWidget.crs().postgisSrid() 
             new_gdf = new_gdf.set_crs(epsg=epsg_code)
             # new_gdf = new_gdf.set_crs(epsg=32636)
-            new_layer_path = os.path.splitext(filepath)[0] + '_2.gpkg'
+            new_layer_path = os.path.splitext(filepath)[0] + '.gpkg'
             new_gdf.to_file(new_layer_path, driver='GPKG')
 
             # Load layer in QGIS
