@@ -66,6 +66,7 @@ from .module_wz_dialogs.parcelplotter_dialog import ParcelPlotterDialog
 from .module_wz_dialogs.import_print import ImportPrintDialog
 from .module_wz_dialogs.append_geometry import GeometryAppenderDialog
 from .module_wz_dialogs.crs_adjust import CrsAdjustDialog
+from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.ugsurv_maptool import UgsurvMaptool
 
@@ -231,11 +232,6 @@ class Ugsurv:
                 self.tr(u'&ParcelPro'),
                 action)
             self.iface.removeToolBarIcon(action)
-        # Removes the plugin from the docks.
-        if hasattr(self, "terminal_dock") and self.terminal_dock:
-            self.iface.removeDockWidget(self.terminal_dock)
-            self.terminal_dock.deleteLater()
-            self.terminal_dock = None
         
         # Remove all tools
         self.destroyAllTools()
@@ -246,11 +242,6 @@ class Ugsurv:
         if self.active:
             # Plugin is already active → deactivate
             self.destroyAllTools()  # deactivate map tools
-            if hasattr(self, "terminal_dock") and self.terminal_dock:
-                self.iface.removeDockWidget(self.terminal_dock)
-                self.terminal_dock.deleteLater()
-                self.terminal_dock = None
-            
             self.active = False
             return  # Exit early
         
@@ -259,11 +250,7 @@ class Ugsurv:
         
         # 🔥 remove old dock if it already exists (important for reloads)
         if hasattr(self, "terminal_dock") and self.terminal_dock:
-            try:
-                self.iface.removeDockWidget(self.terminal_dock)
-                self.terminal_dock.deleteLater()
-            except:
-                pass
+            self.destroyAllTools()
             self.terminal_dock = None
 
         # terminal dock
@@ -313,7 +300,8 @@ class Ugsurv:
             self.terminal_dock.commandOutputText += "\nadd - adds selected features in one layer to another"
             self.terminal_dock.commandOutputText += "\npp - parcelploter"
             self.terminal_dock.commandOutputText += "\nprint - Import cadastral print"
-            self.terminal_dock.commandOutputText += "\nadcrs - Import cadastral print"
+            self.terminal_dock.commandOutputText += "\ncrs - Selected feature CRS adjust"
+            self.terminal_dock.commandOutputText += "\nspiky - Find spiky vertices between two segments"
             self.terminal_dock.commandOutputText += "\n"
             self.terminal_dock.commandOutputText += "\nWithout Dialog box->"
             self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
@@ -344,12 +332,17 @@ class Ugsurv:
             self.dlg = GeometryAppenderDialog()
             self.dlg.show()
             
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'adcrs':
+        # Command is for adjusting cordinate system of selected features.
+        if self.prevCommand.lower() == 'crs':
             self.dlg = CrsAdjustDialog(parent=self.iface.mainWindow())
             self.dlg.show()
             
-        # Command is for adding dimesnions to entire geometries selected
+        # Command is for finding spiky geoms
+        if self.prevCommand.lower() == 'spiky':
+            self.spiky_detect_dock = SpikyGeomsDock(self.canvas, self.iface.mainWindow())
+            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.spiky_detect_dock)
+            
+        # Command is for georeferencing and adding a cadatsral print to the map.
         if self.prevCommand.lower() == 'print':
             self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
             self.dlg.show()
@@ -392,15 +385,32 @@ class Ugsurv:
             
             
     def destroyAllTools(self):
+        # Remove any maptools active
         try:
             self.map_tool.deactivate()
         except:
             pass
-            
+        
+        # Remove any dialog boxes
         try:
             self.dlg.close()
             self.dlg.deleteLater()
             self.dlg = None
+        except:
+            pass
+        
+        
+        # Remove the spiky detector
+        try:
+            self.iface.removeDockWidget(self.spiky_detect_dock)
+            self.spiky_detect_dock.deleteLater()
+        except:
+            pass
+        
+        # Remove the terminal
+        try:
+            self.iface.removeDockWidget(self.terminal_dock)
+            self.terminal_dock.deleteLater()
         except:
             pass
             

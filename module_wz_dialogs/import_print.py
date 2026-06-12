@@ -47,10 +47,9 @@ from qgis.PyQt.QtWidgets import (
                             QGraphicsProxyWidget
                         )
 from qgis.core import QgsProject, QgsVectorLayer, QgsField, QgsRasterLayer
-import os.path
-import pandas as pd
-import geopandas as gpd
-import shapely as sh
+
+import math
+from osgeo import gdal, osr
 from qgis.gui import QgsProjectionSelectionWidget
 from qgis.core import QgsCoordinateReferenceSystem
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -275,7 +274,6 @@ class ImportPrintDialog(QDialog):
 
 
 
-
     # ===================================================================================================
     def fileselector(self):
         self.refresh()
@@ -298,26 +296,13 @@ class ImportPrintDialog(QDialog):
                 self.choosen_pagenumber = 0
                 self.updatePageView()
                 
-
         except Exception as e:
             self.response.setText(f"Error: {str(e)}")
 
 
 
 
-
-
-
-
-
-
     def align_raster(self):
-
-        import os
-        import math
-        from osgeo import gdal, osr
-        from qgis.core import QgsRasterLayer, QgsProject
-
         filepath = self.filepath_store.text()
 
         if not os.path.exists(filepath) or filepath == "No file selected":
@@ -405,16 +390,12 @@ class ImportPrintDialog(QDialog):
         # --------------------------------------------------
         x1_trans = scale * px1
         y1_trans = scale * (height - py1)
-        # x1_trans = a * px1 + b * py1
-        # y1_trans = c * px1 + d * py1
 
         Tx = x1 - x1_trans
         Ty = y1 + y1_trans
 
         # --------------------------------------------------
         # Build GDAL geotransform
-        # Xgeo = GT0 + px*GT1 + py*GT2
-        # Ygeo = GT3 + px*GT4 + py*GT5
         # --------------------------------------------------
         geotransform = [
             Tx,   # GT0

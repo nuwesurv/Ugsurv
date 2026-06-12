@@ -78,7 +78,7 @@ class FixGeometry(QgsMapToolIdentifyFeature):
         
         if len(self.cursor_points) == 0:
             self.terminal_dock.commandDisplay.setText(
-                self.terminal_dock.commandOutputText + f'\nSelect adjust feature:\n'
+                self.terminal_dock.commandOutputText + f'\nClick adjust feature:\n'
             )
         
         
@@ -158,7 +158,6 @@ class FixGeometry(QgsMapToolIdentifyFeature):
         # Clean up the Geometries.
         adj_feature1 = adj_feature.makeValid()
         # adj_feature1 = adj_feature1.simplify(0.001)
-        
             
         layer.startEditing()
         layer.beginEditCommand("Fix parcel Geometry")

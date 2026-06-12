@@ -109,13 +109,13 @@ class CrsAdjustDialog(QDialog):
     def adjust_crs(self):
         from_layer = self.maplayerSelector1.currentLayer()
         if not from_layer:
-            self.update_result_label(self.response, "No 'from' layer selected!", "red")
+            self.update_result_label(self.response, "No layer selected!", "red")
             return
         
         # Check selection
         selected_features = from_layer.selectedFeatures()
         if not selected_features:
-            self.update_result_label(self.response, "No features selected in 'From' layer!", "red")
+            self.update_result_label(self.response, "No features selected in layer!", "red")
             return
         
         # Espg selector
@@ -125,9 +125,6 @@ class CrsAdjustDialog(QDialog):
             # Start editing target layer if not already
             if not from_layer.isEditable():
                 from_layer.startEditing()
-
-            to_fields = from_layer.fields()
-            new_features = []
             
             # Prepare CRS transform
             target_crs = self.crsWidget.crs()
@@ -154,7 +151,7 @@ class CrsAdjustDialog(QDialog):
 
             self.update_result_label(
                 self.response,
-                f"Successfully adjusted {len(new_features)} feature(s) to {to_epsg_code}.",
+                f"Successfully adjusted {len(selected_features)} feature(s) to crs: {to_epsg_code}.",
                 "green"
             )
 

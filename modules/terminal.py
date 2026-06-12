@@ -25,8 +25,6 @@ class TerminalDialog(QDockWidget):
         # Create a container QWidget for the dock
         container = QWidget()
         self.setWidget(container)
-        # self.setMinimumWidth(600)
-        # self.setMaximumWidth(400)
         self.setMinimumHeight(80)
 
         # Main layout
