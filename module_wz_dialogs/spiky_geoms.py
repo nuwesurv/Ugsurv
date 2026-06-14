@@ -115,8 +115,8 @@ class SpikyGeomsDock(QDockWidget):
         label.setStyleSheet(f"color: {color};")
         label.setText(f"Result: {message}")
         
+        
     def row_clicked(self, row, column):
-
         # Get value from first column
         x = self.tableview.item(row, 1).text()
         y = self.tableview.item(row, 2).text()
@@ -153,6 +153,10 @@ class SpikyGeomsDock(QDockWidget):
             
     
     def start_search(self):
+        self.tableview.setRowCount(0)
+        self.tableview.setColumnCount(3)
+        self.tableview.setHorizontalHeaderLabels(self.field_names)
+        
         search_layer = self.maplayerSelector1.currentLayer()
         if not search_layer:
             self.update_result_label(self.response, "No layer selected!", "red")
@@ -162,7 +166,7 @@ class SpikyGeomsDock(QDockWidget):
         # self.field_names = [field.name() for field in search_layer.fields()]
         self.tableview.setRowCount(search_layer.featureCount())
         
-
+        actual_row_id = 0
         for row_idx, feature in enumerate(search_layer.getFeatures()):
             attrs = feature.attributes()
             ring = feature.geometry().asPolygon()[0]
@@ -171,13 +175,14 @@ class SpikyGeomsDock(QDockWidget):
             result = self.find_spikes(coords, 10)
             if result.__len__()>0:
                 for corner in result:
-                    # for col_idx, value in enumerate(attrs):
                     for col_idx, col_name in enumerate(self.field_names):
+                        print([actual_row_id, col_idx, col_name, corner[col_name]])
                         self.tableview.setItem(
-                            row_idx,
+                            actual_row_id,
                             col_idx,
                             QTableWidgetItem(str(corner[col_name]))
                         )
+                    actual_row_id += 1
                     
                 
     def find_spikes(self, polygon_cords, threshold):
