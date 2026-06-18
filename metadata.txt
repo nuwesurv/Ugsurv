@@ -5,12 +5,12 @@
 [general]
 name=Ugsurv
 qgisMinimumVersion=3.0
-description=General purpose CAD like plugin for Ug survey works
+description=General purpose plugin for Uganda survey workflows.
 version=0.1
 author=Nuwe Surv
 email=nuwesurv@gmail.com
 
-about=General purpose CAD like plugin for Ug survey works. Circle, Polyline, Dimensioning, Aligning prints, JRJ computation, Auto plotting and topology correction.
+about=Uganda survey workflow plugin. QGIS game, Spiky corner geometry detection, Dimensioning, Aligning prints, Auto plotting and topology correction.
 
 tracker=http://bugs
 repository=http://repo
