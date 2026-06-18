@@ -29,12 +29,22 @@ import qgis
 from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
 from qgis.core import QgsProject, QgsVectorLayer, QgsField
 import os.path
-import pandas as pd
-import geopandas as gpd
-import shapely as sh
 from qgis.gui import QgsProjectionSelectionWidget
 from qgis.core import QgsCoordinateReferenceSystem
 
+
+try:
+    import pandas as pd
+except:
+    print('Failed to find pandas module')
+try:
+    import geopandas as gpd
+except:
+    print('Failed to find geopandas module')
+try:
+    import shapely as sh
+except:
+    print('Failed to find shapely module')
 
 class ParcelPlotterDialog(QDialog):
     def __init__(self, parent = None):

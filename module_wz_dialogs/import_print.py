@@ -57,14 +57,21 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QTextEdit
 from PyQt5.QtGui import QFont, QIcon, QPainter, QColor
 from PyQt5.QtCore import QSize
 
-import fitz
+# import fitz
 import tempfile
-from PIL import Image
+# from PIL import Image
 import base64
 from io import BytesIO
 
 
-
+try:
+    import fitz
+except:
+    print('Failed to find fitz module')
+try:
+    from PIL import Image
+except:
+    print('Failed to find Pillow module')
 
 
 

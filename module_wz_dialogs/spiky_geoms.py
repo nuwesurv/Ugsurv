@@ -32,9 +32,7 @@ from PyQt5.QtWidgets import QDockWidget, QWidget, QGroupBox, QDialog, QVBoxLayou
 #     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
 #     QTextEdit, QLabel, QLineEdit, QSpacerItem, QSizePolicy
 # )
-import os.path
-import numpy as np
-import shapely as sh
+# import numpy as np
 from qgis.gui import QgsProjectionSelectionWidget, QgsMapLayerComboBox, QgsRubberBand, QgsVertexMarker
 from qgis.core import QgsCoordinateReferenceSystem, QgsPointXY, Qgis
 from PyQt5.QtCore import QTimer
@@ -50,6 +48,13 @@ from qgis.core import (
     QgsSpatialIndex,
     QgsPointXY
 )
+
+
+try:
+    import numpy as np
+except:
+    print('Failed to find numpy module')
+
 
 
 class SpikyGeomsDock(QDockWidget):

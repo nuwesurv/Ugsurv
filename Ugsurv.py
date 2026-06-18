@@ -267,6 +267,11 @@ class Ugsurv:
         # # Install global maptool to handle inputs at first entry
         # self.global_map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
         # self.canvas.setMapTool(self.global_map_tool)
+        from .package_installer import solve_dependency_issues
+        
+        # Running this function so as to install all the dependecies required.
+        all_installed = solve_dependency_issues()
+        print(all_installed)
         
     
     

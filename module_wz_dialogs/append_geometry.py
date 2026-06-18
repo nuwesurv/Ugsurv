@@ -27,10 +27,6 @@ import os
 from PyQt5.QtCore import Qt
 import qgis
 from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
-import os.path
-import pandas as pd
-import geopandas as gpd
-import shapely as sh
 from qgis.gui import QgsProjectionSelectionWidget, QgsMapLayerComboBox
 from qgis.core import QgsCoordinateReferenceSystem
 from qgis.core import (
