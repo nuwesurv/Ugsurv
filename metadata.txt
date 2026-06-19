@@ -6,14 +6,14 @@
 name=Ugsurv
 qgisMinimumVersion=3.0
 description=General purpose plugin for Uganda survey workflows.
-version=0.1
+version=0.2
 author=Nuwe Surv
 email=nuwesurv@gmail.com
 
 about=Uganda survey workflow plugin. QGIS game, Spiky corner geometry detection, Dimensioning, Aligning prints, Auto plotting and topology correction.
 
-tracker=http://bugs
-repository=http://repo
+tracker=https://github.com/nuwesurv/Ugsurv/issues
+repository=https://github.com/nuwesurv/Ugsurv
 # End of mandatory metadata
 
 # Recommended items:
@@ -25,7 +25,7 @@ hasProcessingProvider=no
 # Tags are comma separated with spaces allowed
 tags=python
 
-homepage=http://homepage
+homepage=https://github.com/nuwesurv/Ugsurv
 category=Plugins
 icon=icon.png
 # experimental flag

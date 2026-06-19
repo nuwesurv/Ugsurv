@@ -69,6 +69,7 @@ from .module_wz_dialogs.crs_adjust import CrsAdjustDialog
 from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.ugsurv_maptool import UgsurvMaptool
+import ast
 
 
 class Ugsurv:
@@ -286,7 +287,7 @@ class Ugsurv:
         
         try:
             if self.prevCommand.lower() != 'help':
-                answer = eval(self.prevCommand)
+                answer = ast.literal_eval(self.prevCommand)
                 self.terminal_dock.commandOutputText += f' = {answer}'
         except Exception as e:
             # print(f"{self.prevCommand} can't be evaluated")
