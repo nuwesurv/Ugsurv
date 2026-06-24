@@ -304,7 +304,6 @@ class Ugsurv:
             self.terminal_dock.commandOutputText += "\nCommands:"
             self.terminal_dock.commandOutputText += "\nDialog box->"
             self.terminal_dock.commandOutputText += "\nadd - adds selected features in one layer to another"
-            self.terminal_dock.commandOutputText += "\npp - parcelploter"
             self.terminal_dock.commandOutputText += "\nprint - Import cadastral print"
             self.terminal_dock.commandOutputText += "\ncrs - Selected feature CRS adjust"
             self.terminal_dock.commandOutputText += "\nspiky - Find spiky vertices between two segments"
@@ -327,11 +326,11 @@ class Ugsurv:
             self.terminal_dock.commandOutputText = 'Loading plugin...\nPlugin has been loaded 🧪...\nTerminal cleared...'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
-        # Command is for automatic plotting of parcels.
-        if self.prevCommand == 'pp':
-            self.dlg = ParcelPlotterDialog()
-            # self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
-            self.dlg.show()
+        # # Command is for automatic plotting of parcels.
+        # if self.prevCommand == 'pp':
+        #     # self.dlg = ParcelPlotterDialog()
+        #     self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
+        #     self.dlg.show()
             
         # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'add':

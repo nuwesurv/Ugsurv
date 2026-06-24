@@ -63,6 +63,7 @@ class DimensionDrawer(QgsMapTool):
         
         
         
+        
     def activate(self):
         super().activate()
         self.canvas.setFocus()

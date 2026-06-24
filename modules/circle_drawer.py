@@ -23,6 +23,7 @@ from qgis.core import (
     QgsPoint,
     QgsCoordinateReferenceSystem
 )
+from qgis.PyQt.QtWidgets import QGraphicsTextItem
 from PyQt5.QtCore import QVariant
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
@@ -31,275 +32,341 @@ import math
 from . import get_appropriate_crs_str
 
 
+LAYER_NAME = "circles"
+LAYER_COLOR_OUTLINE = "#305ED2"
+LAYER_COLOR_FILL = "255,0,0,0"
+RUBBER_BAND_COLOR = QColor(255, 0, 0)
+SNAP_MARKER_COLOR = QColor(255, 0, 0)
+TEXT_COLOR = Qt.red
+LABEL_FONT = QFont("Arial", 8)
+LABEL_COLOR = QColor("#393939")
+LABEL_SIZE = 10
+
+
 class CircleDrawer(QgsMapTool):
+    """
+    A QGIS map tool that allows the user to draw circles by:
+      1. Clicking a center point
+      2. Clicking a radius point
+    The resulting circle is stored as a CurvePolygon (circular string) in a memory layer.
+    """
 
     def __init__(self, canvas, terminal_dock):
         super().__init__(canvas)
         self.canvas = canvas
-        extent = self.canvas.extent()
+        self.terminal_dock = terminal_dock
 
-        # Set the coordinate sytem to 36N
+        # State
+        self.center_point = None   # QgsPointXY — set on first click
+        self.is_drawing = False    # True after center is picked
+
+        # CRS
         self.appropriate_crs = get_appropriate_crs_str.get_canvas_epsg(self.canvas)
+        self._apply_project_crs()
+
+        # Layer
+        self.circle_layer = self._get_or_create_circle_layer()
+
+        # Snap settings
+        snapSettingConfig()
+
+        # UI elements
+        self.snap_marker = self._create_snap_marker()
+        self.preview_circle_band = self._create_rubber_band(QgsWkbTypes.PolygonGeometry, Qt.DashLine, fill_alpha=10)
+        self.radius_line_band = self._create_rubber_band(QgsWkbTypes.LineGeometry, Qt.DashLine)
+        self.radius_text = self._create_text_item()
+
+    # -------------------------------------------------------------------------
+    # Setup helpers
+    # -------------------------------------------------------------------------
+
+    def _apply_project_crs(self):
         crs = QgsCoordinateReferenceSystem(f"EPSG:{self.appropriate_crs}")
         QgsProject.instance().setCrs(crs)
-        
-        
-        self.terminal_dock = terminal_dock
-        self.cursor_points = []
-        self.dim_layer = self.getDimensionLayer()
-        snapSettingConfig()
-        
-        # create it once when initializing your tool
-        self.snap_marker = QgsVertexMarker(self.canvas)
-        self.snap_marker.setColor(QColor(255, 0, 0))  # red
-        self.snap_marker.setIconSize(10)
-        self.snap_marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
-        self.snap_marker.setPenWidth(2)
-        self.snap_marker.setVisible(False)  # start hidden
-        
 
-        # Create rubber bands
-        # Style the rubberband
-        self.rubber_band1 = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
-        self.rubber_band1.setColor(QColor(255, 0, 0))  # Green
-        self.rubber_band1.setWidth(2)
-        self.rubber_band1.setLineStyle(Qt.DashLine)
-        self.rubber_band1.setFillColor(QColor(255, 0, 0, 10))
-        
-        
-    def showRubberBandPolygon(self, geometry, rubber_band):
-        rubber_band.reset(QgsWkbTypes.PolygonGeometry)
-        rubber_band.addGeometry(geometry, None)
-        rubber_band.show()
-        
-        
+    def _create_snap_marker(self):
+        marker = QgsVertexMarker(self.canvas)
+        marker.setColor(SNAP_MARKER_COLOR)
+        marker.setIconSize(10)
+        marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
+        marker.setPenWidth(2)
+        marker.setVisible(False)
+        return marker
+
+    def _create_rubber_band(self, geometry_type, line_style, fill_alpha=0):
+        band = QgsRubberBand(self.canvas, geometry_type)
+        band.setColor(RUBBER_BAND_COLOR)
+        band.setWidth(2 if geometry_type == QgsWkbTypes.PolygonGeometry else 1)
+        band.setLineStyle(line_style)
+        if geometry_type == QgsWkbTypes.PolygonGeometry:
+            band.setFillColor(QColor(255, 0, 0, fill_alpha))
+        return band
+
+    def _create_text_item(self):
+        text_item = QGraphicsTextItem("")
+        text_item.setDefaultTextColor(TEXT_COLOR)
+        self.canvas.scene().addItem(text_item)
+        return text_item
+
+    # -------------------------------------------------------------------------
+    # Layer management
+    # -------------------------------------------------------------------------
+
+    def _get_or_create_circle_layer(self):
+        """Return the existing circles layer or create a fresh one."""
+        existing = QgsProject.instance().mapLayersByName(LAYER_NAME)
+        if existing:
+            layer = existing[0]
+            if not layer.isEditable():
+                layer.startEditing()
+            return layer
+        return self._create_circle_layer()
+
+    def _create_circle_layer(self):
+        """Create a new CurvePolygon memory layer for storing circles."""
+        layer = QgsVectorLayer(
+            f"CurvePolygon?crs=EPSG:{self.appropriate_crs}&curve=yes",
+            LAYER_NAME,
+            "memory"
+        )
+        provider = layer.dataProvider()
+        provider.addAttributes([QgsField("radius", QVariant.Double)])
+        layer.updateFields()
+
+        # Style
+        symbol = QgsFillSymbol.createSimple({
+            "outline_color": LAYER_COLOR_OUTLINE,
+            "outline_width": "0.2",
+            "outline_style": "solid",
+            "color": LAYER_COLOR_FILL,
+        })
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+        # Labels
+        label_settings = QgsPalLayerSettings()
+        label_settings.fieldName = "radius"
+        label_settings.placement = QgsPalLayerSettings.Line
+        text_format = QgsTextFormat()
+        text_format.setFont(LABEL_FONT)
+        text_format.setColor(LABEL_COLOR)
+        text_format.setSize(LABEL_SIZE)
+        label_settings.setFormat(text_format)
+        layer.setLabelsEnabled(True)
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
+
+        QgsProject.instance().addMapLayer(layer)
+        layer.startEditing()
+        return layer
+
+    # -------------------------------------------------------------------------
+    # Circle geometry
+    # -------------------------------------------------------------------------
+
+    def _build_circle_geometry(self, center: QgsPointXY, radius: float) -> QgsGeometry:
+        """
+        Build a QgsGeometry representing a full circle as a QgsCurvePolygon
+        made of a QgsCircularString. Five points define the full arc
+        (start == end to close it).
+        """
+        cx, cy = center.x(), center.y()
+
+        # Cardinal points around the circle: E → S → W → N → E
+        arc_points = [
+            QgsPoint(cx + radius, cy),           # East  (start)
+            QgsPoint(cx,          cy - radius),  # South
+            QgsPoint(cx - radius, cy),           # West
+            QgsPoint(cx,          cy + radius),  # North
+            QgsPoint(cx + radius, cy),           # East  (close)
+        ]
+
+        circular_string = QgsCircularString()
+        circular_string.setPoints(arc_points)
+
+        curve_polygon = QgsCurvePolygon()
+        curve_polygon.setExteriorRing(circular_string)
+
+        return QgsGeometry(curve_polygon)
+
+    def _commit_circle(self, center: QgsPointXY, radius_point: QgsPointXY):
+        """Add a circle feature to the circle layer."""
+        radius = center.distance(radius_point)
+        geometry = self._build_circle_geometry(center, radius)
+
+        feature = QgsFeature(self.circle_layer.fields())
+        feature.setGeometry(geometry)
+        feature.setAttribute("radius", round(radius, 3))
+
+        self.circle_layer.addFeature(feature)
+        self.circle_layer.updateExtents()
+        self.circle_layer.triggerRepaint()
+
+        return radius
+
+    # -------------------------------------------------------------------------
+    # Preview helpers
+    # -------------------------------------------------------------------------
+
+    def _update_snap_marker(self, point: QgsPointXY, snap_result):
+        """Show or hide the snap marker based on snap result."""
+        if snap_result.isValid():
+            self.snap_marker.setCenter(snap_result.point())
+            self.snap_marker.setVisible(True)
+            icon_map = {
+                QgsPointLocator.Vertex:          QgsVertexMarker.ICON_CIRCLE,
+                QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE,
+                QgsPointLocator.Area:            QgsVertexMarker.ICON_RHOMBUS,
+                QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,
+            }
+            self.snap_marker.setIconType(icon_map.get(snap_result.type(), QgsVertexMarker.ICON_X))
+        else:
+            self.snap_marker.setVisible(False)
+
+    def _draw_circle_preview(self, center: QgsPointXY, cursor: QgsPointXY):
+        """Render rubber-band circle preview and radius line."""
+        radius = center.distance(cursor)
+
+        # Circle preview
+        self.preview_circle_band.reset(QgsWkbTypes.PolygonGeometry)
+        circle_geom = QgsGeometry.fromPointXY(center).buffer(radius, 64)
+        self.preview_circle_band.addGeometry(circle_geom, None)
+        self.preview_circle_band.show()
+
+        # Radius line
+        self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
+        self.radius_line_band.addPoint(center)
+        self.radius_line_band.addPoint(cursor)
+
+        # Floating radius label
+        self._update_radius_label(center, cursor, radius)
+
+    def _update_radius_label(self, center: QgsPointXY, cursor: QgsPointXY, radius: float):
+        """Position and rotate the floating distance label."""
+        mid = QgsPointXY(
+            (center.x() + cursor.x()) / 2,
+            (center.y() + cursor.y()) / 2,
+        )
+        dx = cursor.x() - center.x()
+        dy = cursor.y() - center.y()
+        angle = -math.degrees(math.atan2(dy, dx))
+        # Keep text readable (avoid upside-down)
+        if angle < -90:
+            angle += 180
+        elif angle > 90:
+            angle -= 180
+
+        canvas_pt = self.canvas.getCoordinateTransform().transform(mid)
+        self.radius_text.setPos(canvas_pt.x(), canvas_pt.y())
+        self.radius_text.setPlainText(f"{radius:.3f}")
+        self.radius_text.setRotation(angle)
+
+    def _clear_preview(self):
+        """Reset all temporary drawing feedback."""
+        self.preview_circle_band.reset(QgsWkbTypes.PolygonGeometry)
+        self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
+        self.radius_text.setPlainText("")
+        self.snap_marker.setVisible(False)
+
+    # -------------------------------------------------------------------------
+    # Terminal helpers
+    # -------------------------------------------------------------------------
+
+    def _display(self, message: str):
+        """Append a line to the terminal display (does not persist to commandOutputText)."""
+        self.terminal_dock.commandDisplay.setText(
+            self.terminal_dock.commandOutputText + message
+        )
+
+    def _log(self, message: str):
+        """Persist a line to commandOutputText and refresh the display."""
+        self.terminal_dock.commandOutputText += message
+        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+
+    # -------------------------------------------------------------------------
+    # QgsMapTool overrides
+    # -------------------------------------------------------------------------
+
     def activate(self):
         super().activate()
         self.canvas.setFocus()
-        
+        self._display("\nSelect center point …\n")
+
     def deactivate(self):
         self.canvas.unsetMapTool(self)
         self.terminal_dock.command.setFocus()
-        # Commit any remaining edits
-        self.dim_layer.updateExtents()
-        self.dim_layer.commitChanges()
-        
-        # Hide snap marker and clear state
-        self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
-        self.snap_marker.setVisible(False)
-        self.cursor_points.clear()
-        self.terminal_dock.commandDisplay.setText(
-            self.terminal_dock.commandOutputText + "\n........\n"
-        )
-        # Call parent
+
+        # Persist edits
+        self.circle_layer.updateExtents()
+        self.circle_layer.commitChanges()
+
+        # Clean up UI
+        self._clear_preview()
+        self.canvas.scene().removeItem(self.radius_text)
+
+        # Reset state
+        self.center_point = None
+        self.is_drawing = False
+
+        self._display("\n........\n")
         super().deactivate()
-        
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
             self.deactivate()
-            
-            
-            
-            
-    def getDimensionLayer(self):
-        """
-        Create or return a curve-enabled memory layer for storing circular strings.
-        """
-        layer_name = "_drafts"
-        layers = QgsProject.instance().mapLayersByName(layer_name)
-        if layers:
-            return layers[0]
 
-        # Notice 'curve=yes' for circular strings support
-        self.dim_layer = QgsVectorLayer(
-            f"CurvePolygon?crs=EPSG:{self.appropriate_crs}&curve=yes", layer_name, "memory"
-        )
-        provider = self.dim_layer.dataProvider()
-        provider.addAttributes([QgsField("distance", QVariant.Double)])
-        self.dim_layer.updateFields()
-        QgsProject.instance().addMapLayer(self.dim_layer)
-
-        # Symbol
-        self.symbol = QgsFillSymbol.createSimple({
-            'outline_color': "#393939",
-            'outline_width': '0.2',
-            'outline_style': 'solid',
-            'color': '255,0,0,0'  # transparent fill
-        })
-        renderer = QgsSingleSymbolRenderer(self.symbol)
-        self.dim_layer.setRenderer(renderer)
-
-        # Labeling (same as before)
-        self.label_settings = QgsPalLayerSettings()
-        self.label_settings.fieldName = 'distance'
-        self.label_settings.placement = QgsPalLayerSettings.Line
-        self.text_format = QgsTextFormat()
-        self.text_format.setFont(QFont("Arial", 8))
-        self.text_format.setColor(QColor("#393939"))
-        self.text_format.setSize(10)
-        self.label_settings.setFormat(self.text_format)
-        self.labeling = QgsVectorLayerSimpleLabeling(self.label_settings)
-        self.dim_layer.setLabelsEnabled(True)
-        self.dim_layer.setLabeling(self.labeling)
-        self.dim_layer.triggerRepaint()
-        self.dim_layer.startEditing()
-        return self.dim_layer
-    
-    
-    def createCircleFeature(self):
-        if len(self.cursor_points) != 2:
-            print(f"Expected 2 points, got {len(self.cursor_points)}")
-            return
-
-
-        p1 = self.cursor_points[0]
-        p2 = self.cursor_points[1]
-        center = p1
-        radius = center.distance(p2)
-
-        # Create the curve polygon
-        curve_polygon = QgsCurvePolygon()
-
-        cs = QgsCircularString()
-        cs.setPoints([
-            QgsPoint(center.x() + radius, center.y() + 0),
-            QgsPoint(center.x() + 0, center.y() - radius),
-            QgsPoint(center.x() - radius, center.y() + 0),
-            QgsPoint(center.x() + 0, center.y() + radius),
-            QgsPoint(center.x() + radius, center.y() + 0),
-        ])
-        curve_polygon.setExteriorRing(cs)  # Add the arc
-
-        # Create feature
-        feat = QgsFeature(self.dim_layer.fields())
-        feat.setGeometry(QgsGeometry(curve_polygon))
-        feat.setAttribute("distance", round(radius, 3))
-        self.dim_layer.addFeature(feat)
-        self.dim_layer.triggerRepaint()
-    
-    
-    
-
-
-
+    # -------------------------------------------------------------------------
+    # Mouse events
+    # -------------------------------------------------------------------------
 
     def canvasMoveEvent(self, event):
-        point = self.toMapCoordinates(event.pos())
-        
-        # Use the canvas to snap
-        snap_result = self.canvas.snappingUtils().snapToMap(point)
-        if snap_result.isValid():
-            point = snap_result.point()
-            self.snap_marker.setCenter(point)
-            self.snap_marker.setVisible(True)
-            
-            if snap_result.type() == QgsPointLocator.Vertex:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
-            elif snap_result.type() == QgsPointLocator.Edge:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_DOUBLE_TRIANGLE)
-            elif snap_result.type() == QgsPointLocator.Area:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_RHOMBUS)
-            elif snap_result.type() == QgsPointLocator.MiddleOfSegment:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_TRIANGLE)
-            else:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_X)
+        raw_point = self.toMapCoordinates(event.pos())
+        snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
+        cursor = snap_result.point() if snap_result.isValid() else raw_point
+
+        self._update_snap_marker(cursor, snap_result)
+
+        if not self.is_drawing:
+            # Phase 1: waiting for center click — just echo cursor position
+            self._display(f"\nSelect center point: {cursor.x():.3f}, {cursor.y():.3f}\n")
         else:
-            self.snap_marker.setVisible(False)
-            
-        if len(self.cursor_points) == 0:
-            self.terminal_dock.commandDisplay.setText(
-                self.terminal_dock.commandOutputText + f'\nSelect start point: {round(point.x(),3)}, {round(point.y(),3)}\n'
-            )
-                
-        elif len(self.cursor_points) == 1:
-            # Clear it
-            self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
-            # Add points
-            circle_radius = self.cursor_points[0].distance(point)
-            center_point = self.cursor_points[0]
-            circle_geom = QgsGeometry.fromPointXY(center_point).buffer(circle_radius, 40)
-            # print(circle_geom)
-            self.showRubberBandPolygon(circle_geom, self.rubber_band1)
-            self.terminal_dock.commandDisplay.setText(
-                self.terminal_dock.commandOutputText + f'\nSelect end point: {round(circle_radius,3)}\n'
-            )
-        
-        
-        
-        
-        
-        
+            # Phase 2: center chosen — show live circle preview
+            self._draw_circle_preview(self.center_point, cursor)
+            radius = self.center_point.distance(cursor)
+            self._display(f"\nRadius: {radius:.3f}\n")
+
     def canvasPressEvent(self, event):
         if event.button() == Qt.RightButton:
             self.deactivate()
-            
-            
-        if event.button() == Qt.LeftButton:
-            layers = QgsProject.instance().mapLayersByName('_drafts')
-            if layers:
-                self.dim_layer.startEditing()
-            else:
-                self.dim_layer = self.getDimensionLayer()
-            
-            point = self.toMapCoordinates(event.pos())
-            self.snap_marker.setVisible(False)
-            # Recognize the snapped point.
-            snap_result = self.canvas.snappingUtils().snapToMap(point)
-            if snap_result.isValid():
-                point = snap_result.point()
-                    
-                
-            self.cursor_points.append(point)
-            if len(self.cursor_points) == 1:
-                self.terminal_dock.commandOutputText += f'\nStart point: {round(point.x(),3)}, {round(point.y(),3)}'
-                self.terminal_dock.commandDisplay.setText(
-                    self.terminal_dock.commandOutputText + f'\nSelect end point: ...\n'
-                )
-                
-                
-            elif len(self.cursor_points) == 2:
-                # Clear the rubberband preview
-                self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
-                
-                self.createCircleFeature()
-                circle_radius = self.cursor_points[0].distance(self.cursor_points[1])
-                self.terminal_dock.commandOutputText += f'\nRadius: {round(point.x(),3)}, {round(point.y(),3)} \nDistance: {round(circle_radius,3)}'
-                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                self.cursor_points.clear()
-                
-                
-                
-         
-    # def createCircleFeature(self):
-    #     if self.cursor_points.__len__() != 2:
-    #         print(f'The dimension points required are two(2) but instead got{self.cursor_points.__len__()}')
-    #         return
-        
-    #     p1 = self.cursor_points[0]
-    #     p2 = self.cursor_points[1]
+            return
 
-    #     geom1 = QgsGeometry.fromPolylineXY([p1, p2])
-    #     geom2 = QgsGeometry.fromPolylineXY([p2, p1])
+        if event.button() != Qt.LeftButton:
+            return
 
-    #     # 🔎 Check for duplicate
-    #     for feat in self.dim_layer.getFeatures():
-    #         existing_geom = feat.geometry()
+        # Resolve snapped click position
+        raw_point = self.toMapCoordinates(event.pos())
+        snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
+        clicked_point = snap_result.point() if snap_result.isValid() else raw_point
+        self.snap_marker.setVisible(False)
 
-    #         if not existing_geom:
-    #             continue
+        # Ensure the layer is ready
+        self.circle_layer = self._get_or_create_circle_layer()
 
-    #         # Compare both directions
-    #         if existing_geom.equals(geom1) or existing_geom.equals(geom2):
-    #             print("Circle already exists. Skipping.")
-    #             return  # 🚫 Stop — duplicate found
-        
-    #     circle_radius = self.cursor_points[0].distance(self.cursor_points[1])
-    #     center_point = self.cursor_points[0]
-    #     circle_geom = QgsGeometry.fromPointXY(center_point).buffer(circle_radius, 72)
-        
-    #     # --- Add feature ---
-    #     self.feature = QgsFeature(self.dim_layer.fields())  # Important: initialize feature with layer fields
-    #     self.feature.setGeometry(circle_geom)
-    #     self.feature.setAttribute("distance", round(circle_radius, 3))  # Use field name instead of index
-    #     self.dim_layer.addFeature(self.feature)  # simplified; no need to go through provider directly
-    #     self.dim_layer.triggerRepaint()
+        if not self.is_drawing:
+            # ── First click: record center ──────────────────────────────────
+            self.center_point = clicked_point
+            self.is_drawing = True
+            self._log(f"\nCenter: {clicked_point.x():.3f}, {clicked_point.y():.3f}")
+            self._display("\nSelect radius point …\n")
+
+        else:
+            # ── Second click: finalise circle ───────────────────────────────
+            radius = self._commit_circle(self.center_point, clicked_point)
+            self._log(
+                f"\nRadius point: {clicked_point.x():.3f}, {clicked_point.y():.3f}"
+                f"  |  Radius: {radius:.3f}"
+            )
+
+            # Reset for the next circle
+            self._clear_preview()
+            self.center_point = None
+            self.is_drawing = False
+            self._display("\nSelect center point …\n")

@@ -25,12 +25,10 @@
 import os
 
 from PyQt5.QtCore import Qt
-import qgis
-from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
-from qgis.core import QgsProject, QgsVectorLayer, QgsField
 import os.path
+from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
+from qgis.core import QgsProject, QgsVectorLayer, QgsField, QgsCoordinateReferenceSystem
 from qgis.gui import QgsProjectionSelectionWidget
-from qgis.core import QgsCoordinateReferenceSystem
 
 
 try:
@@ -55,7 +53,6 @@ class ParcelPlotterDialog(QDialog):
 
         # Main Layout.
         self.templayout = QVBoxLayout()
-
 
         # FilePicking Button.
         self.filepicker = QPushButton('Select csv or excel file:')
@@ -170,9 +167,8 @@ class ParcelPlotterDialog(QDialog):
             self.response.setText(f'File selected: {filepath} 👍')
             self.filepath_store.setText(filepath)
             
-    
-    
-    
+            
+            
     def plot_parcels(self):
         """Plot parcels using user-selected columns"""
         filepath = self.filepath_store.text()
@@ -250,3 +246,6 @@ class ParcelPlotterDialog(QDialog):
 
         except Exception as e:
             self.response.setText(f"Error: {str(e)}")
+
+
+

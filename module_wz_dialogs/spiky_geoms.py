@@ -50,6 +50,7 @@ from qgis.core import (
 )
 
 
+
 try:
     import numpy as np
 except:
@@ -156,38 +157,110 @@ class SpikyGeomsDock(QDockWidget):
         #     # auto-remove after 1.5 seconds (flash effect)
         #     QTimer.singleShot(1500, marker.deleteLater)
             
-    
+
     def start_search(self):
         self.tableview.setRowCount(0)
         self.tableview.setColumnCount(3)
         self.tableview.setHorizontalHeaderLabels(self.field_names)
-        
-        search_layer = self.maplayerSelector1.currentLayer()
-        if not search_layer:
-            self.update_result_label(self.response, "No layer selected!", "red")
-            return
-        
-        
-        # self.field_names = [field.name() for field in search_layer.fields()]
-        self.tableview.setRowCount(search_layer.featureCount())
-        
-        actual_row_id = 0
-        for row_idx, feature in enumerate(search_layer.getFeatures()):
-            attrs = feature.attributes()
-            ring = feature.geometry().asPolygon()[0]
 
-            coords = [(pt.x(), pt.y()) for pt in ring]
-            result = self.find_spikes(coords, 10)
-            if result.__len__()>0:
-                for corner in result:
-                    for col_idx, col_name in enumerate(self.field_names):
-                        print([actual_row_id, col_idx, col_name, corner[col_name]])
-                        self.tableview.setItem(
-                            actual_row_id,
-                            col_idx,
-                            QTableWidgetItem(str(corner[col_name]))
-                        )
-                    actual_row_id += 1
+        search_layer = self.maplayerSelector1.currentLayer()
+
+        if not search_layer:
+            self.update_result_label(
+                self.response,
+                "No layer selected!",
+                "red"
+            )
+            return
+
+        # Only allow polygon layers
+        if search_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+            self.update_result_label(
+                self.response,
+                "Selected layer must be a polygon layer.",
+                "red"
+            )
+            return
+
+        actual_row_id = 0
+
+        for feature in search_layer.getFeatures():
+
+            geom = feature.geometry()
+
+            if not geom or geom.isEmpty():
+                continue
+
+            try:
+
+                # Handle multipart polygons
+                if geom.isMultipart():
+                    polygons = geom.asMultiPolygon()
+
+                    for polygon in polygons:
+
+                        if not polygon:
+                            continue
+
+                        ring = polygon[0]  # exterior ring
+                        coords = [(pt.x(), pt.y()) for pt in ring]
+
+                        result = self.find_spikes(coords, 10)
+
+                        if result:
+                            for corner in result:
+                                self.tableview.insertRow(actual_row_id)
+
+                                for col_idx, col_name in enumerate(self.field_names):
+                                    self.tableview.setItem(
+                                        actual_row_id,
+                                        col_idx,
+                                        QTableWidgetItem(
+                                            str(corner.get(col_name, ""))
+                                        )
+                                    )
+
+                                actual_row_id += 1
+
+                # Handle single polygons
+                else:
+                    polygon = geom.asPolygon()
+
+                    if not polygon:
+                        continue
+
+                    ring = polygon[0]  # exterior ring
+                    coords = [(pt.x(), pt.y()) for pt in ring]
+
+                    result = self.find_spikes(coords, 10)
+
+                    if result:
+                        for corner in result:
+                            self.tableview.insertRow(actual_row_id)
+
+                            for col_idx, col_name in enumerate(self.field_names):
+                                self.tableview.setItem(
+                                    actual_row_id,
+                                    col_idx,
+                                    QTableWidgetItem(
+                                        str(corner.get(col_name, ""))
+                                    )
+                                )
+
+                            actual_row_id += 1
+
+            except Exception as e:
+                print(
+                    f"Error processing feature {feature.id()}: {e}"
+                )
+
+        self.tableview.setRowCount(actual_row_id)
+
+        self.update_result_label(
+            self.response,
+            f"Found {actual_row_id} spike(s).",
+            "green"
+        )
                     
                 
     def find_spikes(self, polygon_cords, threshold):
