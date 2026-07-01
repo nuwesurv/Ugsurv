@@ -450,6 +450,14 @@ class VertexSelector(QgsMapTool):
     # Logging
     # ------------------------------------------------------------------
 
+    def get_selected_feature(self):
+        """Return (layer, fid) if a feature is currently highlighted or gripped, else None."""
+        if self._state == _S_FEATURE:
+            return self._sel_layer, self._sel_fid
+        if self._state in (_S_GRIPPED, _S_MOVING):
+            return self._gripped.layer, self._gripped.fid
+        return None
+
     def _log(self, msg):
         self.terminal_dock.commandOutputText += msg
         self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)

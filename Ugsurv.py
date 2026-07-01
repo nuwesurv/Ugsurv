@@ -72,6 +72,7 @@ from .modules.polyline_drawer import PolylineDrawer
 from .modules.vertex_selector import VertexSelector
 from .modules.ugsurv_maptool import UgsurvMaptool
 from .modules.trim_tool import TrimTool
+from .modules.move_tool import MoveTool
 import ast
 
 
@@ -114,7 +115,7 @@ class Ugsurv:
         # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap'] # was created for suggection purposes.
+        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap', 'move', 'trim'] # was created for suggection purposes.
         ...
         self.active = False  # Track plugin toggle state
         ...
@@ -401,6 +402,13 @@ class Ugsurv:
 
         elif cmd in ('trim', 'tr'):
             self.global_map_tool.set_tool(TrimTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('move', 'm'):
+            preselect = None
+            vs = self.global_map_tool._default_tool
+            if hasattr(vs, 'get_selected_feature'):
+                preselect = vs.get_selected_feature()
+            self.global_map_tool.set_tool(MoveTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('dim', 'di'):
             self.global_map_tool.set_tool(DimensionDrawer(self.canvas, self.terminal_dock, 'single'))
