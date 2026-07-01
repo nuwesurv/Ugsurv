@@ -1,5 +1,5 @@
 from qgis.gui import QgsMapTool
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QObject, QEvent
 from qgis.PyQt.QtGui import QColor, QCursor, QPixmap, QPainter, QPen
 from PyQt5.QtWidgets import QApplication
 
@@ -20,6 +20,41 @@ def _red_crosshair_cursor():
 
 
 _RED_CURSOR = _red_crosshair_cursor()
+
+
+class _CanvasKeyFilter(QObject):
+    """Intercepts key presses on the canvas before QGIS shortcut handling.
+
+    Without this, QGIS consumes keys like T (Enable Tracing) before
+    QgsMapTool.keyPressEvent ever fires.
+    """
+
+    def __init__(self, maptool):
+        super().__init__(maptool)
+        self._maptool = maptool
+
+    def eventFilter(self, _obj, event):
+        if event.type() != QEvent.KeyPress:
+            return False
+
+        mt = self._maptool
+        handler = mt._key_handlers.get(event.key())
+        if handler:
+            handler(event)
+            return True
+
+        text = event.text()
+        key  = event.key()
+
+        if text and text.isprintable():
+            mt._redirect_to_terminal(event)
+            return True  # consumed — QGIS never sees it
+
+        if key in (Qt.Key_Return, Qt.Key_Enter) and mt._active_tool is mt._default_tool:
+            mt._redirect_to_terminal(event)
+            return True
+
+        return False  # let control keys reach keyPressEvent normally
 
 
 class UgsurvMaptool(QgsMapTool):
@@ -62,6 +97,8 @@ class UgsurvMaptool(QgsMapTool):
         self._default_tool = None
         self._key_handlers = {}
         self._evicting     = False   # guard against clear_tool() re-entry during _evict()
+        self._canvas_filter = _CanvasKeyFilter(self)
+        canvas.installEventFilter(self._canvas_filter)
 
     def activate(self):
         super().activate()
