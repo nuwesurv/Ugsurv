@@ -31,6 +31,12 @@ class UgsurvMaptool(QgsMapTool):
     etc.) register themselves here via set_tool() and receive forwarded canvas
     events.  They never own the canvas directly.
 
+    Default tool
+    ------------
+    A 'default tool' (VertexSelector) can be installed via set_default_tool().
+    It is always active when no drawing tool is running.  When a drawing tool
+    finishes (via clear_tool()), the default tool is automatically reactivated.
+
     Keyboard routing (CAD-style)
     ----------------------------
     Printable characters typed on the canvas are always redirected to the
@@ -50,13 +56,27 @@ class UgsurvMaptool(QgsMapTool):
     def __init__(self, canvas, terminal_dock):
         super().__init__(canvas)
         self.setCursor(_RED_CURSOR)
-        self.canvas = canvas
+        self.canvas       = canvas
         self.terminal_dock = terminal_dock
-        self._active_tool = None
+        self._active_tool  = None
+        self._default_tool = None
         self._key_handlers = {}
+        self._evicting     = False   # guard against clear_tool() re-entry during _evict()
 
     def activate(self):
         super().activate()
+        self.canvas.setCursor(_RED_CURSOR)
+
+    # ------------------------------------------------------------------
+    # Default tool management
+    # ------------------------------------------------------------------
+
+    def set_default_tool(self, tool):
+        """Install tool as the permanent fallback (e.g. VertexSelector)."""
+        self._default_tool = tool
+        tool._maptool = self
+        self._active_tool = tool
+        tool.activate()
         self.canvas.setCursor(_RED_CURSOR)
 
     # ------------------------------------------------------------------
@@ -71,19 +91,38 @@ class UgsurvMaptool(QgsMapTool):
         self.canvas.setCursor(_RED_CURSOR)   # re-apply after delegate may reset it
 
     def clear_tool(self):
-        self._active_tool = None
-        self.canvas.setFocus()
-        self.terminal_dock.command.setFocus()
+        """Called by drawing tools when they finish. Reverts to default tool."""
+        if self._evicting:
+            # clear_tool() was triggered from inside _evict(); ignore to avoid
+            # re-activating the default tool mid-eviction.
+            return
+        if self._default_tool:
+            self._active_tool = self._default_tool
+            self._default_tool.activate()
+            self.canvas.setCursor(_RED_CURSOR)
+        else:
+            self._active_tool = None
+            self.canvas.setFocus()
+            self.terminal_dock.command.setFocus()
 
     def _evict(self):
         if self._active_tool is None:
             return
         old = self._active_tool
         self._active_tool = None
+        self._evicting = True
         try:
             old.deactivate()
         except Exception:
             pass
+        finally:
+            self._evicting = False
+        # clear_tool() is suppressed while evicting, so we restore the default
+        # tool here instead — otherwise _active_tool stays None indefinitely.
+        if self._active_tool is None and self._default_tool:
+            self._active_tool = self._default_tool
+            self._default_tool.activate()
+            self.canvas.setCursor(_RED_CURSOR)
 
     # ------------------------------------------------------------------
     # Global key hooks
@@ -128,7 +167,7 @@ class UgsurvMaptool(QgsMapTool):
             self._redirect_to_terminal(event)
             return
 
-        if key in (Qt.Key_Return, Qt.Key_Enter) and self._active_tool is None:
+        if key in (Qt.Key_Return, Qt.Key_Enter) and self._active_tool is self._default_tool:
             self._redirect_to_terminal(event)
             return
 

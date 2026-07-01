@@ -69,7 +69,9 @@ from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
+from .modules.vertex_selector import VertexSelector
 from .modules.ugsurv_maptool import UgsurvMaptool
+from .modules.trim_tool import TrimTool
 import ast
 
 
@@ -259,7 +261,7 @@ class Ugsurv:
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.terminal_dock.set_commands([
             # Drawing tools (AutoCAD-standard names)
-            'CIRCLE', 'PLINE', 'DIM', 'ADIM',
+            'CIRCLE', 'PLINE', 'DIM', 'ADIM', 'TRIM',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
             'SPIKY', 'PTOVERLAP', 'IMPORT', 'GAME',
@@ -285,6 +287,10 @@ class Ugsurv:
         self.global_map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
         self.canvas.setMapTool(self.global_map_tool)
 
+        # Vertex editor is always active when no drawing tool is running.
+        vertex_selector = VertexSelector(self.canvas, self.terminal_dock)
+        self.global_map_tool.set_default_tool(vertex_selector)
+
         from .package_installer import solve_dependency_issues
         
         # Running this function so as to install all the dependecies required.
@@ -294,9 +300,20 @@ class Ugsurv:
     
     
     def _on_escape(self):
-        """Cancel the active delegate tool regardless of which widget currently has focus."""
-        if hasattr(self, 'global_map_tool') and self.global_map_tool._active_tool:
-            self.global_map_tool._evict()
+        """Forward Escape to the active tool (including the default vertex editor)."""
+        if not hasattr(self, 'global_map_tool'):
+            return
+        mt = self.global_map_tool
+        active = mt._active_tool
+        if active and active is not mt._default_tool:
+            # A drawing tool is running — evict it (Escape exits the tool)
+            mt._evict()
+        elif active and active is mt._default_tool:
+            # Vertex editor is running — let it handle Escape internally
+            from qgis.PyQt.QtCore import QEvent
+            from qgis.PyQt.QtGui import QKeyEvent
+            fake = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+            active.keyPressEvent(fake)
 
     def acceptInput(self):
         text = self.terminal_dock.command.text()
@@ -344,8 +361,15 @@ class Ugsurv:
                 "\n── Drawing ──────────────────────────"
                 "\n  CIRCLE  [C ]   Draw a circle"
                 "\n  PLINE   [PL]   Draw a polyline"
+                "\n  TRIM    [TR]   Trim lines at cutting edges"
                 "\n  DIM     [DI]   Dimension a segment / two points"
                 "\n  ADIM    [AD]   Dimension all segments of a feature"
+                "\n── Vertex editor (always active) ────"
+                "\n  click vertex   Grip it (1st click)"
+                "\n  click grip     Start move (2nd click)"
+                "\n  click to place Commit move"
+                "\n  Del            Delete gripped vertex"
+                "\n  Esc            Clear grip / cancel move"
                 "\n── Survey tools ──────────────────────"
                 "\n  TOPO    [TS]   Topology solver"
                 "\n  FIXG    [FG]   Fix geometry"
@@ -374,6 +398,9 @@ class Ugsurv:
 
         elif cmd in ('pline', 'pl'):
             self.global_map_tool.set_tool(PolylineDrawer(self.canvas, self.terminal_dock))
+
+        elif cmd in ('trim', 'tr'):
+            self.global_map_tool.set_tool(TrimTool(self.canvas, self.terminal_dock))
 
         elif cmd in ('dim', 'di'):
             self.global_map_tool.set_tool(DimensionDrawer(self.canvas, self.terminal_dock, 'single'))
