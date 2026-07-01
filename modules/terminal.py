@@ -50,6 +50,8 @@ class TerminalDialog(QDockWidget):
         self.historyIndex = len(self.commandHistory)-1
 
         
+        self.active_input_handler = None  # set by tools that need typed input
+
         self.command = QLineEdit()
         self.command.setMinimumWidth(200)
         self.command.setPlaceholderText('command here...')
@@ -65,6 +67,16 @@ class TerminalDialog(QDockWidget):
         main_layout.addWidget(self.command)
         
         
+    def request_input(self, prompt: str, callback):
+        """Ask the user to type something. callback(text) fires on next Enter."""
+        self.active_input_handler = callback
+        self.command.setPlaceholderText(prompt)
+        self.command.setFocus()
+
+    def clear_input_handler(self):
+        self.active_input_handler = None
+        self.command.setPlaceholderText('command here...')
+
     def previousCommand(self):
         if len(self.commandHistory) > 0:
             return self.commandHistory[self.historyIndex]
@@ -81,6 +93,9 @@ class TerminalDialog(QDockWidget):
         
     def commandRepeatPrevCommand(self):
         if self.command.text() == '':
+            # Always start from the most recent entry so UP-arrow browsing
+            # doesn't cause space to jump further back than the last command.
+            self.historyIndex = len(self.commandHistory) - 1
             if self.historyIndex > 0:
                 self.historyIndex -= 1
                 self.command.setText(self.previousCommand())

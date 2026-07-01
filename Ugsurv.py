@@ -68,6 +68,7 @@ from .module_wz_dialogs.crs_adjust import CrsAdjustDock
 from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
+from .modules.polyline_drawer import PolylineDrawer
 import ast
 
 
@@ -260,7 +261,12 @@ class Ugsurv:
         
         # Connect these functions to ui
         self.terminal_dock.command.returnPressed.connect(self.acceptInput)
-        
+
+        # Global Esc shortcut — fires regardless of which widget has focus,
+        # so Esc always cancels the active map tool even when the terminal is focused.
+        self.esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self.iface.mainWindow())
+        self.esc_shortcut.activated.connect(self._on_escape)
+
         # This will help to setup the required snap settings.
         snapSettingConfig()
         
@@ -275,24 +281,51 @@ class Ugsurv:
         
     
     
+    def _on_escape(self):
+        """Cancel the active map tool regardless of which widget currently has focus."""
+        if hasattr(self, 'map_tool') and self.canvas.mapTool() is self.map_tool:
+            try:
+                self.map_tool.deactivate()
+            except Exception:
+                pass
+
     def acceptInput(self):
-        # update the history index and the commandHistory
-        self.terminal_dock.commandHistory.insert(-1,self.terminal_dock.command.text())
+        text = self.terminal_dock.command.text()
+
+        # common prologue — echo input and update history
+        self.terminal_dock.commandHistory.insert(-1, text)
         self.terminal_dock.historyIndex = len(self.terminal_dock.commandHistory) - 1
-        
-        self.prevCommand = self.terminal_dock.command.text()
-        self.terminal_dock.commandOutputText += f'\n>>> {self.terminal_dock.command.text()}'
+        self.terminal_dock.commandOutputText += f'\n>>> {text}'
         self.terminal_dock.command.setText('')
-        
+        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+
+        # If a tool is waiting for typed input, hand off and stop here
+        if self.terminal_dock.active_input_handler:
+            handler = self.terminal_dock.active_input_handler
+            self.terminal_dock.clear_input_handler()
+            handler(text)
+            return
+
+        self.prevCommand = text.strip()
+
+        # Empty Enter → repeat last command (AutoCAD behaviour)
+        if not self.prevCommand:
+            for cmd in reversed(self.terminal_dock.commandHistory):
+                if cmd.strip():
+                    self.prevCommand = cmd.strip()
+                    self.terminal_dock.commandOutputText += f'  [↑ {self.prevCommand}]'
+                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                    break
+            else:
+                return  # nothing in history to repeat
+
         try:
             if self.prevCommand.lower() != 'help':
                 answer = ast.literal_eval(self.prevCommand)
                 self.terminal_dock.commandOutputText += f' = {answer}'
-        except Exception as e:
-            # print(f"{self.prevCommand} can't be evaluated")
+        except Exception:
             ...
-        
-        # first update the input command i the display
+
         self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
         
         # =================================================================================================
@@ -384,8 +417,12 @@ class Ugsurv:
             
         # The function we have here below is for drawing a circle at the cursor cords
         if self.prevCommand == 'c':
-            # step1: get the center where cordinates shall be placed.
             self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
+            self.canvas.setMapTool(self.map_tool)
+
+        # Command is for drawing polylines
+        if self.prevCommand == 'pl':
+            self.map_tool = PolylineDrawer(self.canvas, self.terminal_dock)
             self.canvas.setMapTool(self.map_tool)
             
             
@@ -395,6 +432,14 @@ class Ugsurv:
             
             
     def destroyAllTools(self):
+        # Remove global Esc shortcut
+        try:
+            self.esc_shortcut.activated.disconnect()
+            self.esc_shortcut.deleteLater()
+            self.esc_shortcut = None
+        except Exception:
+            pass
+
         # Remove any maptools active
         try:
             self.map_tool.deactivate()

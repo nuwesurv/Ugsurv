@@ -76,7 +76,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         super().deactivate()
         
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
+        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.deactivate()
             
             
