@@ -78,6 +78,7 @@ class CircleDrawer(QgsMapTool):
         self.radius_text = self._create_text_item()
         self._syncing = False
         self.dynamic_input_proxy = self._create_dynamic_input()
+        self._maptool = None   # set by UgsurvMaptool.set_tool()
 
     # -------------------------------------------------------------------------
     # Setup helpers
@@ -397,8 +398,11 @@ class CircleDrawer(QgsMapTool):
     def deactivate(self):
         self.terminal_dock.clear_input_handler()
         self._hide_dynamic_input()
-        self.canvas.unsetMapTool(self)
-        self.terminal_dock.command.setFocus()
+        if self._maptool:
+            self._maptool.clear_tool()
+        else:
+            self.canvas.unsetMapTool(self)
+            self.terminal_dock.command.setFocus()
 
         # Persist edits
         self.circle_layer.updateExtents()

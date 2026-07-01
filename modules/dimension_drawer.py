@@ -41,6 +41,7 @@ class DimensionDrawer(QgsMapTool):
         self.operation_type = operation_type
         self.dim_points = []
         self.dim_layer = self.getDimensionLayer()
+        self._maptool = None   # set by UgsurvMaptool.set_tool()
         snapSettingConfig()
         
         # create it once when initializing your tool
@@ -69,8 +70,11 @@ class DimensionDrawer(QgsMapTool):
         self.canvas.setFocus()
         
     def deactivate(self):
-        self.canvas.unsetMapTool(self)
-        self.terminal_dock.command.setFocus()
+        if self._maptool:
+            self._maptool.clear_tool()
+        else:
+            self.canvas.unsetMapTool(self)
+            self.terminal_dock.command.setFocus()
         # Commit any remaining edits
         self.dim_layer.updateExtents()
         self.dim_layer.commitChanges()

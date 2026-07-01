@@ -69,6 +69,7 @@ from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
+from .modules.ugsurv_maptool import UgsurvMaptool
 import ast
 
 
@@ -256,6 +257,15 @@ class Ugsurv:
 
         # terminal dock
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
+        self.terminal_dock.set_commands([
+            # Drawing tools (AutoCAD-standard names)
+            'CIRCLE', 'PLINE', 'DIM', 'ADIM',
+            # Survey tools
+            'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
+            'SPIKY', 'PTOVERLAP', 'IMPORT', 'GAME',
+            # Terminal
+            'HELP', 'CLEAR',
+        ])
         self.iface.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
         self.terminal_dock.command.setFocus()
         
@@ -269,10 +279,12 @@ class Ugsurv:
 
         # This will help to setup the required snap settings.
         snapSettingConfig()
-        
-        # # Install global maptool to handle inputs at first entry
-        # self.global_map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
-        # self.canvas.setMapTool(self.global_map_tool)
+
+        # Install the single permanent map tool — stays on canvas for the whole session.
+        # All drawing tools connect to it as delegates instead of owning the canvas.
+        self.global_map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
+        self.canvas.setMapTool(self.global_map_tool)
+
         from .package_installer import solve_dependency_issues
         
         # Running this function so as to install all the dependecies required.
@@ -282,12 +294,9 @@ class Ugsurv:
     
     
     def _on_escape(self):
-        """Cancel the active map tool regardless of which widget currently has focus."""
-        if hasattr(self, 'map_tool') and self.canvas.mapTool() is self.map_tool:
-            try:
-                self.map_tool.deactivate()
-            except Exception:
-                pass
+        """Cancel the active delegate tool regardless of which widget currently has focus."""
+        if hasattr(self, 'global_map_tool') and self.global_map_tool._active_tool:
+            self.global_map_tool._evict()
 
     def acceptInput(self):
         text = self.terminal_dock.command.text()
@@ -328,102 +337,82 @@ class Ugsurv:
 
         self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
         
-        # =================================================================================================
-        # then caryyout operations.
-        # our first command is tracking the cursor cordinates.
-        # Fifth command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'help':
-            self.terminal_dock.commandOutputText += "\nCommands:"
-            self.terminal_dock.commandOutputText += "\nDialog box->"
-            self.terminal_dock.commandOutputText += "\nadd - adds selected features in one layer to another"
-            self.terminal_dock.commandOutputText += "\nprint - Import cadastral print"
-            self.terminal_dock.commandOutputText += "\ncrs - Selected feature CRS adjust"
-            self.terminal_dock.commandOutputText += "\nspiky - Find spiky vertices between two segments"
-            self.terminal_dock.commandOutputText += "\npt_overlap - Find overlapping points on a geometry boundary"
-            self.terminal_dock.commandOutputText += "\n"
-            self.terminal_dock.commandOutputText += "\nWithout Dialog box->"
-            self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
-            self.terminal_dock.commandOutputText += "\nadim - add Dimensions on entire feature selected"
-            self.terminal_dock.commandOutputText += "\ngame - Starts GIS game"
-            self.terminal_dock.commandOutputText += "\nts - topologysolver"
-            self.terminal_dock.commandOutputText += "\nfix - Fix geometry in layer."
-            self.terminal_dock.commandOutputText += "\n"
-            self.terminal_dock.commandOutputText += "\ncls - Clear command line"
-            self.terminal_dock.commandOutputText += "\n"
+        cmd = self.prevCommand.lower()
+
+        if cmd in ('help', '?'):
+            self.terminal_dock.commandOutputText += (
+                "\n── Drawing ──────────────────────────"
+                "\n  CIRCLE  [C ]   Draw a circle"
+                "\n  PLINE   [PL]   Draw a polyline"
+                "\n  DIM     [DI]   Dimension a segment / two points"
+                "\n  ADIM    [AD]   Dimension all segments of a feature"
+                "\n── Survey tools ──────────────────────"
+                "\n  TOPO    [TS]   Topology solver"
+                "\n  FIXG    [FG]   Fix geometry"
+                "\n  PARCEL  [PP]   Auto-plot parcels"
+                "\n  ADDGEOM [GA]   Add geometry to layer"
+                "\n  CRS            Adjust CRS of selected features"
+                "\n  SPIKY   [SPK]  Detect spiky vertices"
+                "\n  PTOVERLAP[PTO] Detect overlapping boundary points"
+                "\n  IMPORT  [IMP]  Import & georeference cadastral print"
+                "\n  GAME    [GM]   Total-station laser game"
+                "\n── Terminal ──────────────────────────"
+                "\n  CLEAR   [CLS]  Clear terminal"
+                "\n  HELP    [?  ]  Show this list"
+                "\n"
+            )
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            
-        # Command is for clearing the terminal.
-        if self.prevCommand == 'cls':
+
+        elif cmd in ('clear', 'cls'):
             self.terminal_dock.commandHistory = ['']
             self.terminal_dock.historyIndex = 0
-            self.terminal_dock.commandOutputText = 'Loading plugin...\nPlugin has been loaded 🧪...\nTerminal cleared...'
+            self.terminal_dock.commandOutputText = 'Terminal cleared.'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-            
-        # Command is for automatic plotting of parcels.
-        if self.prevCommand == 'pp':
-            # self.dlg = ParcelPlotterDialog()
-            self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
+
+        elif cmd in ('circle', 'c'):
+            self.global_map_tool.set_tool(CircleDrawer(self.canvas, self.terminal_dock))
+
+        elif cmd in ('pline', 'pl'):
+            self.global_map_tool.set_tool(PolylineDrawer(self.canvas, self.terminal_dock))
+
+        elif cmd in ('dim', 'di'):
+            self.global_map_tool.set_tool(DimensionDrawer(self.canvas, self.terminal_dock, 'single'))
+
+        elif cmd in ('adim', 'ad'):
+            self.global_map_tool.set_tool(DimensionDrawer(self.canvas, self.terminal_dock, 'selected'))
+
+        elif cmd in ('topo', 'ts'):
+            self.global_map_tool.set_tool(TopologySolver(self.canvas, self.iface, self.terminal_dock))
+
+        elif cmd in ('fixg', 'fg'):
+            self.global_map_tool.set_tool(FixGeometry(self.canvas, self.terminal_dock))
+
+        elif cmd in ('parcel', 'pp'):
+            self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())
             self.dlg.show()
-            
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'add':
+
+        elif cmd in ('addgeom', 'ga'):
             self.append_geom_dock = GeometryAppenderDock(self.iface.mainWindow())
             self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.append_geom_dock)
-            
-        # Command is for adjusting cordinate system of selected features.
-        if self.prevCommand.lower() == 'crs':
+
+        elif cmd == 'crs':
             self.crs_adjust_dock = CrsAdjustDock(self.iface.mainWindow())
             self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.crs_adjust_dock)
-            
-        # Command is for finding spiky geoms
-        if self.prevCommand.lower() == 'spiky':
+
+        elif cmd in ('spiky', 'spk'):
             self.spiky_detect_dock = SpikyGeomsDock(self.canvas, self.iface.mainWindow())
             self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.spiky_detect_dock)
 
-        # Command is for finding overlapping points on a geometry boundary
-        if self.prevCommand.lower() == 'pt_overlap':
+        elif cmd in ('ptoverlap', 'pto', 'pt_overlap'):
             self.overlap_detect_dock = OverlapPointsDock(self.canvas, self.iface.mainWindow())
             self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.overlap_detect_dock)
-            
-        # Command is for georeferencing and adding a cadatsral print to the map.
-        if self.prevCommand.lower() == 'print':
+
+        elif cmd in ('import', 'imp', 'print'):
             self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
             self.dlg.show()
-            
-        # Command is for playing QGIS game.
-        if self.prevCommand.lower() == 'game':
-            self.map_tool = Game1(self.canvas, self.terminal_dock, 'single')
-            self.canvas.setMapTool(self.map_tool)
-            
-        # Command is for adding dimesnions.
-        if self.prevCommand.lower() == 'dim':
-            self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'single')
-            self.canvas.setMapTool(self.map_tool)
-            
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'adim':
-            self.map_tool = DimensionDrawer(self.canvas, self.terminal_dock, 'selected')
-            self.canvas.setMapTool(self.map_tool)
-            
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'ts':
-            self.map_tool = TopologySolver(self.canvas, self.iface, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
-            
-        # Command is for adding dimesnions to entire geometries selected
-        if self.prevCommand.lower() == 'fix':
-            self.map_tool = FixGeometry(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
-            
-        # The function we have here below is for drawing a circle at the cursor cords
-        if self.prevCommand == 'c':
-            self.map_tool = CircleDrawer(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
 
-        # Command is for drawing polylines
-        if self.prevCommand == 'pl':
-            self.map_tool = PolylineDrawer(self.canvas, self.terminal_dock)
-            self.canvas.setMapTool(self.map_tool)
+        elif cmd in ('game', 'gm'):
+            self.global_map_tool.set_tool(Game1(self.canvas, self.terminal_dock))
             
             
             
@@ -440,10 +429,12 @@ class Ugsurv:
         except Exception:
             pass
 
-        # Remove any maptools active
+        # Evict any active delegate, then release the canvas tool
         try:
-            self.map_tool.deactivate()
-        except:
+            self.global_map_tool._evict()
+            self.canvas.unsetMapTool(self.global_map_tool)
+            self.global_map_tool = None
+        except Exception:
             pass
         
         # Remove any dialog boxes

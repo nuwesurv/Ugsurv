@@ -1,113 +1,111 @@
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt
 from qgis.core import (
-    QgsVectorLayer,
-    QgsProject,
-    QgsFeature,
-    QgsRectangle,
+    QgsCoordinateReferenceSystem,
     QgsGeometry,
     QgsPointXY,
-    QgsField,
+    QgsProject,
+    QgsRectangle,
     QgsWkbTypes,
-    QgsLineSymbol,
-    QgsPalLayerSettings, 
-    QgsTextFormat, 
-    QgsVectorLayerSimpleLabeling,
-    QgsPointLocator,
-    QgsWkbTypes
 )
-from qgis.core import QgsProject, QgsCoordinateReferenceSystem
-from PyQt5.QtCore import QVariant
-from qgis.gui import QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtGui import QIcon, QFont, QColor
-from qgis.core import QgsTextAnnotation
-from qgis.core import QgsPointXY
-from qgis.PyQt.QtGui import QTextDocument
-    
+from qgis.PyQt.QtGui import QColor
+
 import math
 import random
 import time
 
-from PyQt5.QtCore import QObject, QEvent
 from PyQt5.QtCore import QTimer
 
 from .game_objects.Target import Target
 from .game_objects.LaserPhoton import LaserPhoton
 
 
-
-
 class Game1(QgsMapTool):
 
-    def __init__(self, canvas, terminal_dock, operation_type):
+    MAX_PHOTONS = 5
+    LIFE_DRAIN_PER_MISS = 5
+    LIFE_HEAL_PER_HIT = 3
+    KILLS_PER_WAVE = 5
+
+    def __init__(self, canvas, terminal_dock):
         super().__init__(canvas)
         self.canvas = canvas
-        extent = self.canvas.extent()
-        # canvas_width = extent.width()
-        # canvas_height = extent.height()
 
-        # Set the coordinate sytem to 36N
         crs = QgsCoordinateReferenceSystem("EPSG:32636")
         QgsProject.instance().setCrs(crs)
-        
+
         self.game_extent = QgsRectangle(445200, 25200, 446800, 26200)
-        # self.game_extent = self.canvas.extent()
-        self.telescope_center = QgsPointXY(self.game_extent.xMinimum() + (self.game_extent.xMaximum() - self.game_extent.xMinimum()) / 2, 
-                                           self.game_extent.yMinimum() + 90)
-        
+        cx = (self.game_extent.xMinimum() + self.game_extent.xMaximum()) / 2
+        cy = self.game_extent.yMinimum() + 90
+        self.telescope_center = QgsPointXY(cx, cy)
+
         self.terminal_dock = terminal_dock
-        self.operation_type = operation_type
-        self.cursor_points = []
-        
-        # The game loop is here.
+        self._maptool = None  # set by UgsurvMaptool.set_tool()
+
+        # Game state
+        self.score = 0
+        self.combo = 0
+        self.wave = 0
         self.life_percent = 100
         self.game_start_time = time.time()
         self.is_playing = False
+
+        self._base_speeds = [[0, -12], [0, -11], [0, -10]]
+
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.game_loop)
-        self.animation_interval = 50  # milliseconds
-        self.targets = [
-                        Target('Target1' ,self.canvas, self.get_rand_startxy(), self.game_extent, [0, -12]),
-                        Target('Target2', self.canvas, self.get_rand_startxy(), self.game_extent,[0,-11]),
-                        Target('Target3', self.canvas, self.get_rand_startxy(), self.game_extent, [0, -10]),
-                        ]
-        self.laserphotons = []
-        self.start_game()
-        
-        # Target line from the total station
-        self.target_line = self.createRubberBand(QgsWkbTypes.LineGeometry, QColor(255,0,0), 0.5, Qt.DashLine)
-        
-        # Create the Telescope of the total station
-        self.laser_telescope = self.createRubberBand(QgsWkbTypes.PolygonGeometry, QColor(1,1,1), 0.5, Qt.SolidLine, QColor(234,182,28))
-        self.laser_telescope.setToGeometry(self.create_laser_telescope(0), None)
-        # Create the ts_body of the total station
-        self.ts_body = self.createRubberBand(QgsWkbTypes.PolygonGeometry, QColor(1,1,1), 0.5, Qt.SolidLine, QColor(234,182,28))
-        self.ts_body.setToGeometry(self.create_ts_tripod(), None)
-        # Create the loadbar_boundary of the game
-        self.load_bar_bndry = self.createRubberBand(QgsWkbTypes.PolygonGeometry, QColor(1,1,1), 0.5, Qt.SolidLine, QColor(255,255,255))
-        self.load_bar_bndry.setToGeometry(self.create_loadbar(self.life_percent), None)
-        # Create the loadbar of the game
-        self.load_bar = self.createRubberBand(QgsWkbTypes.PolygonGeometry, QColor(1,1,1), 0.5, Qt.SolidLine, QColor(234,182,28))
-        self.load_bar.setToGeometry(self.create_loadbar(self.life_percent), None)
+        self.animation_interval = 50
 
-        # self.line_rb.setToGeometry(line, None)
-        self.zoom_to_extent()
-        
-        
-    def get_rand_startxy(self):
-        x_dist = self.game_extent.xMaximum() -self.game_extent.xMinimum()
-        return [
-            random.randint(int(self.game_extent.xMinimum()+x_dist*0.2), int(self.game_extent.xMaximum() - x_dist*0.2)),
-            random.randint(int(self.game_extent.yMaximum()), int(self.game_extent.yMaximum()) + 100)
+        self.targets = [
+            Target('Target1', canvas, self._rand_start(), self.game_extent, list(self._base_speeds[0])),
+            Target('Target2', canvas, self._rand_start(), self.game_extent, list(self._base_speeds[1])),
+            Target('Target3', canvas, self._rand_start(), self.game_extent, list(self._base_speeds[2])),
         ]
-    
+        self.laserphotons = []
+
+        # Rubber bands
+        self.target_line = self._make_rb(QgsWkbTypes.LineGeometry, QColor(255, 80, 80), 1, Qt.DashLine)
+
+        self.laser_telescope = self._make_rb(
+            QgsWkbTypes.PolygonGeometry, QColor(60, 60, 60), 1, Qt.SolidLine, QColor(234, 182, 28))
+        self.laser_telescope.setToGeometry(self._telescope_geom(0), None)
+
+        self.ts_body = self._make_rb(
+            QgsWkbTypes.PolygonGeometry, QColor(60, 60, 60), 1, Qt.SolidLine, QColor(234, 182, 28))
+        self.ts_body.setToGeometry(self._tripod_geom(), None)
+
+        # Life bar: dark boundary always at 100%, colored fill scales with life
+        self.load_bar_bndry = self._make_rb(
+            QgsWkbTypes.PolygonGeometry, QColor(80, 80, 80), 2, Qt.SolidLine, QColor(40, 40, 40))
+        self.load_bar_bndry.setToGeometry(self._loadbar_geom(100), None)
+
+        self.load_bar = self._make_rb(
+            QgsWkbTypes.PolygonGeometry, QColor(0, 0, 0), 0, Qt.SolidLine, QColor(0, 200, 0))
+        self.load_bar.setToGeometry(self._loadbar_geom(self.life_percent), None)
+
+        self.zoom_to_extent()
+        self._update_hud()
+        self.start_game()
+
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+
+    def _rand_start(self):
+        x_dist = self.game_extent.xMaximum() - self.game_extent.xMinimum()
+        margin = x_dist * 0.1
+        return [
+            random.randint(int(self.game_extent.xMinimum() + margin),
+                           int(self.game_extent.xMaximum() - margin)),
+            random.randint(int(self.game_extent.yMaximum()),
+                           int(self.game_extent.yMaximum()) + 100),
+        ]
+
     def zoom_to_extent(self):
         self.canvas.setExtent(self.game_extent)
         self.canvas.refresh()
 
-
-        
-    def createRubberBand(self, geom_type, color=QColor(255, 0, 0), width=2, linestyle=Qt.SolidLine, fill_color=None):
+    def _make_rb(self, geom_type, color, width=2, linestyle=Qt.SolidLine, fill_color=None):
         rb = QgsRubberBand(self.canvas, geom_type)
         rb.setColor(color)
         rb.setWidth(width)
@@ -115,8 +113,11 @@ class Game1(QgsMapTool):
         if fill_color and geom_type == QgsWkbTypes.PolygonGeometry:
             rb.setFillColor(fill_color)
         return rb
-        
-        
+
+    # ------------------------------------------------------------------
+    # Game lifecycle
+    # ------------------------------------------------------------------
+
     def start_game(self):
         self.is_playing = True
         self.animation_timer.start(self.animation_interval)
@@ -124,280 +125,276 @@ class Game1(QgsMapTool):
     def stop_game(self):
         self.is_playing = False
         self.animation_timer.stop()
-        
+
     def activate(self):
         super().activate()
         self.canvas.setFocus()
-        
+
     def deactivate(self):
-        self.canvas.unsetMapTool(self)
-        self.terminal_dock.command.setFocus()
-        
-        # Hide snap marker and clear state
+        if self._maptool:
+            self._maptool.clear_tool()
+        else:
+            self.canvas.unsetMapTool(self)
+            self.terminal_dock.command.setFocus()
+
         self.stop_game()
-        # Remove all targets and photons
+
         for target in self.targets:
             target.remove()
-            
-        for photon in self.laserphotons:
-            if photon:
-                self.laserphotons.remove(photon)
-                photon.remove()
-            
-        self.laser_telescope.reset(QgsWkbTypes.LineGeometry)
-        self.load_bar.reset(QgsWkbTypes.LineGeometry)
-        self.load_bar_bndry.reset(QgsWkbTypes.LineGeometry)
-        self.ts_body.reset(QgsWkbTypes.LineGeometry)
+
+        for photon in list(self.laserphotons):
+            photon.remove()
+        self.laserphotons.clear()
+
+        self.laser_telescope.reset(QgsWkbTypes.PolygonGeometry)
+        self.ts_body.reset(QgsWkbTypes.PolygonGeometry)
+        self.load_bar.reset(QgsWkbTypes.PolygonGeometry)
+        self.load_bar_bndry.reset(QgsWkbTypes.PolygonGeometry)
         self.target_line.reset(QgsWkbTypes.LineGeometry)
-        # self.target1.reset(QgsWkbTypes.LineGeometry)
-        
-        # Reste the cursor points that were stored.
-        self.cursor_points.clear()
+
         self.terminal_dock.commandDisplay.setText(
             self.terminal_dock.commandOutputText + "\n........\n"
         )
-        # Call parent
         super().deactivate()
-        
-        
-        
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.deactivate()
-            
-            
 
-
+    # ------------------------------------------------------------------
+    # Input events
+    # ------------------------------------------------------------------
 
     def canvasMoveEvent(self, event):
-        self.zoom_to_extent()
         point = self.toMapCoordinates(event.pos())
-        
-        # Deltas and the angle of the laser.
-        dx = point.x() - self.telescope_center[0]
-        dy = point.y() - self.telescope_center[1]
+        cx, cy = self.telescope_center.x(), self.telescope_center.y()
+
+        dx = point.x() - cx
+        dy = point.y() - cy
         angle_rad = math.atan2(dy, dx)
         angle_deg = math.degrees(angle_rad)
-        
-        # use angle to rotate telescope polygon
-        self.laser_telescope.setToGeometry(
-            self.create_laser_telescope(angle_deg),
-            None
-        )
-        # Set up the target line.
+
+        self.laser_telescope.setToGeometry(self._telescope_geom(angle_deg), None)
+
         max_dist = 0.3 * (self.game_extent.yMaximum() - self.game_extent.yMinimum())
-        laser_dist = math.sqrt(
-                                (point.x() - self.telescope_center[0])**2 +
-                                (point.y() - self.telescope_center[1])**2
-                            )
+        dist = math.hypot(dx, dy)
 
-        dx = max_dist * math.cos(angle_rad)
-        dy = max_dist * math.sin(angle_rad)
-
-        x = self.telescope_center[0] + dx
-        y = self.telescope_center[1] + dy
-        if laser_dist < max_dist:
-            target_line_geom = QgsGeometry.fromPolylineXY([QgsPointXY(self.telescope_center[0], self.telescope_center[1]), point])
+        if dist < max_dist:
+            end = point
         else:
-            target_line_geom = QgsGeometry.fromPolylineXY([QgsPointXY(self.telescope_center[0], self.telescope_center[1]), QgsPointXY(x, y)])
-        
+            end = QgsPointXY(
+                cx + max_dist * math.cos(angle_rad),
+                cy + max_dist * math.sin(angle_rad),
+            )
+
         self.target_line.setToGeometry(
-            target_line_geom,
-            None
+            QgsGeometry.fromPolylineXY([self.telescope_center, end]), None
         )
 
-            
-        self.terminal_dock.commandDisplay.setText(
-            self.terminal_dock.commandOutputText + f'\nSelect end point: {angle_deg}\n'
-        )
-        
-        
-        
-        
-    
     def canvasPressEvent(self, event):
-        # if event.button() == Qt.RightButton:
-        #     self.deactivate()
-            
-        if event.button() == Qt.LeftButton:
-            point = self.toMapCoordinates(event.pos())
-            
-            # Deltas and the angle of the laser.
-            dx = point.x() - self.telescope_center[0]
-            dy = point.y() - self.telescope_center[1]
-            angle_rad = math.atan2(dy, dx)
-            angle_deg = math.degrees(angle_rad)
-            speed = 200
-            dx = speed * math.cos(angle_rad)
-            dy = speed * math.sin(angle_rad)
-            
-            
-            self.laserphotons.append(LaserPhoton(f'laser_photon{len(self.laserphotons)}' ,self.canvas, angle_rad, self.telescope_center, self.game_extent, [dx, dy]))
-            
-            
-            
-            
-            
-            
-            
-    # This is the game loop running the objects.
+        if event.button() != Qt.LeftButton or not self.is_playing:
+            return
+        if len(self.laserphotons) >= self.MAX_PHOTONS:
+            return
+
+        point = self.toMapCoordinates(event.pos())
+        cx, cy = self.telescope_center.x(), self.telescope_center.y()
+        angle_rad = math.atan2(point.y() - cy, point.x() - cx)
+
+        speed = 200
+        photon = LaserPhoton(
+            f'photon_{len(self.laserphotons)}',
+            self.canvas,
+            angle_rad,
+            [cx, cy],
+            self.game_extent,
+            [speed * math.cos(angle_rad), speed * math.sin(angle_rad)],
+        )
+        self.laserphotons.append(photon)
+
+    # ------------------------------------------------------------------
+    # Game loop
+    # ------------------------------------------------------------------
+
     def game_loop(self):
         if not self.is_playing:
             return
-        # Update the time played
-        duration = time.time() - self.game_start_time
-        # self.update_text(self.timer_text, f"Time: {duration:.1f}s")
-        print(duration)
-        
-        # Update the score.
-        ...
 
-        # ---- Move targets ----
+        # Check wave advancement
+        new_wave = self.score // self.KILLS_PER_WAVE
+        if new_wave > self.wave:
+            self.wave = new_wave
+            self._advance_wave()
+
+        # Move targets — game loop owns hit detection, not Target.move()
         for target in self.targets:
             if target.got_hit():
-                print(f"{target.name} has been hit")
-                target.reset_target(self.get_rand_startxy())
-                self.life_percent -= 4
-                self.load_bar.reset(QgsWkbTypes.LineGeometry)
-                self.load_bar.setToGeometry(self.create_loadbar(self.life_percent), None)
+                target.reset_target(self._rand_start())
+                self.combo = 0
+                self._drain_life(self.LIFE_DRAIN_PER_MISS)
             else:
-                
-                # dx, dy = [0, -15]
                 target.move()
 
-        # ---- Move photons ----
+        # Move photons and detect collisions
         photons_to_remove = []
         for photon in self.laserphotons:
             if photon.got_hit():
-                print(f"{photon.name} has been hit")
                 photons_to_remove.append(photon)
                 continue
-
             photon.move()
-            photon_geom = photon.geometry
-
-            # ---- Collision detection ----
             for target in self.targets:
-                if target.geometry.intersects(photon_geom):
-                    self.life_percent = self.life_percent + 2 if self.life_percent+2 <= 100 else self.life_percent
-                    self.load_bar.reset(QgsWkbTypes.LineGeometry)
-                    self.load_bar.setToGeometry(self.create_loadbar(self.life_percent), None)
-                    target.reset_target(self.get_rand_startxy())
+                if target.geometry.intersects(photon.geometry):
+                    self.combo += 1
+                    bonus = 1 if self.combo % 3 == 0 else 0
+                    self.score += 1 + bonus
+                    self._heal_life(self.LIFE_HEAL_PER_HIT)
+                    target.reset_target(self._rand_start())
+                    photons_to_remove.append(photon)
+                    break
 
-
-        # ---- Remove photons safely ----
         for photon in photons_to_remove:
             if photon in self.laserphotons:
                 self.laserphotons.remove(photon)
                 photon.remove()
-                
-                
-                
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    def create_laser_telescope(self, angle):
-        half_h = 10
-        half_w = 70
+
+        self._update_hud()
+
+        if self.life_percent <= 0:
+            self._game_over()
+
+    # ------------------------------------------------------------------
+    # Game state helpers
+    # ------------------------------------------------------------------
+
+    def _drain_life(self, amount):
+        self.life_percent = max(0, self.life_percent - amount)
+        self._update_life_bar()
+
+    def _heal_life(self, amount):
+        self.life_percent = min(100, self.life_percent + amount)
+        self._update_life_bar()
+
+    def _update_life_bar(self):
+        self.load_bar.reset(QgsWkbTypes.PolygonGeometry)
+        self.load_bar.setToGeometry(self._loadbar_geom(self.life_percent), None)
+
+        if self.life_percent >= 60:
+            color = QColor(0, 200, 0)
+        elif self.life_percent >= 30:
+            color = QColor(230, 150, 0)
+        else:
+            color = QColor(220, 30, 30)
+        self.load_bar.setFillColor(color)
+
+    def _update_hud(self):
+        elapsed = time.time() - self.game_start_time
+        combo_text = f'  Combo x{self.combo}!' if self.combo >= 3 else ''
+        self.terminal_dock.commandDisplay.setText(
+            self.terminal_dock.commandOutputText +
+            f'\n[GAME]  Score: {self.score}  |  Life: {self.life_percent}%'
+            f'  |  Wave: {self.wave + 1}  |  Time: {elapsed:.0f}s{combo_text}'
+        )
+
+    def _advance_wave(self):
+        speed_factor = 1.0 + self.wave * 0.2
+        for i, target in enumerate(self.targets):
+            base = self._base_speeds[i] if i < len(self._base_speeds) else [0, -10]
+            target.dx = base[0] * speed_factor
+            target.dy = base[1] * speed_factor
+
+        # Wave 2: add a 4th target with slight horizontal drift
+        if self.wave == 2:
+            drift = random.choice([-4, 4])
+            self.targets.append(
+                Target('Target4', self.canvas, self._rand_start(), self.game_extent,
+                       [drift * speed_factor, -13 * speed_factor],
+                       fill_color=QColor(255, 220, 100))
+            )
+            self._base_speeds.append([drift, -13])
+        # Wave 4: add a fast red target
+        elif self.wave == 4:
+            drift = random.choice([-6, 6])
+            self.targets.append(
+                Target('Target5', self.canvas, self._rand_start(), self.game_extent,
+                       [drift * speed_factor, -16 * speed_factor],
+                       color=QColor(200, 0, 0), fill_color=QColor(255, 80, 80))
+            )
+            self._base_speeds.append([drift, -16])
+
+    def _game_over(self):
+        self.stop_game()
+        elapsed = time.time() - self.game_start_time
+        self.terminal_dock.commandOutputText += (
+            f'\n\n=== GAME OVER ==='
+            f'\n  Final Score : {self.score}'
+            f'\n  Waves reached: {self.wave + 1}'
+            f'\n  Time played : {elapsed:.1f}s'
+            f'\n  Press ESC to exit\n'
+        )
+        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+
+    # ------------------------------------------------------------------
+    # Geometry builders
+    # ------------------------------------------------------------------
+
+    def _telescope_geom(self, angle_deg):
         cx, cy = self.telescope_center.x(), self.telescope_center.y()
-        # rectangle before rotation
+        # Shape defined as absolute coords, rotated around telescope_center
+        raw = [
+            [446003.42405499, 25268.68404036],
+            [445997.50022608, 25268.68404036],
+            [445995.55378421, 25331.19801672],
+            [445989.75348518, 25338.10263317],
+            [445989.79051313, 25340.76929131],
+            [446008.92065064, 25340.72457442],
+            [446008.91068990, 25338.37221850],
+            [446003.67999385, 25331.57095658],
+            [446003.42405499, 25268.68404036],
+        ]
+        theta = math.radians(angle_deg - 90)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
         points = [
-            [ 446003.42405499482993, 25268.684040363874374 ], 
-            [ 445997.500226084317546, 25268.684040363874374 ], 
-            [ 445995.553784213436302, 25331.19801672146059 ], 
-            [ 445989.75348517607199, 25338.102633168495231 ], 
-            [ 445989.790513134968933, 25340.769291311862617 ], 
-            [ 446008.920650639745872, 25340.724574416995893 ], 
-            [ 446008.910689904063474, 25338.372218503212935 ], 
-            [ 446003.679993852449115, 25331.570956577463221 ], 
-            [ 446003.42405499482993, 25268.684040363874374 ] 
-            ]
-        
+            QgsPointXY(
+                cx + (x - cx) * cos_t - (y - cy) * sin_t,
+                cy + (x - cx) * sin_t + (y - cy) * cos_t,
+            )
+            for x, y in raw
+        ]
+        return QgsGeometry.fromPolygonXY([points])
 
-        theta = math.radians(angle-90)
-        cos_t = math.cos(theta)
-        sin_t = math.sin(theta)
-        rotated_points = []
+    def _tripod_geom(self):
+        raw = [
+            [445963.51399173, 25197.54868380], [445965.16567908, 25201.75794921],
+            [445965.68430881, 25204.50236733], [445987.33670142, 25262.97557123],
+            [445997.02574071, 25263.11586315], [445997.07955320, 25268.64674084],
+            [445987.93919486, 25271.04949167], [445988.01244651, 25309.12942074],
+            [445996.08214266, 25314.22870051], [446003.60958979, 25314.27192537],
+            [446012.16024465, 25309.34294491], [446012.08191969, 25270.97931997],
+            [446012.03619763, 25270.72275193], [446011.87687251, 25270.62703314],
+            [446003.87367360, 25268.65214897], [446003.99104053, 25263.14731279],
+            [446013.05972311, 25263.25262177], [446035.84996936, 25203.22164890],
+            [446036.06462272, 25201.09183481], [446036.92466792, 25199.11165294],
+            [446035.70832808, 25200.89285010], [446034.01733238, 25202.34386831],
+            [446006.70201909, 25246.69720692], [446001.81429554, 25204.44384669],
+            [446000.90672308, 25201.02271243], [446000.83489212, 25196.01061782],
+            [446000.76256249, 25200.87950266], [445999.80676498, 25204.31573366],
+            [445994.54658823, 25246.72810158], [445967.08042148, 25203.74556169],
+            [445965.42065535, 25201.72854004], [445963.51399173, 25197.54868380],
+        ]
+        return QgsGeometry.fromPolygonXY([[QgsPointXY(x, y) for x, y in raw]])
 
-        for x, y in points:
-            xr = cx + (x-cx)*cos_t - (y-cy)*sin_t
-            yr = cy + (x-cx)*sin_t + (y-cy)*cos_t
-            rotated_points.append(QgsPointXY(xr, yr))
-
-        poly = QgsGeometry.fromPolygonXY([rotated_points])
-        return poly
-    
-    def create_ts_tripod(self):
-        half_h = 10
-        half_w = 70
-        cx, cy = self.telescope_center.x(), self.telescope_center.y()
-        # rectangle before rotation
-        points = [ [ 445963.513991734071169, 25197.548683803292079 ], 
-                  [ 445965.165679075347725, 25201.757949205726618 ], 
-                  [ 445965.684308810101356, 25204.502367331140704 ], 
-                  [ 445987.336701418564189, 25262.975571233815572 ], 
-                  [ 445997.02574070985429, 25263.115863152175734 ], 
-                  [ 445997.079553201445378, 25268.646740838783444 ], 
-                  [ 445987.939194861857686, 25271.049491672125441 ], 
-                  [ 445988.012446512060706, 25309.129420743272931 ], 
-                  [ 445996.082142662373371, 25314.228700513787771 ], 
-                  [ 446003.609589791449253, 25314.271925371216639 ], 
-                  [ 446012.160244654107373, 25309.34294490569664 ], 
-                  [ 446012.081919694959652, 25270.979319965346804 ], 
-                  [ 446012.036197629699018, 25270.722751929984952 ], 
-                  [ 446011.876872513443232, 25270.627033144286543 ], 
-                  [ 446003.873673596885055, 25268.652148973658768 ], 
-                  [ 446003.991040530090686, 25263.147312789180432 ], 
-                  [ 446013.05972310929792, 25263.252621772644488 ], 
-                  [ 446035.849969359929673, 25203.221648899689171 ], 
-                  [ 446036.064622723206412, 25201.091834810071305 ], 
-                  [ 446036.92466792446794, 25199.111652943192894 ], 
-                  [ 446035.708328082866501, 25200.892850095428003 ], 
-                  [ 446034.017332384828478, 25202.343868308053061 ], 
-                  [ 446006.702019088028464, 25246.697206924676721 ], 
-                  [ 446001.814295542193577, 25204.443846685378958 ], 
-                  [ 446000.906723082938697, 25201.022712428231898 ], 
-                  [ 446000.83489212411223, 25196.010617815190926 ], 
-                  [ 446000.762562487157993, 25200.879502660860453 ], 
-                  [ 445999.806764975422993, 25204.315733656825614 ], 
-                  [ 445994.546588226803578, 25246.72810157789354 ], 
-                  [ 445967.080421476333868, 25203.74556168676645 ], 
-                  [ 445965.420655349094886, 25201.728540040901862 ], 
-                  [ 445963.513991734071169, 25197.548683803292079 ] 
-                  ]
-        
-        Qpoints = []
-        for x, y in points:
-            Qpoints.append(QgsPointXY(x, y))
-
-        poly = QgsGeometry.fromPolygonXY([Qpoints])
-        return poly
-            
-    def create_loadbar(self, percentage):
-        # rectangle before rotation
+    def _loadbar_geom(self, percentage):
         padding = 20
         height = 20
-        standard_width = 600
-        width = percentage * standard_width/100
-        
-        points = [ 
-                  (self.canvas.extent().xMinimum()+ padding, self.game_extent.yMaximum()- padding),
-                  (self.canvas.extent().xMinimum()+ width+ padding, self.game_extent.yMaximum()- padding),
-                  (self.canvas.extent().xMinimum()+ width+ padding, self.game_extent.yMaximum()-height- padding),
-                  (self.canvas.extent().xMinimum()+ padding, self.game_extent.yMaximum()-height- padding),
-                  ]
-        # print(points)
-        Qpoints = []
-        for x, y in points:
-            Qpoints.append(QgsPointXY(x, y))
-
-        poly = QgsGeometry.fromPolygonXY([Qpoints])
-        return poly
-        
+        full_width = 600
+        width = percentage * full_width / 100
+        x0 = self.canvas.extent().xMinimum() + padding
+        y_top = self.game_extent.yMaximum() - padding
+        y_bot = y_top - height
+        points = [
+            QgsPointXY(x0, y_top),
+            QgsPointXY(x0 + width, y_top),
+            QgsPointXY(x0 + width, y_bot),
+            QgsPointXY(x0, y_bot),
+        ]
+        return QgsGeometry.fromPolygonXY([points])

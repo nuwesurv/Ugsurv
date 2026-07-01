@@ -25,6 +25,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         self.cursor_points = []
         self.selected_geoms = []
         self.adj_feature_properties = {}
+        self._maptool = None   # set by UgsurvMaptool.set_tool()
         # self.s_layer = self.getSampleLayer()
         
         # Create rubber bands
@@ -55,9 +56,12 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         self.canvas.setFocus()
         
     def deactivate(self):
-        self.canvas.unsetMapTool(self)
-        self.terminal_dock.command.setFocus()
-        
+        if self._maptool:
+            self._maptool.clear_tool()
+        else:
+            self.canvas.unsetMapTool(self)
+            self.terminal_dock.command.setFocus()
+
         # Remove rubberbands
         self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
         self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)

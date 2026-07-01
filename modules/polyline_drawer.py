@@ -73,6 +73,7 @@ class PolylineDrawer(QgsMapTool):
         self.segment_text   = self._create_text_item()
         self._syncing = False
         self.dynamic_input_proxy = self._create_dynamic_input()
+        self._maptool = None   # set by UgsurvMaptool.set_tool()
 
     # -------------------------------------------------------------------------
     # Setup helpers
@@ -461,8 +462,11 @@ class PolylineDrawer(QgsMapTool):
     def deactivate(self):
         self.terminal_dock.clear_input_handler()
         self._hide_dynamic_input()
-        self.canvas.unsetMapTool(self)
-        self.terminal_dock.command.setFocus()
+        if self._maptool:
+            self._maptool.clear_tool()
+        else:
+            self.canvas.unsetMapTool(self)
+            self.terminal_dock.command.setFocus()
 
         self.polyline_layer.updateExtents()
         self.polyline_layer.commitChanges()
