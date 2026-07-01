@@ -22,169 +22,131 @@
  ***************************************************************************/
 """
 
-import os
+from PyQt5.QtWidgets import (
+    QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton
+)
 
-from PyQt5.QtCore import Qt
-import qgis
-from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
-from qgis.gui import QgsProjectionSelectionWidget, QgsMapLayerComboBox
-from qgis.core import QgsCoordinateReferenceSystem
+from qgis.gui import QgsMapLayerComboBox
 from qgis.core import (
     QgsFeature,
     QgsCoordinateTransform,
     QgsProject,
-    QgsWkbTypes,
-    QgsGeometry,
-    QgsVectorLayer,
-    QgsField,
-    QgsSpatialIndex
+    QgsSpatialIndex,
 )
 
 
-class GeometryAppenderDialog(QDialog):
-    def __init__(self, parent = None):
+class GeometryAppenderDock(QDockWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Append Selected Parcels')
-        self.setMaximumWidth(400)
-        self.setFixedWidth(400)
-        self.inputheight = 25
 
-        # Main Layout.
-        self.templayout = QVBoxLayout()
-        
-        # Select geopackage layer.
-        self.geoSelectHori1 = QHBoxLayout()
-        self.geoSelectLabel1 = QLabel('Copy selected from:')
-        self.geoSelectLabel1.setFixedWidth(100)
-        self.maplayerSelector1 = QgsMapLayerComboBox()
-        self.maplayerSelector1.setFixedHeight(self.inputheight)
-        self.geoSelectHori1.addWidget(self.geoSelectLabel1)
-        self.geoSelectHori1.addWidget(self.maplayerSelector1)
-        self.templayout.addLayout(self.geoSelectHori1)
-        
-        # Select geopackage layer.
-        self.geoSelectHori2 = QHBoxLayout()
-        self.geoSelectLabel2 = QLabel('Add selected to:')
-        self.geoSelectLabel2.setFixedWidth(100)
-        self.maplayerSelector2 = QgsMapLayerComboBox()
-        self.maplayerSelector2.setFixedHeight(self.inputheight)
-        self.geoSelectHori2.addWidget(self.geoSelectLabel2)
-        self.geoSelectHori2.addWidget(self.maplayerSelector2)
-        self.templayout.addLayout(self.geoSelectHori2)
+        inputheight = 25
 
-        # Response
-        self.filepath_store = QLabel("")
-        self.response = QLabel("No layer selected currently!")
-        self.templayout.addWidget(self.response)
+        root = QWidget()
+        layout = QVBoxLayout(root)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
 
+        # Source layer selector
+        from_row = QHBoxLayout()
+        from_row.addWidget(QLabel('Copy selected from:'))
+        self.from_combo = QgsMapLayerComboBox()
+        self.from_combo.setFixedHeight(inputheight)
+        from_row.addWidget(self.from_combo)
+        layout.addLayout(from_row)
 
+        # Target layer selector
+        to_row = QHBoxLayout()
+        to_row.addWidget(QLabel('Add selected to:'))
+        self.to_combo = QgsMapLayerComboBox()
+        self.to_combo.setFixedHeight(inputheight)
+        to_row.addWidget(self.to_combo)
+        layout.addLayout(to_row)
 
-        # Add the close and run buttons.
-        self.buttongrouper = QHBoxLayout()
-        self.hspacer = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.appendbutton = QPushButton('Append')
-        self.appendbutton.setFixedWidth(100)
+        # Status label
+        self.response = QLabel('No layer selected currently.')
+        layout.addWidget(self.response)
 
-        self.buttongrouper.addItem(self.hspacer)
-        self.buttongrouper.addWidget(self.appendbutton)
-        self.buttongrouper.setSpacing(10)
-        self.templayout.addItem(self.buttongrouper)
+        layout.addStretch()
 
-        self.setLayout(self.templayout)
-        self.appendbutton.clicked.connect(self.append_parcels)
+        # Append button
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.append_btn = QPushButton('Append')
+        btn_row.addWidget(self.append_btn)
+        layout.addLayout(btn_row)
 
-    def update_result_label(self, label, message, color="green"):
-        label.setStyleSheet(f"color: {color};")
-        label.setText(f"Result: {message}")
+        self.setWidget(root)
+        self.append_btn.clicked.connect(self.append_parcels)
 
-    
-    
+    def _set_status(self, message, color="green"):
+        self.response.setStyleSheet(f"color: {color};")
+        self.response.setText(message)
+
     def append_parcels(self):
-        from_layer = self.maplayerSelector1.currentLayer()
+        from_layer = self.from_combo.currentLayer()
         if not from_layer:
-            self.update_result_label(self.response, "No 'from' layer selected!", "red")
-            return
-        
-        to_layer = self.maplayerSelector2.currentLayer()
-        if not to_layer:
-            self.update_result_label(self.response, "No 'to' layer selected!", "red")
+            self._set_status("No 'from' layer selected!", "red")
             return
 
-        # Check selection
+        to_layer = self.to_combo.currentLayer()
+        if not to_layer:
+            self._set_status("No 'to' layer selected!", "red")
+            return
+
         selected_features = from_layer.selectedFeatures()
         if not selected_features:
-            self.update_result_label(self.response, "No features selected in 'From' layer!", "red")
+            self._set_status("No features selected in 'From' layer!", "red")
             return
-        
+
         # Build spatial index for target layer
         index = QgsSpatialIndex(to_layer.getFeatures())
-
-        # Store existing geometries
         existing_geoms = {f.id(): f.geometry() for f in to_layer.getFeatures()}
 
         try:
-            # Start editing target layer if not already
             if not to_layer.isEditable():
                 to_layer.startEditing()
 
             to_fields = to_layer.fields()
             new_features = []
-            
-            # Prepare CRS transform
+
             transform = None
             if from_layer.crs() != to_layer.crs():
                 transform = QgsCoordinateTransform(
-                    from_layer.crs(),
-                    to_layer.crs(),
-                    QgsProject.instance()
+                    from_layer.crs(), to_layer.crs(), QgsProject.instance()
                 )
 
             for feat in selected_features:
-                new_feat = feat.__class__()  # QgsFeature()
-                new_feat.setGeometry(feat.geometry())
-                
                 geom = feat.geometry()
 
-                # --- 1. Transform CRS if needed ---
                 if transform:
                     geom.transform(transform)
 
-                # --- 2. Fix invalid geometry (important in real data) ---
                 if not geom.isGeosValid():
                     geom = geom.makeValid()
-                    
-                # Here we try to avoid spatial duplication of parcels.
-                # --- 🔍 CHECK IF EXISTS ---
+
+                # Skip duplicates
                 candidate_ids = index.intersects(geom.boundingBox())
                 exists = False
                 for cid in candidate_ids:
                     existing_geom = existing_geoms[cid]
-
-                    # Strict check
                     if geom.equals(existing_geom):
                         exists = True
                         break
-
-                    # Optional: fuzzy match (real-world safer)
                     if geom.intersects(existing_geom):
                         overlap = geom.intersection(existing_geom).area()
-                        if overlap / geom.area() > 0.95:  # 95% overlap
+                        if overlap / geom.area() > 0.95:
                             exists = True
                             break
 
                 if exists:
-                    self.update_result_label(
-                        self.response,
-                        f"Selected feature already exists in the To layer.",
-                        "green"
-                    )
-                    continue  # 🚫 skip duplicate
-                
-                # here we reassign new_feature a geometry that has been transformed
+                    self._set_status("A selected feature already exists in the target layer.", "orange")
+                    continue
+
                 new_feat = QgsFeature(to_fields)
                 new_feat.setGeometry(geom)
-                
-                # Match attributes by field name
+
                 attrs = []
                 for field in to_fields:
                     if field.name().lower() == 'fid':
@@ -193,22 +155,16 @@ class GeometryAppenderDialog(QDialog):
                         attrs.append(feat[field.name()])
                     else:
                         attrs.append(None)
-
                 new_feat.setAttributes(attrs)
                 new_features.append(new_feat)
 
-            # Add features
             to_layer.addFeatures(new_features)
 
-            # # Commit changes
-            # to_layer.commitChanges()
-
-            self.update_result_label(
-                self.response,
+            self._set_status(
                 f"Successfully appended {len(new_features)} feature(s).",
                 "green"
             )
 
         except Exception as e:
             to_layer.rollBack()
-            self.update_result_label(self.response, f"Error: {str(e)}", "red")
+            self._set_status(f"Error: {e}", "red")

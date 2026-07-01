@@ -52,7 +52,6 @@ from qgis.gui import QgsMapCanvas
 from .resources import *
 # Import the code for the dialog
 from .modules.terminal import TerminalDialog
-from .Ugsurv_dialog import UgsurvDialog
 
 import os.path
 from .modules.keymap import KeyPressFilter
@@ -64,11 +63,11 @@ from .modules.topology_solver import TopologySolver
 from .modules.fix_geometry import FixGeometry
 from .module_wz_dialogs.parcelplotter_dialog import ParcelPlotterDialog
 from .module_wz_dialogs.import_print import ImportPrintDialog
-from .module_wz_dialogs.append_geometry import GeometryAppenderDialog
-from .module_wz_dialogs.crs_adjust import CrsAdjustDialog
+from .module_wz_dialogs.append_geometry import GeometryAppenderDock
+from .module_wz_dialogs.crs_adjust import CrsAdjustDock
 from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
+from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
-from .modules.ugsurv_maptool import UgsurvMaptool
 import ast
 
 
@@ -111,7 +110,7 @@ class Ugsurv:
         # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts'] # was created for suggection purposes.
+        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap'] # was created for suggection purposes.
         ...
         self.active = False  # Track plugin toggle state
         ...
@@ -307,6 +306,7 @@ class Ugsurv:
             self.terminal_dock.commandOutputText += "\nprint - Import cadastral print"
             self.terminal_dock.commandOutputText += "\ncrs - Selected feature CRS adjust"
             self.terminal_dock.commandOutputText += "\nspiky - Find spiky vertices between two segments"
+            self.terminal_dock.commandOutputText += "\npt_overlap - Find overlapping points on a geometry boundary"
             self.terminal_dock.commandOutputText += "\n"
             self.terminal_dock.commandOutputText += "\nWithout Dialog box->"
             self.terminal_dock.commandOutputText += "\ndim - add Dimesion on segment or between two points."
@@ -326,26 +326,31 @@ class Ugsurv:
             self.terminal_dock.commandOutputText = 'Loading plugin...\nPlugin has been loaded 🧪...\nTerminal cleared...'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
             
-        # # Command is for automatic plotting of parcels.
-        # if self.prevCommand == 'pp':
-        #     # self.dlg = ParcelPlotterDialog()
-        #     self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
-        #     self.dlg.show()
+        # Command is for automatic plotting of parcels.
+        if self.prevCommand == 'pp':
+            # self.dlg = ParcelPlotterDialog()
+            self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())  # if you want the dialog to not appear like a separate qgis windo but instead witin the same qgis interface window.
+            self.dlg.show()
             
         # Command is for adding dimesnions to entire geometries selected
         if self.prevCommand.lower() == 'add':
-            self.dlg = GeometryAppenderDialog()
-            self.dlg.show()
+            self.append_geom_dock = GeometryAppenderDock(self.iface.mainWindow())
+            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.append_geom_dock)
             
         # Command is for adjusting cordinate system of selected features.
         if self.prevCommand.lower() == 'crs':
-            self.dlg = CrsAdjustDialog(parent=self.iface.mainWindow())
-            self.dlg.show()
+            self.crs_adjust_dock = CrsAdjustDock(self.iface.mainWindow())
+            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.crs_adjust_dock)
             
         # Command is for finding spiky geoms
         if self.prevCommand.lower() == 'spiky':
             self.spiky_detect_dock = SpikyGeomsDock(self.canvas, self.iface.mainWindow())
             self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.spiky_detect_dock)
+
+        # Command is for finding overlapping points on a geometry boundary
+        if self.prevCommand.lower() == 'pt_overlap':
+            self.overlap_detect_dock = OverlapPointsDock(self.canvas, self.iface.mainWindow())
+            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.overlap_detect_dock)
             
         # Command is for georeferencing and adding a cadatsral print to the map.
         if self.prevCommand.lower() == 'print':
@@ -409,6 +414,27 @@ class Ugsurv:
         try:
             self.iface.removeDockWidget(self.spiky_detect_dock)
             self.spiky_detect_dock.deleteLater()
+        except:
+            pass
+
+        # Remove the overlap detector
+        try:
+            self.iface.removeDockWidget(self.overlap_detect_dock)
+            self.overlap_detect_dock.deleteLater()
+        except:
+            pass
+
+        # Remove the CRS adjust dock
+        try:
+            self.iface.removeDockWidget(self.crs_adjust_dock)
+            self.crs_adjust_dock.deleteLater()
+        except:
+            pass
+
+        # Remove the append geometry dock
+        try:
+            self.iface.removeDockWidget(self.append_geom_dock)
+            self.append_geom_dock.deleteLater()
         except:
             pass
         

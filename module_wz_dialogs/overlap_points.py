@@ -45,24 +45,18 @@ try:
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
-    print("Failed to import numpy — SpikyGeomsDock requires numpy.")
+    print("Failed to import numpy — OverlapPointsDock requires numpy.")
 
 
-class SpikyGeomsDock(QDockWidget):
+class OverlapPointsDock(QDockWidget):
     """
-    Dock widget that finds and highlights 'spiky' (sharp-angled) vertices
-    across all rings of all polygon features in a selected layer.
+    Dock widget that finds and highlights overlapping (duplicate or near-coincident)
+    vertices within each ring of each polygon feature in a selected layer.
 
-    Fixes over original version
-    ───────────────────────────
-    • ALL vertices of EVERY ring (exterior + holes) are checked, not just
-      the first ring of each feature.
-    • The angle threshold is user-configurable via a spin-box (1–179 °).
-    • Clicking a table row pans to the spike AND briefly flashes a red
-      cross marker on the canvas (blink effect).
-    • The result table is never truncated mid-way: rows are only added,
-      never reduced by a trailing setRowCount().
-    • Active markers are cleaned up properly before each new search.
+    Two vertices are considered overlapping when their Euclidean distance is
+    strictly less than the user-supplied tolerance value (in map units).
+    Both vertices of each pair are reported; clicking a row pans to and
+    flashes the first vertex of that pair.
     """
 
     # ------------------------------------------------------------------ #
@@ -73,15 +67,13 @@ class SpikyGeomsDock(QDockWidget):
     COL_X   = 1
     COL_Y   = 2
 
-    # How long (ms) the flash marker stays visible
     FLASH_DURATION_MS = 1500
 
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Find Spiky Geometries")
+        self.setWindowTitle("Find Overlapping Points")
         self.canvas = canvas
 
-        # We track any active marker so we can remove it before the next one.
         self._active_marker = None
 
         # ── Build UI ──────────────────────────────────────────────────── #
@@ -93,30 +85,30 @@ class SpikyGeomsDock(QDockWidget):
         # Layer selector row
         layer_row = QHBoxLayout()
         lbl_layer = QLabel("Select layer:")
-        lbl_layer.setFixedWidth(90)
+        lbl_layer.setFixedWidth(100)
         self.layer_combo = QgsMapLayerComboBox()
         self.layer_combo.setFixedHeight(26)
         layer_row.addWidget(lbl_layer)
         layer_row.addWidget(self.layer_combo)
         layout.addLayout(layer_row)
 
-        # Threshold row
-        thresh_row = QHBoxLayout()
-        lbl_thresh = QLabel("Max angle (°):")
-        lbl_thresh.setFixedWidth(90)
-        self.thresh_spin = QDoubleSpinBox()
-        self.thresh_spin.setRange(1.0, 179.0)
-        self.thresh_spin.setValue(10.0)
-        self.thresh_spin.setDecimals(1)
-        self.thresh_spin.setSingleStep(1.0)
-        self.thresh_spin.setToolTip(
-            "Vertices whose interior angle is BELOW this value are reported as spikes."
+        # Tolerance row
+        tol_row = QHBoxLayout()
+        lbl_tol = QLabel("Tolerance (m):")
+        lbl_tol.setFixedWidth(100)
+        self.tol_spin = QDoubleSpinBox()
+        self.tol_spin.setRange(0.0001, 100.0)
+        self.tol_spin.setValue(0.001)
+        self.tol_spin.setDecimals(4)
+        self.tol_spin.setSingleStep(0.001)
+        self.tol_spin.setToolTip(
+            "Vertex pairs whose distance is BELOW this value are reported as overlapping."
         )
-        self.thresh_spin.setFixedHeight(26)
-        thresh_row.addWidget(lbl_thresh)
-        thresh_row.addWidget(self.thresh_spin)
-        thresh_row.addStretch()
-        layout.addLayout(thresh_row)
+        self.tol_spin.setFixedHeight(26)
+        tol_row.addWidget(lbl_tol)
+        tol_row.addWidget(self.tol_spin)
+        tol_row.addStretch()
+        layout.addLayout(tol_row)
 
         # Result table
         self.table = QTableWidget()
@@ -139,8 +131,8 @@ class SpikyGeomsDock(QDockWidget):
         # Button row
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.run_btn = QPushButton("Find Spikes")
-        self.run_btn.setFixedWidth(110)
+        self.run_btn = QPushButton("Find Overlaps")
+        self.run_btn.setFixedWidth(120)
         self.run_btn.clicked.connect(self.run_search)
         btn_row.addWidget(self.run_btn)
         layout.addLayout(btn_row)
@@ -159,7 +151,6 @@ class SpikyGeomsDock(QDockWidget):
         self.table.setRowCount(0)
 
     def _append_row(self, feat_id, x, y):
-        """Insert one spike result at the bottom of the table."""
         row = self.table.rowCount()
         self.table.insertRow(row)
         values = [str(feat_id), f"{x:.4f}", f"{y:.4f}"]
@@ -173,7 +164,6 @@ class SpikyGeomsDock(QDockWidget):
     # ------------------------------------------------------------------ #
 
     def _on_row_clicked(self, row, _col):
-        """Pan to the spike and flash a temporary marker."""
         x_item = self.table.item(row, self.COL_X)
         y_item = self.table.item(row, self.COL_Y)
         if not (x_item and y_item):
@@ -200,25 +190,19 @@ class SpikyGeomsDock(QDockWidget):
         self._flash_marker(point)
 
     def _flash_marker(self, point):
-        """Place a red cross vertex marker that auto-removes after FLASH_DURATION_MS."""
-        # Remove any previously active marker first
         self._remove_active_marker()
 
         marker = QgsVertexMarker(self.canvas)
         marker.setCenter(point)
-        marker.setColor(QColor(220, 30, 30))          # red
-        marker.setFillColor(QColor(220, 30, 30, 80))  # translucent fill
+        marker.setColor(QColor(220, 30, 30))
+        marker.setFillColor(QColor(220, 30, 30, 80))
         marker.setIconType(QgsVertexMarker.ICON_CROSS)
         marker.setIconSize(16)
         marker.setPenWidth(3)
 
         self._active_marker = marker
 
-        # Schedule removal
-        QTimer.singleShot(
-            self.FLASH_DURATION_MS,
-            self._remove_active_marker
-        )
+        QTimer.singleShot(self.FLASH_DURATION_MS, self._remove_active_marker)
 
     def _remove_active_marker(self):
         if self._active_marker is not None:
@@ -233,7 +217,7 @@ class SpikyGeomsDock(QDockWidget):
     # ------------------------------------------------------------------ #
 
     def run_search(self):
-        """Iterate every feature → every ring → every vertex and collect spikes."""
+        """Iterate every feature → every ring → every vertex pair and collect overlaps."""
         if not HAS_NUMPY:
             self._set_status("numpy is not available — cannot run.", "red")
             return
@@ -250,8 +234,8 @@ class SpikyGeomsDock(QDockWidget):
             self._set_status("Selected layer must be a polygon layer.", "red")
             return
 
-        threshold = self.thresh_spin.value()
-        total_spikes = 0
+        tolerance = self.tol_spin.value()
+        total_overlaps = 0
 
         for feature in layer.getFeatures():
             geom = feature.geometry()
@@ -260,33 +244,27 @@ class SpikyGeomsDock(QDockWidget):
 
             feat_id = feature.id()
 
-            # Normalise to a list of polygons (each polygon = list of rings)
             if geom.isMultipart():
                 all_polygons = geom.asMultiPolygon()
             else:
                 all_polygons = [geom.asPolygon()]
 
             for polygon in all_polygons:
-                # polygon[0] = exterior ring, polygon[1..] = holes
                 for ring in polygon:
                     if not ring or len(ring) < 3:
                         continue
 
                     coords = [(pt.x(), pt.y()) for pt in ring]
-                    spikes = self._find_spikes(coords, threshold)
+                    pairs = self._find_overlaps(coords, tolerance)
 
-                    for spike in spikes:
-                        self._append_row(
-                            feat_id,
-                            spike["x"],
-                            spike["y"],
-                        )
-                        total_spikes += 1
+                    for pair in pairs:
+                        self._append_row(feat_id, pair["x"], pair["y"])
+                        total_overlaps += 1
 
         self._set_status(
-            f"Found {total_spikes} spike(s) "
-            f"(threshold < {threshold}°).",
-            "green" if total_spikes == 0 else "darkorange"
+            f"Found {total_overlaps} overlapping pair(s) "
+            f"(tolerance < {tolerance} m).",
+            "green" if total_overlaps == 0 else "darkorange"
         )
 
     # ------------------------------------------------------------------ #
@@ -294,53 +272,39 @@ class SpikyGeomsDock(QDockWidget):
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _find_spikes(coords, threshold):
+    def _find_overlaps(coords, tolerance):
         """
-        Return a list of dicts for every vertex whose interior angle
-        (in degrees) is strictly below *threshold*.
+        Return a list of dicts for every pair of vertices in the ring whose
+        Euclidean distance is strictly below *tolerance*.
 
         Parameters
         ----------
         coords    : list of (x, y) tuples — the ring's vertex sequence.
-                    A closing duplicate (first == last) is handled automatically.
-        threshold : float — angle limit in degrees (exclusive upper bound).
+                    A closing duplicate (first == last) is stripped automatically.
+        tolerance : float — distance limit in map units (exclusive upper bound).
         """
-        # Remove the closing duplicate so indexing wraps correctly
+        # Remove the closing duplicate so we don't always flag index 0 vs last
         if coords[0] == coords[-1]:
             coords = coords[:-1]
 
         n = len(coords)
-        if n < 3:
+        if n < 2:
             return []
 
         pts = np.array(coords, dtype=np.float64)
-        spikes = []
+        overlaps = []
 
         for i in range(n):
-            prev_pt = pts[i - 1]          # wraps to last when i == 0
-            curr_pt = pts[i]
-            next_pt = pts[(i + 1) % n]
+            for j in range(i + 1, n):
+                diff = pts[i] - pts[j]
+                dist = np.sqrt(diff[0] ** 2 + diff[1] ** 2)
+                if dist < tolerance:
+                    overlaps.append({
+                        "vtx_a": i,
+                        "vtx_b": j,
+                        "x": round(coords[i][0], 4),
+                        "y": round(coords[i][1], 4),
+                        "dist": round(float(dist), 6),
+                    })
 
-            v1 = prev_pt - curr_pt
-            v2 = next_pt - curr_pt
-
-            norm1 = np.linalg.norm(v1)
-            norm2 = np.linalg.norm(v2)
-
-            # Skip degenerate (zero-length) edges
-            if norm1 == 0.0 or norm2 == 0.0:
-                continue
-
-            cos_theta = np.dot(v1, v2) / (norm1 * norm2)
-            cos_theta = np.clip(cos_theta, -1.0, 1.0)
-            angle = np.degrees(np.arccos(cos_theta))
-
-            if angle < threshold:
-                spikes.append({
-                    "vertex_index": i,
-                    "x": round(coords[i][0], 4),
-                    "y": round(coords[i][1], 4),
-                    "angle": round(angle, 4),
-                })
-
-        return spikes
+        return overlaps

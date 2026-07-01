@@ -22,140 +22,124 @@
  ***************************************************************************/
 """
 
-import os
-
 from PyQt5.QtCore import Qt
-import qgis
-from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
-import os.path
-# import pandas as pd
-# import geopandas as gpd
-# import shapely as sh
+from PyQt5.QtWidgets import (
+    QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QComboBox
+)
+
 from qgis.gui import QgsProjectionSelectionWidget, QgsMapLayerComboBox
-from qgis.core import QgsCoordinateReferenceSystem
 from qgis.core import (
-    QgsFeature,
+    QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsProject,
-    QgsWkbTypes,
-    QgsGeometry,
-    QgsVectorLayer,
-    QgsField,
-    QgsSpatialIndex
 )
 
 
-
-class CrsAdjustDialog(QDialog):
-    def __init__(self, parent = None):
+class CrsAdjustDock(QDockWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('CRS adjustment for individual features')
-        self.setMaximumWidth(400)
-        self.setFixedWidth(400)
-        self.inputheight = 25
+        self.setWindowTitle('CRS Adjustment')
 
-        # Main Layout.
-        self.templayout = QVBoxLayout()
-        
-        # Select geopackage layer.
-        self.geoSelectHori1 = QHBoxLayout()
-        self.geoSelectLabel1 = QLabel('Selected features in:')
-        self.geoSelectLabel1.setFixedWidth(100)
-        self.maplayerSelector1 = QgsMapLayerComboBox()
-        self.maplayerSelector1.setFixedHeight(self.inputheight)
-        self.geoSelectHori1.addWidget(self.geoSelectLabel1)
-        self.geoSelectHori1.addWidget(self.maplayerSelector1)
-        self.templayout.addLayout(self.geoSelectHori1)
-        
-        # Select geopackage layer.
-        self.geoSelectHori2 = QHBoxLayout()
-        self.geoSelectLabel2 = QLabel('Apply this CRS:')
-        self.geoSelectLabel2.setFixedWidth(100)
-        
-        default_crs = QgsCoordinateReferenceSystem("EPSG:32636")
-        self.crsWidget = QgsProjectionSelectionWidget()
-        self.crsWidget.setCrs(default_crs)
-        
-        self.geoSelectHori2.addWidget(self.geoSelectLabel2)
-        self.geoSelectHori2.addWidget(self.crsWidget)
-        self.templayout.addLayout(self.geoSelectHori2)
+        inputheight = 25
 
-        # Response
-        self.filepath_store = QLabel("")
-        self.response = QLabel("No layer selected currently!")
-        self.templayout.addWidget(self.response)
+        root = QWidget()
+        layout = QVBoxLayout(root)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
 
+        # Layer selector
+        layer_row = QHBoxLayout()
+        lbl_layer = QLabel('Selected features in:')
+        self.layer_combo = QgsMapLayerComboBox()
+        self.layer_combo.setFixedHeight(inputheight)
+        layer_row.addWidget(lbl_layer)
+        layer_row.addWidget(self.layer_combo)
+        layout.addLayout(layer_row)
 
+        # CRS selector
+        crs_row = QHBoxLayout()
+        lbl_crs = QLabel('Apply this CRS:')
+        self.crs_widget = QgsProjectionSelectionWidget()
+        self.crs_widget.setCrs(QgsCoordinateReferenceSystem("EPSG:32636"))
+        crs_row.addWidget(lbl_crs)
+        crs_row.addWidget(self.crs_widget)
+        layout.addLayout(crs_row)
 
-        # Add the close and run buttons.
-        self.buttongrouper = QHBoxLayout()
-        self.hspacer = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.applybutton = QPushButton('Apply CRS')
-        self.applybutton.setFixedWidth(100)
+        # Project direction selector
+        dir_row = QHBoxLayout()
+        lbl_dir = QLabel('Project direction:')
+        self.dir_combo = QComboBox()
+        self.dir_combo.addItem('Forward  (selected CRS → layer CRS)')
+        self.dir_combo.addItem('Reverse  (layer CRS → selected CRS)')
+        self.dir_combo.setFixedHeight(inputheight)
+        dir_row.addWidget(lbl_dir)
+        dir_row.addWidget(self.dir_combo)
+        layout.addLayout(dir_row)
 
-        self.buttongrouper.addItem(self.hspacer)
-        self.buttongrouper.addWidget(self.applybutton)
-        self.buttongrouper.setSpacing(10)
-        self.templayout.addItem(self.buttongrouper)
+        # Status label
+        self.response = QLabel('No layer selected currently.')
+        layout.addWidget(self.response)
 
-        self.setLayout(self.templayout)
-        self.applybutton.clicked.connect(self.adjust_crs)
+        layout.addStretch()
 
-    def update_result_label(self, label, message, color="green"):
-        label.setStyleSheet(f"color: {color};")
-        label.setText(f"Result: {message}")
+        # Apply button
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.apply_btn = QPushButton('Apply CRS')
+        btn_row.addWidget(self.apply_btn)
+        layout.addLayout(btn_row)
 
-    
-    
+        self.setWidget(root)
+        self.apply_btn.clicked.connect(self.adjust_crs)
+
+    def _set_status(self, message, color="green"):
+        self.response.setStyleSheet(f"color: {color};")
+        self.response.setText(message)
+
     def adjust_crs(self):
-        from_layer = self.maplayerSelector1.currentLayer()
+        from_layer = self.layer_combo.currentLayer()
         if not from_layer:
-            self.update_result_label(self.response, "No layer selected!", "red")
+            self._set_status("No layer selected!", "red")
             return
-        
-        # Check selection
+
         selected_features = from_layer.selectedFeatures()
         if not selected_features:
-            self.update_result_label(self.response, "No features selected in layer!", "red")
+            self._set_status("No features selected in layer!", "red")
             return
-        
-        # Espg selector
-        to_epsg_code = self.crsWidget.crs().postgisSrid() 
+
+        target_crs = self.crs_widget.crs()
+        is_forward = self.dir_combo.currentIndex() == 0
 
         try:
-            # Start editing target layer if not already
             if not from_layer.isEditable():
                 from_layer.startEditing()
-            
-            # Prepare CRS transform
-            target_crs = self.crsWidget.crs()
-            transform = QgsCoordinateTransform(
-                target_crs,
-                from_layer.crs(),
-                QgsProject.instance()
+
+            if is_forward:
+                # Forward: interpret raw coordinates as target_crs, convert to layer CRS
+                transform = QgsCoordinateTransform(
+                    target_crs, from_layer.crs(), QgsProject.instance()
+                )
+            else:
+                # Reverse: interpret raw coordinates as layer CRS, convert to target_crs
+                transform = QgsCoordinateTransform(
+                    from_layer.crs(), target_crs, QgsProject.instance()
                 )
 
             for feat in selected_features:
                 geom = feat.geometry()
                 geom.transform(transform)
-
                 if not geom.isGeosValid():
                     geom = geom.makeValid()
+                from_layer.changeGeometry(feat.id(), geom)
 
-                from_layer.changeGeometry(
-                    feat.id(),
-                    geom
-                    )
-
-            # # Commit changes
-            # from_layer.commitChanges()
-
-            self.update_result_label(
-                self.response,
-                f"Successfully adjusted {len(selected_features)} feature(s) to crs: {to_epsg_code}.",
+            direction = "forward" if is_forward else "reverse"
+            epsg = target_crs.postgisSrid()
+            self._set_status(
+                f"Adjusted {len(selected_features)} feature(s) [{direction}] → EPSG:{epsg}.",
                 "green"
             )
 
         except Exception as e:
             from_layer.rollBack()
-            self.update_result_label(self.response, f"Error: {str(e)}", "red")
+            self._set_status(f"Error: {e}", "red")
