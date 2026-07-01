@@ -56,6 +56,7 @@ _C_MOVE_FILL  = QColor(255, 130, 0, 30)     # faint orange fill
 _C_FEATURE    = QColor(0, 200, 80, 220)     # green – edge-selected feature outline
 _C_FEAT_FILL  = QColor(0, 200, 80, 20)      # faint green fill
 _C_FEAT_VTX   = QColor(0, 180, 60, 200)     # green – vertex markers on selected feature
+_C_MID_MARKER = QColor(60, 180, 40, 220)    # medium green – segment midpoint "+" button
 
 
 class VertexSelector(QgsMapTool):
@@ -88,6 +89,8 @@ class VertexSelector(QgsMapTool):
         self._sel_fid   = None
         self._feature_band = None
         self._feature_vtx_markers = []
+        self._mid_markers = []   # "+" cross markers at segment midpoints
+        self._mid_points  = []   # QgsPointXY for each midpoint (parallel to _mid_markers)
 
     # ------------------------------------------------------------------
     # Marker / rubber-band factories
@@ -136,6 +139,10 @@ class VertexSelector(QgsMapTool):
         for m in self._feature_vtx_markers:
             self._rm(m)
         self._feature_vtx_markers = []
+        for m in self._mid_markers:
+            self._rm(m)
+        self._mid_markers = []
+        self._mid_points  = []
         self._rm(self._feature_band)
         self._feature_band = None
         self._sel_layer = None
@@ -172,6 +179,16 @@ class VertexSelector(QgsMapTool):
             m.setCenter(vpt)
             self._feature_vtx_markers.append(m)
 
+        # "+" markers at the midpoint of every segment
+        for i in range(len(verts) - 1):
+            pt1, pt2 = verts[i][1], verts[i + 1][1]
+            mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
+            m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
+            m.setCenter(mid)
+            m.setPenWidth(2)
+            self._mid_markers.append(m)
+            self._mid_points.append(mid)
+
         feat = layer.getFeature(fid)
         geom = feat.geometry()
         if not geom.isEmpty():
@@ -181,7 +198,7 @@ class VertexSelector(QgsMapTool):
 
         self._log(
             f"\nFeature {fid} of '{layer.name()}' selected"
-            f"  →  click a vertex to grip it"
+            f"  →  click a vertex to grip it  |  click '+' to insert at midpoint"
         )
 
     def _enter_gripped(self, sv):
@@ -275,6 +292,71 @@ class VertexSelector(QgsMapTool):
         self._log(f"\nDeleted vertex {sv.vidx + 1} of feature {sv.fid} on '{sv.layer.name()}'")
         self._enter_idle()
 
+    def _delete_feature(self):
+        lyr, fid = self._sel_layer, self._sel_fid
+        if not lyr.isEditable():
+            lyr.startEditing()
+        lyr.deleteFeature(fid)
+        lyr.triggerRepaint()
+        self._log(f"\nDeleted feature {fid} of '{lyr.name()}'")
+        self._enter_idle()
+
+    def _insert_vertex_on_segment(self, map_pt):
+        """Insert a new vertex at map_pt on the selected feature's nearest segment."""
+        lyr, fid = self._sel_layer, self._sel_fid
+        feat = lyr.getFeature(fid)
+        geom = feat.geometry()
+        if geom.isEmpty():
+            return
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+            return
+        _, _, vertex_after, _ = geom.closestSegmentWithContext(map_pt)
+        verts = self._geom_verts(geom)
+        pts = [vpt for _, vpt in verts]
+        pts.insert(vertex_after, map_pt)
+        if not lyr.isEditable():
+            lyr.startEditing()
+        lyr.changeGeometry(fid, QgsGeometry.fromPolylineXY(pts))
+        lyr.triggerRepaint()
+        self._log(f"\nInserted vertex at ({map_pt.x():.3f}, {map_pt.y():.3f})")
+        self._enter_feature(lyr, fid)   # refresh green highlight with new vertex
+
+    def _gripped_is_endpoint(self):
+        """True when the gripped vertex is the first or last vertex of a polyline."""
+        sv = self._gripped
+        if sv is None:
+            return False
+        feat = sv.layer.getFeature(sv.fid)
+        geom = feat.geometry()
+        if geom.isEmpty():
+            return False
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+            return False
+        verts = self._geom_verts(geom)
+        if len(verts) < 2:
+            return False
+        return sv.vidx == verts[0][0] or sv.vidx == verts[-1][0]
+
+    def _extend_line(self, map_pt):
+        """Append a new vertex at map_pt from the gripped endpoint, then stay gripped there."""
+        sv = self._gripped
+        feat = sv.layer.getFeature(sv.fid)
+        geom = feat.geometry()
+        verts = self._geom_verts(geom)
+        pts = [vpt for _, vpt in verts]
+        if sv.vidx == verts[0][0]:
+            pts.insert(0, map_pt)
+            new_vidx = 0
+        else:
+            pts.append(map_pt)
+            new_vidx = len(pts) - 1
+        if not sv.layer.isEditable():
+            sv.layer.startEditing()
+        sv.layer.changeGeometry(sv.fid, QgsGeometry.fromPolylineXY(pts))
+        sv.layer.triggerRepaint()
+        self._log(f"\nExtended line to ({map_pt.x():.3f}, {map_pt.y():.3f})")
+        self._enter_gripped(_SelVtx(sv.layer, sv.fid, new_vidx, map_pt))
+
     # ------------------------------------------------------------------
     # Vertex / feature search
     # ------------------------------------------------------------------
@@ -345,6 +427,14 @@ class VertexSelector(QgsMapTool):
                     best_d = d
                     best = (lyr, feat.id())
         return best
+
+    def _find_midpoint_near(self, map_pt):
+        """Return the pre-calculated midpoint QgsPointXY if map_pt is within hit tolerance."""
+        tol = self._hit_tol()
+        for mpt in self._mid_points:
+            if map_pt.distance(mpt) <= tol:
+                return mpt
+        return None
 
     def _same_grip(self, sv):
         """True if sv refers to the same layer/feature/vertex as the current grip."""
@@ -437,20 +527,27 @@ class VertexSelector(QgsMapTool):
                 self._enter_moving()        # second click on same grip → move
             elif sv:
                 self._enter_gripped(sv)     # different vertex → switch grip
+            elif self._gripped_is_endpoint():
+                self._extend_line(map_pt)   # endpoint gripped + empty space → extend
             else:
-                self._enter_idle()          # empty space → deselect
+                self._enter_idle()          # mid-vertex gripped + empty space → deselect
             return
 
         if self._state == _S_FEATURE:
+            mpt = self._find_midpoint_near(map_pt)
+            if mpt is not None:
+                self._insert_vertex_on_segment(mpt)  # "+" clicked → insert at exact midpoint
+                return
             if sv:
-                self._enter_gripped(sv)     # vertex clicked → grip it
+                self._enter_gripped(sv)              # vertex clicked → grip it
             else:
                 edge = self._find_edge_near(map_pt)
                 if edge:
                     lyr, fid = edge
-                    if id(lyr) != id(self._sel_layer) or fid != self._sel_fid:
-                        self._enter_feature(lyr, fid)   # different feature edge
-                    # same feature edge clicked again → do nothing
+                    if id(lyr) == id(self._sel_layer) and fid == self._sel_fid:
+                        self._insert_vertex_on_segment(map_pt)  # same feature → insert
+                    else:
+                        self._enter_feature(lyr, fid)           # different feature → select
                 else:
                     self._enter_idle()
             return
@@ -476,3 +573,5 @@ class VertexSelector(QgsMapTool):
         elif key in (Qt.Key_Delete, Qt.Key_Backspace):
             if self._state in (_S_GRIPPED, _S_MOVING):
                 self._delete_gripped()
+            elif self._state == _S_FEATURE:
+                self._delete_feature()
