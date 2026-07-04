@@ -326,6 +326,8 @@ class VertexSelector(QgsMapTool):
         self._state = _S_MOVING
         if self._geom_band:
             self._geom_band.setVisible(False)   # hide static outline; move band takes over
+        self._rm(self._move_band)               # discard any extend-preview band
+        self._move_band = None
 
         sv   = self._gripped
         feat = sv.layer.getFeature(sv.fid)
@@ -454,6 +456,7 @@ class VertexSelector(QgsMapTool):
         sv.layer.changeGeometry(sv.fid, geom)
         sv.layer.triggerRepaint()
         self._log(f"\nDeleted vertex {sv.vidx + 1} of feature {sv.fid} on '{sv.layer.name()}'")
+        self._update_closed_attrs(sv)
         self._enter_idle()
 
     def _delete_feature(self):
@@ -484,6 +487,20 @@ class VertexSelector(QgsMapTool):
         lyr.triggerRepaint()
         self._log(f"\nInserted vertex at ({map_pt.x():.3f}, {map_pt.y():.3f})")
         self._enter_feature(lyr, fid)   # refresh green highlight with new vertex
+
+    def _is_opposite_endpoint(self, sv):
+        """True if sv is the opposite endpoint of the same feature as the gripped vertex."""
+        g = self._gripped
+        if g is None or sv is None:
+            return False
+        if id(sv.layer) != id(g.layer) or sv.fid != g.fid:
+            return False
+        verts = self._feature_verts(g.layer, g.fid)
+        if len(verts) < 2:
+            return False
+        first_idx, last_idx = verts[0][0], verts[-1][0]
+        return (g.vidx == first_idx and sv.vidx == last_idx) or \
+               (g.vidx == last_idx and sv.vidx == first_idx)
 
     def _gripped_is_endpoint(self):
         """True when the gripped vertex is the first or last vertex of a polyline."""
@@ -519,7 +536,9 @@ class VertexSelector(QgsMapTool):
         sv.layer.changeGeometry(sv.fid, QgsGeometry.fromPolylineXY(pts))
         sv.layer.triggerRepaint()
         self._log(f"\nExtended line to ({map_pt.x():.3f}, {map_pt.y():.3f})")
-        self._enter_gripped(_SelVtx(sv.layer, sv.fid, new_vidx, map_pt))
+        new_sv = _SelVtx(sv.layer, sv.fid, new_vidx, map_pt)
+        self._update_closed_attrs(new_sv)
+        self._enter_gripped(new_sv)
 
     # ------------------------------------------------------------------
     # Snap helper
@@ -580,24 +599,34 @@ class VertexSelector(QgsMapTool):
                 abs(verts[0][1].y() - verts[-1][1].y()) < 1e-9)
 
     def _update_closed_attrs(self, sv):
-        """Recompute area_sqm / area_acres after a vertex move on a closed polyline."""
+        """Recompute closed / area attributes after any geometry change on a polylines feature."""
         if sv.layer.name() != "polylines":
             return
         feat = sv.layer.getFeature(sv.fid)
         geom = feat.geometry()
-        if geom.isEmpty() or not self._is_closed_polyline(geom):
+        if geom.isEmpty():
             return
-        pts = [vpt for _, vpt in self._geom_verts(geom)]
-        poly_geom  = QgsGeometry.fromPolygonXY([pts])
-        area_sqm   = poly_geom.area()
-        area_acres = area_sqm * 0.000247105
+        is_closed = self._is_closed_polyline(geom)
+        closed_idx = sv.layer.fields().indexOf("closed")
+        if closed_idx >= 0:
+            sv.layer.changeAttributeValue(sv.fid, closed_idx, is_closed)
         area_sqm_idx   = sv.layer.fields().indexOf("area_sqm")
         area_acres_idx = sv.layer.fields().indexOf("area_acres")
-        if area_sqm_idx >= 0:
-            sv.layer.changeAttributeValue(sv.fid, area_sqm_idx, round(area_sqm, 3))
-        if area_acres_idx >= 0:
-            sv.layer.changeAttributeValue(sv.fid, area_acres_idx, round(area_acres, 6))
-        self._log(f"\nArea: {area_sqm:.3f} sqm  ({area_acres:.4f} acres)")
+        if is_closed:
+            pts = [vpt for _, vpt in self._geom_verts(geom)]
+            poly_geom  = QgsGeometry.fromPolygonXY([pts])
+            area_sqm   = poly_geom.area()
+            area_acres = area_sqm * 0.000247105
+            if area_sqm_idx >= 0:
+                sv.layer.changeAttributeValue(sv.fid, area_sqm_idx, round(area_sqm, 3))
+            if area_acres_idx >= 0:
+                sv.layer.changeAttributeValue(sv.fid, area_acres_idx, round(area_acres, 6))
+            self._log(f"\nArea: {area_sqm:.3f} sqm  ({area_acres:.4f} acres)")
+        else:
+            if area_sqm_idx >= 0:
+                sv.layer.changeAttributeValue(sv.fid, area_sqm_idx, 0.0)
+            if area_acres_idx >= 0:
+                sv.layer.changeAttributeValue(sv.fid, area_acres_idx, 0.0)
 
     def _find_vertex_near(self, map_pt):
         tol  = self._hit_tol()
@@ -673,7 +702,10 @@ class VertexSelector(QgsMapTool):
         return None
 
     def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
+        if self._state == _S_GRIPPED and self._gripped_is_endpoint():
+            text = "Click grip to move  |  click to extend line"
+        else:
+            text = _HINT.get(self._state, "")
         if not text:
             self._hint.hide()
             return
@@ -759,7 +791,21 @@ class VertexSelector(QgsMapTool):
 
         if self._state == _S_GRIPPED:
             self._show_hint(event.pos())
-            return  # grip markers already drawn; no extra hover feedback needed
+            if self._gripped_is_endpoint():
+                map_pt = self._snap_point(event.pos(), raw_pt)
+                sv = self._gripped
+                if self._move_band is None:
+                    self._move_band = self._make_band(
+                        QgsWkbTypes.LineGeometry, _C_MOVE, _C_MOVE_FILL, width=2, dashed=True
+                    )
+                self._move_band.reset(QgsWkbTypes.LineGeometry)
+                self._move_band.addPoint(sv.point)
+                self._move_band.addPoint(map_pt)
+            else:
+                self._snap_marker.setVisible(False)
+                if self._move_band is not None:
+                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+            return
 
         # IDLE or FEATURE — show yellow hover circle on the nearest vertex
         sv = self._find_vertex_near(map_pt)
@@ -800,10 +846,20 @@ class VertexSelector(QgsMapTool):
         if self._state == _S_GRIPPED:
             if self._same_grip(sv):
                 self._enter_moving()        # second click on same grip → move
+            elif sv and self._gripped_is_endpoint() and self._is_opposite_endpoint(sv):
+                # Clicked the opposite endpoint of the same feature → close the line
+                if self._move_band is not None:
+                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                self._snap_marker.setVisible(False)
+                self._extend_line(sv.point)
             elif sv:
                 self._enter_gripped(sv)     # different vertex → switch grip
             elif self._gripped_is_endpoint():
-                self._extend_line(map_pt)   # endpoint gripped + empty space → extend
+                commit_pt = self._snap_point(event.pos(), raw_pt)
+                self._snap_marker.setVisible(False)
+                if self._move_band is not None:
+                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                self._extend_line(commit_pt)   # endpoint gripped + empty space → extend
             else:
                 self._enter_idle()          # mid-vertex gripped + empty space → deselect
             return

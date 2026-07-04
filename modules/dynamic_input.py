@@ -242,6 +242,7 @@ class DynamicInput(QObject):
     # ------------------------------------------------------------------
 
     def _connect_terminal(self):
+        self._disconnect_terminal()   # drop any stale connections before reconnecting
         self._terminal.command.textChanged.connect(self._sync_from_terminal)
         for line in self._lines.values():
             line.textChanged.connect(self._sync_to_terminal)
@@ -262,10 +263,14 @@ class DynamicInput(QObject):
         if self._syncing:
             return
         self._syncing = True
-        parts = text.split(',')
-        for i, key in enumerate(self._keys):
-            self._lines[key].setText(parts[i].strip() if i < len(parts) else '')
-        self._syncing = False
+        try:
+            parts = text.split(',')
+            for i, key in enumerate(self._keys):
+                self._lines[key].setText(parts[i].strip() if i < len(parts) else '')
+        except RuntimeError:
+            self._disconnect_terminal()
+        finally:
+            self._syncing = False
 
     def _sync_to_terminal(self, _=None):
         """Mirror floating fields → terminal command field (comma-joined)."""
