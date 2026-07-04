@@ -47,6 +47,7 @@ class TerminalDialog(QDockWidget):
         self.historyIndex      = 0
         self.active_input_handler = None   # set by tools that need typed input
         self._commands            = []     # populated via set_commands()
+        self.on_activate_maptool  = None   # set by Ugsurv; called to restore the map tool
 
         # ── Suggestion list (floating overlay — NOT in layout) ───────────
         # Qt.NoFocus: the list never steals keyboard focus from the command
@@ -101,6 +102,11 @@ class TerminalDialog(QDockWidget):
         self.command.textChanged.connect(self._update_suggestions)
         self.command.returnPressed.connect(self.suggestion_list.hide)
         self.suggestion_list.itemClicked.connect(self._accept_suggestion)
+
+        # Catch mouse presses on the output display and the container background
+        # so that clicking anywhere in the terminal triggers map tool reactivation.
+        container.installEventFilter(self)
+        self.commandDisplay.installEventFilter(self)
 
         main_layout.addWidget(self.command)
 
@@ -204,6 +210,11 @@ class TerminalDialog(QDockWidget):
     # ────────────────────────────────────────────────────────────────────
 
     def eventFilter(self, obj, event):
+        # Any click inside the terminal restores the plugin map tool so that
+        # canvas interaction after typing a command behaves correctly.
+        if event.type() == QEvent.MouseButtonPress and self.on_activate_maptool:
+            self.on_activate_maptool()
+
         if event.type() != QEvent.KeyPress or obj is not self.command:
             return super().eventFilter(obj, event)
 

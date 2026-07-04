@@ -22,7 +22,7 @@
  ***************************************************************************/
 """
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtGui import QIcon, QFont, QColor
+from qgis.PyQt.QtGui import QIcon, QFont, QColor, QPixmap, QPainter, QPen
 from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtCore import Qt
 from qgis.core import (
@@ -215,6 +215,35 @@ class Ugsurv:
         action.setCheckable(True)  # <-- Make it toggleable
         return action
 
+    @staticmethod
+    def _maptool_icon():
+        """Build a small red-crosshair QIcon that matches the canvas cursor."""
+        size, c, gap, box = 24, 11, 3, 2
+        px = QPixmap(size, size)
+        px.fill(Qt.transparent)
+        p = QPainter(px)
+        p.setPen(QPen(QColor(220, 30, 30), 1))
+        p.drawLine(0, c, c - gap, c)
+        p.drawLine(c + gap, c, size - 1, c)
+        p.drawLine(c, 0, c, c - gap)
+        p.drawLine(c, c + gap, c, size - 1)
+        p.drawRect(c - box, c - box, box * 2, box * 2)
+        p.end()
+        return QIcon(px)
+
+    def activate_maptool(self):
+        """Re-activate the UgSurv map tool (e.g. after using a QGIS built-in tool)."""
+        if not self.active or not hasattr(self, 'global_map_tool') or not self.global_map_tool:
+            return
+        self.canvas.setMapTool(self.global_map_tool)
+
+    def _on_map_tool_set(self, new_tool, _old_tool):
+        """Keep the toolbar button checked iff our tool owns the canvas."""
+        if hasattr(self, '_maptool_action'):
+            self._maptool_action.setChecked(
+                new_tool is self.global_map_tool
+            )
+
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
@@ -224,6 +253,19 @@ class Ugsurv:
             text=self.tr(u'Ugsurv'),
             callback=self.run,
             parent=self.iface.mainWindow())
+
+        # Second button: restore the UgSurv map tool cursor after switching to a QGIS tool
+        self._maptool_action = QAction(
+            self._maptool_icon(),
+            self.tr(u'Activate UgSurv Map Tool'),
+            self.iface.mainWindow()
+        )
+        self._maptool_action.setToolTip('Activate UgSurv map tool')
+        self._maptool_action.setCheckable(True)
+        self._maptool_action.setChecked(False)
+        self._maptool_action.triggered.connect(self.activate_maptool)
+        self.iface.addToolBarIcon(self._maptool_action)
+        self.actions.append(self._maptool_action)
 
         # will be set False in run()
         self.first_start = True
@@ -287,6 +329,12 @@ class Ugsurv:
         # All drawing tools connect to it as delegates instead of owning the canvas.
         self.global_map_tool = UgsurvMaptool(self.canvas, self.terminal_dock)
         self.canvas.setMapTool(self.global_map_tool)
+        self._maptool_action.setChecked(True)
+        self.canvas.mapToolSet.connect(self._on_map_tool_set)
+
+        # Allow the terminal to restore our map tool when the user clicks it
+        # (e.g. after using a QGIS built-in tool like Identify).
+        self.terminal_dock.on_activate_maptool = lambda: self.canvas.setMapTool(self.global_map_tool)
 
         # Vertex editor is always active when no drawing tool is running.
         vertex_selector = VertexSelector(self.canvas, self.terminal_dock)
@@ -317,6 +365,10 @@ class Ugsurv:
             active.keyPressEvent(fake)
 
     def acceptInput(self):
+        # If a QGIS built-in tool displaced ours, reclaim the canvas before acting.
+        if hasattr(self, 'global_map_tool') and self.global_map_tool:
+            self.canvas.setMapTool(self.global_map_tool)
+
         text = self.terminal_dock.command.text()
 
         # common prologue — echo input and update history
@@ -466,11 +518,16 @@ class Ugsurv:
 
         # Evict any active delegate, then release the canvas tool
         try:
+            self.canvas.mapToolSet.disconnect(self._on_map_tool_set)
+        except Exception:
+            pass
+        try:
             self.global_map_tool._evict()
             self.canvas.unsetMapTool(self.global_map_tool)
             self.global_map_tool = None
         except Exception:
             pass
+        self._maptool_action.setChecked(False)
         
         # Remove any dialog boxes
         try:
