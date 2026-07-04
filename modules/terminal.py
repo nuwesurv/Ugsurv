@@ -48,6 +48,7 @@ class TerminalDialog(QDockWidget):
         self.active_input_handler = None   # set by tools that need typed input
         self._commands            = []     # populated via set_commands()
         self.on_activate_maptool  = None   # set by Ugsurv; called to restore the map tool
+        self.on_canvas_key        = None   # set by Ugsurv; forwards key events to canvas
 
         # ── Suggestion list (floating overlay — NOT in layout) ───────────
         # Qt.NoFocus: the list never steals keyboard focus from the command
@@ -214,6 +215,15 @@ class TerminalDialog(QDockWidget):
         # canvas interaction after typing a command behaves correctly.
         if event.type() == QEvent.MouseButtonPress and self.on_activate_maptool:
             self.on_activate_maptool()
+
+        # Delete / Backspace on an empty input → forward to the canvas so the
+        # vertex selector can delete the selected feature or gripped vertex.
+        if (event.type() == QEvent.KeyPress and obj is self.command
+                and event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
+                and not self.command.text()
+                and self.on_canvas_key):
+            self.on_canvas_key(event)
+            return True
 
         if event.type() != QEvent.KeyPress or obj is not self.command:
             return super().eventFilter(obj, event)

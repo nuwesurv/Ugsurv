@@ -23,7 +23,7 @@
 """
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon, QFont, QColor, QPixmap, QPainter, QPen
-from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtWidgets import QAction, QApplication
 from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsVectorLayer,
@@ -335,6 +335,7 @@ class Ugsurv:
         # Allow the terminal to restore our map tool when the user clicks it
         # (e.g. after using a QGIS built-in tool like Identify).
         self.terminal_dock.on_activate_maptool = lambda: self.canvas.setMapTool(self.global_map_tool)
+        self.terminal_dock.on_canvas_key = lambda e: QApplication.sendEvent(self.canvas, e)
 
         # Vertex editor is always active when no drawing tool is running.
         vertex_selector = VertexSelector(self.canvas, self.terminal_dock)

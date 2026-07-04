@@ -362,7 +362,17 @@ class VertexSelector(QgsMapTool):
         if sv.layer.name() == "circles":
             self._commit_circle_vertex_move(sv, map_pt)
         else:
+            feat = sv.layer.getFeature(sv.fid)
+            geom = feat.geometry()
             sv.layer.moveVertex(map_pt.x(), map_pt.y(), sv.fid, sv.vidx)
+            if not geom.isEmpty() and self._is_closed_polyline(geom):
+                verts = self._geom_verts(geom)
+                first_idx, last_idx = verts[0][0], verts[-1][0]
+                if sv.vidx == first_idx:
+                    sv.layer.moveVertex(map_pt.x(), map_pt.y(), sv.fid, last_idx)
+                elif sv.vidx == last_idx:
+                    sv.layer.moveVertex(map_pt.x(), map_pt.y(), sv.fid, first_idx)
+            self._update_closed_attrs(sv)
 
         sv.layer.triggerRepaint()
         self._log(
@@ -559,6 +569,36 @@ class VertexSelector(QgsMapTool):
             return []
         return self._geom_verts(feat.geometry())
 
+    def _is_closed_polyline(self, geom):
+        """True if geom is a linestring whose first and last vertices coincide."""
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+            return False
+        verts = self._geom_verts(geom)
+        if len(verts) < 4:
+            return False
+        return (abs(verts[0][1].x() - verts[-1][1].x()) < 1e-9 and
+                abs(verts[0][1].y() - verts[-1][1].y()) < 1e-9)
+
+    def _update_closed_attrs(self, sv):
+        """Recompute area_sqm / area_acres after a vertex move on a closed polyline."""
+        if sv.layer.name() != "polylines":
+            return
+        feat = sv.layer.getFeature(sv.fid)
+        geom = feat.geometry()
+        if geom.isEmpty() or not self._is_closed_polyline(geom):
+            return
+        pts = [vpt for _, vpt in self._geom_verts(geom)]
+        poly_geom  = QgsGeometry.fromPolygonXY([pts])
+        area_sqm   = poly_geom.area()
+        area_acres = area_sqm * 0.000247105
+        area_sqm_idx   = sv.layer.fields().indexOf("area_sqm")
+        area_acres_idx = sv.layer.fields().indexOf("area_acres")
+        if area_sqm_idx >= 0:
+            sv.layer.changeAttributeValue(sv.fid, area_sqm_idx, round(area_sqm, 3))
+        if area_acres_idx >= 0:
+            sv.layer.changeAttributeValue(sv.fid, area_acres_idx, round(area_acres, 6))
+        self._log(f"\nArea: {area_sqm:.3f} sqm  ({area_acres:.4f} acres)")
+
     def _find_vertex_near(self, map_pt):
         tol  = self._hit_tol()
         best, best_d = None, tol
@@ -700,8 +740,16 @@ class VertexSelector(QgsMapTool):
                         cp = self.canvas.getCoordinateTransform().transform(map_pt)
                         self._dinput.update(cp.x(), cp.y(), {"radius": f"{center.distance(map_pt):.3f}"})
                 else:
-                    preview = QgsGeometry(feat.geometry())
+                    geom = feat.geometry()
+                    preview = QgsGeometry(geom)
                     preview.moveVertex(map_pt.x(), map_pt.y(), sv.vidx)
+                    if self._is_closed_polyline(geom):
+                        verts = self._geom_verts(geom)
+                        first_idx, last_idx = verts[0][0], verts[-1][0]
+                        if sv.vidx == first_idx:
+                            preview.moveVertex(map_pt.x(), map_pt.y(), last_idx)
+                        elif sv.vidx == last_idx:
+                            preview.moveVertex(map_pt.x(), map_pt.y(), first_idx)
                 self._move_band.setToGeometry(preview, sv.layer)
             self._show_hint(event.pos())
             return

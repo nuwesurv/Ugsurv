@@ -137,8 +137,20 @@ class PolylineDrawer(QgsMapTool):
             layer = existing[0]
             if not layer.isEditable():
                 layer.startEditing()
+            self._ensure_fields(layer)
             return layer
         return self._create_polyline_layer()
+
+    def _ensure_fields(self, layer):
+        """Add any fields that are missing from an existing layer."""
+        existing = {f.name() for f in layer.fields()}
+        to_add = []
+        if "closed"     not in existing: to_add.append(QgsField("closed",     QVariant.Bool))
+        if "area_sqm"   not in existing: to_add.append(QgsField("area_sqm",   QVariant.Double))
+        if "area_acres" not in existing: to_add.append(QgsField("area_acres", QVariant.Double))
+        if to_add:
+            layer.dataProvider().addAttributes(to_add)
+            layer.updateFields()
 
     def _create_polyline_layer(self):
         layer = QgsVectorLayer(
@@ -147,7 +159,12 @@ class PolylineDrawer(QgsMapTool):
             "memory"
         )
         provider = layer.dataProvider()
-        provider.addAttributes([QgsField("length", QVariant.Double)])
+        provider.addAttributes([
+            QgsField("length",     QVariant.Double),
+            QgsField("closed",     QVariant.Bool),
+            QgsField("area_sqm",   QVariant.Double),
+            QgsField("area_acres", QVariant.Double),
+        ])
         layer.updateFields()
 
         symbol = QgsLineSymbol.createSimple({
@@ -172,15 +189,35 @@ class PolylineDrawer(QgsMapTool):
         geometry = QgsGeometry.fromPolylineXY(self.points)
         length = geometry.length()
 
+        p0, pn = self.points[0], self.points[-1]
+        is_closed = (len(self.points) >= 4 and
+                     abs(p0.x() - pn.x()) < 1e-9 and
+                     abs(p0.y() - pn.y()) < 1e-9)
+        if is_closed:
+            poly_geom  = QgsGeometry.fromPolygonXY([self.points])
+            area_sqm   = poly_geom.area()
+            area_acres = area_sqm * 0.000247105
+        else:
+            area_sqm = area_acres = 0.0
+
         feature = QgsFeature(self.polyline_layer.fields())
         feature.setGeometry(geometry)
-        feature.setAttribute("length", round(length, 3))
+        feature.setAttribute("length",     round(length, 3))
+        feature.setAttribute("closed",     is_closed)
+        feature.setAttribute("area_sqm",   round(area_sqm, 3))
+        feature.setAttribute("area_acres", round(area_acres, 6))
 
         self.polyline_layer.addFeature(feature)
         self.polyline_layer.updateExtents()
         self.polyline_layer.triggerRepaint()
 
-        self._log(f"\nPolyline saved — {len(self.points)} vertices, length: {length:.3f}")
+        if is_closed:
+            self._log(
+                f"\nPolyline saved — {len(self.points)} vertices, length: {length:.3f}"
+                f", area: {area_sqm:.3f} sqm ({area_acres:.4f} acres)"
+            )
+        else:
+            self._log(f"\nPolyline saved — {len(self.points)} vertices, length: {length:.3f}")
 
     # -------------------------------------------------------------------------
     # Polar helpers
