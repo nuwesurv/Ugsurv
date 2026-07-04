@@ -32,6 +32,7 @@ from qgis.core import (
     QgsCurvePolygon,
     QgsGeometry,
     QgsPoint,
+    QgsPointLocator,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
@@ -43,6 +44,7 @@ from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from .dynamic_input import DynamicInput
+from .snapSettingConfig import snapSettingConfig
 
 
 _SelVtx = namedtuple('_SelVtx', ['layer', 'fid', 'vidx', 'point'])
@@ -93,9 +95,15 @@ class VertexSelector(QgsMapTool):
         self._state   = _S_IDLE
         self._gripped = None        # _SelVtx – the hot grip
 
+        snapSettingConfig()
+
         # IDLE: yellow hover circle near cursor
         self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
         self._hover_marker.setVisible(False)
+
+        # MOVING: cyan snap indicator
+        self._snap_marker = self._make_marker(QColor(0, 180, 255, 220), QgsVertexMarker.ICON_CIRCLE, 10)
+        self._snap_marker.setVisible(False)
 
         # GRIPPED: one marker per vertex of the gripped feature
         self._grip_markers = []
@@ -418,6 +426,7 @@ class VertexSelector(QgsMapTool):
     def _cancel_move(self):
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
+        self._snap_marker.setVisible(False)
         self._rm(self._move_band)
         self._move_band = None
         if self._geom_band:
@@ -501,6 +510,26 @@ class VertexSelector(QgsMapTool):
         sv.layer.triggerRepaint()
         self._log(f"\nExtended line to ({map_pt.x():.3f}, {map_pt.y():.3f})")
         self._enter_gripped(_SelVtx(sv.layer, sv.fid, new_vidx, map_pt))
+
+    # ------------------------------------------------------------------
+    # Snap helper
+    # ------------------------------------------------------------------
+
+    def _snap_point(self, screen_pt, raw_pt):
+        """Return snapped point using QGIS native snapping, or raw_pt if no snap.
+
+        Uses canvas.snappingUtils() so CRS transformations and project snapping
+        config are handled automatically — unlike a manual getFeatures(rect) query
+        which requires the rect to be in the layer's own CRS.
+        """
+        match = self.canvas.snappingUtils().snapToMap(screen_pt)
+        if match.isValid():
+            snapped = match.point()
+            self._snap_marker.setCenter(snapped)
+            self._snap_marker.setVisible(True)
+            return snapped
+        self._snap_marker.setVisible(False)
+        return raw_pt
 
     # ------------------------------------------------------------------
     # Vertex / feature search
@@ -630,10 +659,13 @@ class VertexSelector(QgsMapTool):
     def activate(self):
         super().activate()
         self.terminal_dock.command.setFocus()
-        # Recreate hover marker if it was removed when a drawing tool took over
+        # Recreate markers if they were removed when a drawing tool took over
         if self._hover_marker is None:
             self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
             self._hover_marker.setVisible(False)
+        if self._snap_marker is None:
+            self._snap_marker = self._make_marker(QColor(0, 180, 255, 220), QgsVertexMarker.ICON_CIRCLE, 10)
+            self._snap_marker.setVisible(False)
 
     def deactivate(self):
         """Called by UgsurvMaptool._evict() when a drawing tool takes over.
@@ -646,12 +678,16 @@ class VertexSelector(QgsMapTool):
         self._hint.hide()
         self._rm(self._hover_marker)
         self._hover_marker = None   # recreated in activate() when we come back
+        self._snap_marker.setVisible(False)
+        self._rm(self._snap_marker)
+        self._snap_marker = None
         super().deactivate()
 
     def canvasMoveEvent(self, event):
-        map_pt = self.toMapCoordinates(event.pos())
+        raw_pt = self.toMapCoordinates(event.pos())
 
         if self._state == _S_MOVING:
+            map_pt = self._snap_point(event.pos(), raw_pt)
             # Update live rubber-band: replace gripped vertex with cursor
             sv   = self._gripped
             feat = sv.layer.getFeature(sv.fid)
@@ -670,6 +706,9 @@ class VertexSelector(QgsMapTool):
             self._show_hint(event.pos())
             return
 
+        self._snap_marker.setVisible(False)
+        map_pt = raw_pt
+
         if self._state == _S_GRIPPED:
             self._show_hint(event.pos())
             return  # grip markers already drawn; no extra hover feedback needed
@@ -686,7 +725,7 @@ class VertexSelector(QgsMapTool):
         self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
-        map_pt = self.toMapCoordinates(event.pos())
+        raw_pt = self.toMapCoordinates(event.pos())
 
         # Right-click: cancel move (if moving) or clear grip / feature selection
         if event.button() == Qt.RightButton:
@@ -700,9 +739,13 @@ class VertexSelector(QgsMapTool):
             return
 
         if self._state == _S_MOVING:
-            self._commit_move(map_pt)
+            commit_pt = self._snap_point(event.pos(), raw_pt)
+            self._snap_marker.setVisible(False)
+            self._commit_move(commit_pt)
             self.terminal_dock.command.setFocus()
             return
+
+        map_pt = raw_pt
 
         sv = self._find_vertex_near(map_pt)
 

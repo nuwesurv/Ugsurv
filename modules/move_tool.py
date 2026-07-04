@@ -290,7 +290,7 @@ class MoveTool(QgsMapTool):
         lyr.changeGeometry(fid, new_geom)
         lyr.triggerRepaint()
         self._log(f"\nMoved  Δ({dx:.3f}, {dy:.3f})  →  '{lyr.name()}' fid {fid}")
-        self._reset()
+        self.deactivate()
 
     # ------------------------------------------------------------------
     # QgsMapTool interface

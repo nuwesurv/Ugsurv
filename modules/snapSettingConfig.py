@@ -13,6 +13,7 @@ def snapSettingConfig():
     # Set snapping mode to All Layers (or choose CurrentLayer / ActiveLayer if needed)
     snapping_config.setMode(QgsSnappingConfig.AllLayers)
     snapping_config.setIntersectionSnapping(True)
+    snapping_config.setSelfSnapping(True)
     # Ensure the snapping type is Vertex and Segment
     current_type = snapping_config.type()
     if current_type != QgsSnappingConfig.VertexAndSegment:
