@@ -518,6 +518,14 @@ class VertexSelector(QgsMapTool):
             return False
         return sv.vidx == verts[0][0] or sv.vidx == verts[-1][0]
 
+    def _gripped_can_extend(self):
+        """True only when the gripped endpoint belongs to an open (non-closed) polyline."""
+        if not self._gripped_is_endpoint():
+            return False
+        sv = self._gripped
+        feat = sv.layer.getFeature(sv.fid)
+        return not self._is_closed_polyline(feat.geometry())
+
     def _extend_line(self, map_pt):
         """Append a new vertex at map_pt from the gripped endpoint, then stay gripped there."""
         sv = self._gripped
@@ -702,7 +710,7 @@ class VertexSelector(QgsMapTool):
         return None
 
     def _show_hint(self, screen_pos):
-        if self._state == _S_GRIPPED and self._gripped_is_endpoint():
+        if self._state == _S_GRIPPED and self._gripped_can_extend():
             text = "Click grip to move  |  click to extend line"
         else:
             text = _HINT.get(self._state, "")
@@ -791,7 +799,7 @@ class VertexSelector(QgsMapTool):
 
         if self._state == _S_GRIPPED:
             self._show_hint(event.pos())
-            if self._gripped_is_endpoint():
+            if self._gripped_can_extend():
                 map_pt = self._snap_point(event.pos(), raw_pt)
                 sv = self._gripped
                 if self._move_band is None:
@@ -846,20 +854,23 @@ class VertexSelector(QgsMapTool):
         if self._state == _S_GRIPPED:
             if self._same_grip(sv):
                 self._enter_moving()        # second click on same grip → move
-            elif sv and self._gripped_is_endpoint() and self._is_opposite_endpoint(sv):
+            elif sv and self._gripped_can_extend() and self._is_opposite_endpoint(sv):
                 # Clicked the opposite endpoint of the same feature → close the line
                 if self._move_band is not None:
                     self._move_band.reset(QgsWkbTypes.LineGeometry)
                 self._snap_marker.setVisible(False)
                 self._extend_line(sv.point)
-            elif sv:
-                self._enter_gripped(sv)     # different vertex → switch grip
-            elif self._gripped_is_endpoint():
-                commit_pt = self._snap_point(event.pos(), raw_pt)
+            elif sv and id(sv.layer) == id(self._gripped.layer) and sv.fid == self._gripped.fid:
+                self._enter_gripped(sv)     # different vertex of same feature → switch grip
+            elif sv and not self._gripped_can_extend():
+                pass   # neighbour vertex while gripped on mid-vertex — stay gripped
+            elif self._gripped_can_extend():
+                # Gripped on endpoint: extend, landing precisely on a neighbour vertex if hit
+                commit_pt = sv.point if sv is not None else self._snap_point(event.pos(), raw_pt)
                 self._snap_marker.setVisible(False)
                 if self._move_band is not None:
                     self._move_band.reset(QgsWkbTypes.LineGeometry)
-                self._extend_line(commit_pt)   # endpoint gripped + empty space → extend
+                self._extend_line(commit_pt)
             else:
                 self._enter_idle()          # mid-vertex gripped + empty space → deselect
             return
@@ -869,18 +880,22 @@ class VertexSelector(QgsMapTool):
             if mpt is not None:
                 self._insert_vertex_on_segment(mpt)  # "+" clicked → insert at exact midpoint
                 return
-            if sv:
-                self._enter_gripped(sv)              # vertex clicked → grip it
+            if sv and id(sv.layer) == id(self._sel_layer) and sv.fid == self._sel_fid:
+                self._enter_gripped(sv)              # vertex on selected feature → grip it
             else:
-                edge = self._find_edge_near(map_pt)
-                if edge:
-                    lyr, fid = edge
-                    if id(lyr) == id(self._sel_layer) and fid == self._sel_fid:
-                        self._insert_vertex_on_segment(map_pt)  # same feature → insert
-                    else:
-                        self._enter_feature(lyr, fid)           # different feature → select
+                # Only act on the selected feature; never switch to another from here.
+                # When the click snapped to a neighbour vertex, use its exact position
+                # so the distance check against A's edge is precise and the inserted
+                # vertex lands at exactly the shared coordinate.
+                sel_feat = self._sel_layer.getFeature(self._sel_fid)
+                sel_geom = sel_feat.geometry()
+                tol      = self._hit_tol()
+                check_pt = sv.point if sv is not None else map_pt
+                if (not sel_geom.isEmpty()
+                        and sel_geom.distance(QgsGeometry.fromPointXY(check_pt)) <= tol):
+                    self._insert_vertex_on_segment(check_pt)
                 else:
-                    self._enter_idle()
+                    self._enter_idle()   # truly away from selected feature → deselect
             return
 
         # IDLE

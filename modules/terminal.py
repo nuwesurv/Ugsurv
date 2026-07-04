@@ -252,7 +252,7 @@ class TerminalDialog(QDockWidget):
             self._complete_with_suggestion()
             return True
 
-        if key in (Qt.Key_Return, Qt.Key_Enter):
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             # Always accept a suggestion when the list is visible —
             # fall back to the first item if nothing is highlighted yet.
             if count > 0:
