@@ -50,11 +50,17 @@ class _CanvasKeyFilter(QObject):
             mt._redirect_to_terminal(event)
             return True  # consumed — QGIS never sees it
 
-        if key in (Qt.Key_Return, Qt.Key_Enter) and mt._active_tool is mt._default_tool:
-            mt._redirect_to_terminal(event)
-            return True
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            if mt._active_tool and mt._active_tool is not mt._default_tool:
+                # Drawing tool is active — dispatch Enter directly so QGIS
+                # cannot consume the key before our maptool sees it.
+                mt._active_tool.keyPressEvent(event)
+                return True
+            elif mt._active_tool is mt._default_tool:
+                mt._redirect_to_terminal(event)
+                return True
 
-        return False  # let control keys reach keyPressEvent normally
+        return False  # let other control keys reach keyPressEvent normally
 
 
 class UgsurvMaptool(QgsMapTool):

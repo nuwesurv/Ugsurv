@@ -72,7 +72,9 @@ from .modules.polyline_drawer import PolylineDrawer
 from .modules.vertex_selector import VertexSelector
 from .modules.ugsurv_maptool import UgsurvMaptool
 from .modules.trim_tool import TrimTool
+from .modules.extend_tool import ExtendTool
 from .modules.move_tool import MoveTool
+from .modules.join_tool import JoinTool
 import ast
 
 
@@ -304,7 +306,7 @@ class Ugsurv:
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.terminal_dock.set_commands([
             # Drawing tools (AutoCAD-standard names)
-            'CIRCLE', 'PLINE', 'DIM', 'ADIM', 'TRIM',
+            'CIRCLE', 'PLINE', 'DIM', 'ADIM', 'TRIM', 'EXTEND', 'JOIN',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
             'SPIKY', 'PTOVERLAP', 'IMPORT', 'GAME',
@@ -388,7 +390,20 @@ class Ugsurv:
 
         self.prevCommand = text.strip()
 
-        # Empty Enter → repeat last command (AutoCAD behaviour)
+        # Empty Enter → forward to the active drawing tool if one is running,
+        # otherwise repeat the last command (AutoCAD behaviour).
+        # Without this guard, acceptInput() would re-launch the tool command,
+        # evicting the running instance before its keyPressEvent ever fired.
+        if not self.prevCommand:
+            mt = getattr(self, 'global_map_tool', None)
+            if (mt and mt._active_tool
+                    and mt._active_tool is not getattr(mt, '_default_tool', None)):
+                from qgis.PyQt.QtCore import QEvent
+                from qgis.PyQt.QtGui import QKeyEvent
+                fake = QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier)
+                mt._active_tool.keyPressEvent(fake)
+                return
+
         if not self.prevCommand:
             for cmd in reversed(self.terminal_dock.commandHistory):
                 if cmd.strip():
@@ -416,6 +431,8 @@ class Ugsurv:
                 "\n  CIRCLE  [C ]   Draw a circle"
                 "\n  PLINE   [PL]   Draw a polyline"
                 "\n  TRIM    [TR]   Trim lines at cutting edges"
+                "\n  EXTEND  [EX]   Extend polyline to a boundary"
+                "\n  JOIN    [J ]   Join separate polylines into one"
                 "\n  DIM     [DI]   Dimension a segment / two points"
                 "\n  ADIM    [AD]   Dimension all segments of a feature"
                 "\n── Vertex editor (always active) ────"
@@ -455,6 +472,12 @@ class Ugsurv:
 
         elif cmd in ('trim', 'tr'):
             self.global_map_tool.set_tool(TrimTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('extend', 'ex'):
+            self.global_map_tool.set_tool(ExtendTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('join', 'j'):
+            self.global_map_tool.set_tool(JoinTool(self.canvas, self.terminal_dock))
 
         elif cmd in ('move', 'm'):
             preselect = None

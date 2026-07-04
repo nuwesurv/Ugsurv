@@ -541,6 +541,8 @@ class TrimTool(QgsMapTool):
             else:
                 self._log("\nNo line found near click")
 
+        self.canvas.setFocus()
+
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key_Escape:
