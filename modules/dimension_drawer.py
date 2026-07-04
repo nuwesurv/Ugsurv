@@ -1,4 +1,4 @@
-from qgis.gui import QgsMapTool, QgsRubberBand
+﻿from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsVectorLayer,
@@ -16,11 +16,26 @@ from qgis.core import (
     QgsWkbTypes,
     QgsCoordinateReferenceSystem
 )
-from PyQt5.QtCore import QVariant
+from PyQt5.QtCore import QVariant, QPoint
+from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snapSettingConfig import snapSettingConfig
+from .dynamic_input import DynamicInput
 from . import get_appropriate_crs_str
+import math
+
+
+_HINT_STYLE = (
+    "QLabel {"
+    "  background-color: rgba(20, 20, 20, 210);"
+    "  color: #f0f0f0;"
+    "  border: 1px solid rgba(255, 255, 255, 80);"
+    "  border-radius: 4px;"
+    "  padding: 3px 8px;"
+    "  font-size: 9pt;"
+    "}"
+)
 
 
 class DimensionDrawer(QgsMapTool):
@@ -43,7 +58,19 @@ class DimensionDrawer(QgsMapTool):
         self.dim_layer = self.getDimensionLayer()
         self._maptool = None   # set by UgsurvMaptool.set_tool()
         snapSettingConfig()
-        
+
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
+        # floating dynamic input: distance + bearing after start point is placed
+        self._dinput = DynamicInput(canvas, terminal_dock, [
+            {"key": "dist",    "label": "Distance"},
+            {"key": "bearing", "label": "Bearing (°)"},
+        ])
+        self._dinput.on_cancel = self.deactivate
+
         # create it once when initializing your tool
         self.snap_marker = QgsVertexMarker(self.canvas)
         self.snap_marker.setColor(QColor(255, 0, 0))  # red
@@ -65,11 +92,89 @@ class DimensionDrawer(QgsMapTool):
         
         
         
+    # -------------------------------------------------------------------------
+    # Polar helpers
+    # -------------------------------------------------------------------------
+
+    def _bearing(self, p1: QgsPointXY, p2: QgsPointXY) -> float:
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        return math.degrees(math.atan2(dx, dy)) % 360
+
+    def _polar_to_point(self, origin: QgsPointXY, distance: float, bearing_deg: float) -> QgsPointXY:
+        rad = math.radians(bearing_deg)
+        return QgsPointXY(
+            origin.x() + distance * math.sin(rad),
+            origin.y() + distance * math.cos(rad),
+        )
+
+    # -------------------------------------------------------------------------
+    # DynamicInput callbacks
+    # -------------------------------------------------------------------------
+
+    def _on_endpoint_committed(self, values: dict):
+        """Called when user presses Enter / Space in the floating dist/bearing widget."""
+        self.terminal_dock.clear_input_handler()
+        self._apply_endpoint(values["dist"], values["bearing"])
+
+    def _on_endpoint_terminal(self, text: str):
+        """Called when user types in the terminal and presses Enter."""
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
+        parts = text.strip().replace(',', ' ').split()
+        if len(parts) == 1:
+            self._apply_endpoint(parts[0], "0")
+        elif len(parts) >= 2:
+            self._apply_endpoint(parts[0], parts[1])
+        else:
+            self.terminal_dock.commandOutputText += f"\nInvalid input — use: distance  or  distance,bearing"
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+
+    def _apply_endpoint(self, dist_text: str, bearing_text: str):
+        try:
+            distance = float(dist_text)
+            bearing  = float(bearing_text)
+            if distance <= 0:
+                raise ValueError
+        except ValueError:
+            self.terminal_dock.commandOutputText += f"\nInvalid input — enter distance [Tab] bearing (°)"
+            self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+            return
+
+        end_pt = self._polar_to_point(self.dim_points[0], distance, bearing)
+        self.dim_points.append(end_pt)
+        dim_dist = self.dim_points[0].distance(end_pt)
+        self.terminal_dock.commandOutputText += (
+            f"\nEnd point: {round(end_pt.x(), 3)}, {round(end_pt.y(), 3)}"
+            f"  |  Distance: {round(dim_dist, 3)}"
+        )
+        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+        self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+        self.createDimensionFeature()
+        self.dim_points.clear()
+
+    def _show_hint(self, screen_pos, text):
+        if not text:
+            self._hint.hide()
+            return
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self.canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self.canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
+
     def activate(self):
         super().activate()
-        self.canvas.setFocus()
-        
+        self.terminal_dock.command.setFocus()
+
     def deactivate(self):
+        self._dinput.destroy()
+        self.terminal_dock.clear_input_handler()
         if self._maptool:
             self._maptool.clear_tool()
         else:
@@ -78,10 +183,11 @@ class DimensionDrawer(QgsMapTool):
         # Commit any remaining edits
         self.dim_layer.updateExtents()
         self.dim_layer.commitChanges()
-        
+
         # Hide snap marker and clear state
         self.rubber_band.reset(QgsWkbTypes.LineGeometry)
         self.snap_marker.setVisible(False)
+        self._hint.hide()
         self.dim_points.clear()
         self.terminal_dock.commandDisplay.setText(
             self.terminal_dock.commandOutputText + "\n........\n"
@@ -92,6 +198,9 @@ class DimensionDrawer(QgsMapTool):
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.deactivate()
+
+    def mouseDoubleClickEvent(self, event):
+        self.terminal_dock.command.setFocus()
             
             
     def getDimensionLayer(self):
@@ -121,10 +230,13 @@ class DimensionDrawer(QgsMapTool):
         self.label_settings.fieldName = 'distance'  # field to show
         self.label_settings.placement = QgsPalLayerSettings.Line  # place labels along lines
         
+        _font = QFont("Century Gothic", 10)
+        _font.setBold(True)
+        _font.setItalic(True)
         self.text_format = QgsTextFormat()
-        self.text_format.setFont(QFont("Arial", 10))  # font + size
-        self.text_format.setColor(QColor("#41b4e0"))      # text color
-        self.text_format.setSize(10)                  # size in points
+        self.text_format.setFont(_font)
+        self.text_format.setColor(QColor(0, 0, 0))
+        self.text_format.setSize(10)
 
         self.label_settings.setFormat(self.text_format)
         
@@ -182,14 +294,15 @@ class DimensionDrawer(QgsMapTool):
             if snap_result.type() == QgsPointLocator.Vertex:
                 self.rubber_band.setWidth(1)
                 self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-                
+
             if snap_result.type() == QgsPointLocator.Edge:
                 before_vertex, after_vertex = snap_result.edgePoints()
                 self.rubber_band.setWidth(2)
                 self.rubber_band.reset(QgsWkbTypes.LineGeometry)
                 self.rubber_band.addPoint(before_vertex)
                 self.rubber_band.addPoint(after_vertex)
-                
+            self._show_hint(event.pos(), "Click start point")
+
         elif len(self.dim_points) == 1:
             # Clear it
             self.rubber_band.reset(QgsWkbTypes.LineGeometry)
@@ -197,9 +310,16 @@ class DimensionDrawer(QgsMapTool):
             self.rubber_band.addPoint(self.dim_points[0])
             self.rubber_band.addPoint(point)
             dim_dist = self.dim_points[0].distance(point)
+            bearing  = self._bearing(self.dim_points[0], point)
             self.terminal_dock.commandDisplay.setText(
-                self.terminal_dock.commandOutputText + f'\nSelect end point: {round(dim_dist,3)}\n'
+                self.terminal_dock.commandOutputText + f'\nSelect end point: dist={round(dim_dist,3)}  bearing={round(bearing,2)}°\n'
             )
+            cp = self.canvas.getCoordinateTransform().transform(point)
+            self._dinput.update(cp.x(), cp.y(), {
+                "dist":    f"{dim_dist:.3f}",
+                "bearing": f"{bearing:.2f}",
+            })
+            self._show_hint(event.pos(), "Click end point  or  type dist,bearing + Enter")
         
         
         
@@ -230,38 +350,37 @@ class DimensionDrawer(QgsMapTool):
             if snap_result.isValid():
                 point = snap_result.point()
                 
-                # Here we add dimensions for instances where the cursor is on the edge only
+                # Dimension all segments of the clicked feature
                 if len(self.dim_points) == 0 and snap_result.type() == QgsPointLocator.Edge and self.operation_type == 'selected':
-                    # Get the layer and feature ID
                     layer = snap_result.layer()
-                    fid = snap_result.featureId()
-                    
-                    # Fetch the feature from the layer
-                    feature = layer.getFeature(fid)
+                    feature = layer.getFeature(snap_result.featureId())
                     feature_geom = feature.geometry()
-                    # print(feature_geom)
+
                     if feature_geom and feature_geom.isGeosValid():
-                        # boundary = feature_geom.coerceToType(QgsWkbTypes.LineGeometry)  # False = don’t force 2D if it’s 3D
-                        boundary = feature_geom.coerceToType(QgsWkbTypes.LineString, True)[0]  # True = allow 2D only
+                        gt = QgsWkbTypes.geometryType(feature_geom.wkbType())
 
-                        if boundary.isMultipart():
-                            print('Will ahndle multipart later ... ')
-                            # lines = boundary.asMultiPolyline()
-                            return
-                        else:
-                            outer_ring = boundary.asPolyline()
-                            
-                        for i in range(1, len(outer_ring)):
-                            before_vertex = outer_ring[i - 1]
-                            after_vertex = outer_ring[i]
+                        # Collect all rings/parts as flat lists of QgsPointXY
+                        vertex_rings = []
+                        if gt == QgsWkbTypes.PolygonGeometry:
+                            if feature_geom.isMultipart():
+                                for poly in feature_geom.asMultiPolygon():
+                                    vertex_rings.extend(poly)
+                            else:
+                                vertex_rings = feature_geom.asPolygon()
+                        elif gt == QgsWkbTypes.LineGeometry:
+                            if feature_geom.isMultipart():
+                                vertex_rings = feature_geom.asMultiPolyline()
+                            else:
+                                vertex_rings = [feature_geom.asPolyline()]
 
-                            self.dim_points.append(before_vertex)
-                            self.dim_points.append(after_vertex)
+                        for ring in vertex_rings:
+                            for i in range(1, len(ring)):
+                                self.dim_points.append(ring[i - 1])
+                                self.dim_points.append(ring[i])
+                                self.createDimensionFeature()
+                                self.dim_points.clear()
 
-                            self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-                            self.createDimensionFeature()
-                            self.dim_points.clear()
-
+                        self.rubber_band.reset(QgsWkbTypes.LineGeometry)
                     return
                 
                 elif len(self.dim_points) == 0 and snap_result.type() == QgsPointLocator.Edge:
@@ -284,17 +403,25 @@ class DimensionDrawer(QgsMapTool):
                 self.terminal_dock.commandDisplay.setText(
                     self.terminal_dock.commandOutputText + f'\nSelect end point: ...\n'
                 )
-                
+                cp = self.canvas.getCoordinateTransform().transform(point)
+                self._dinput.on_commit = self._on_endpoint_committed
+                self.terminal_dock.request_input("dist,bearing: ", self._on_endpoint_terminal)
+                self._dinput.show(cp.x(), cp.y())
+
             elif len(self.dim_points) == 2:
-                # Clear the rubberband preview
+                # User clicked the end point — hide dinput and commit
+                self._dinput.hide()
+                self.terminal_dock.clear_input_handler()
                 self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-                
+
                 dim_dist = self.dim_points[0].distance(self.dim_points[1])
                 self.terminal_dock.commandOutputText += f'\nEnd point: {round(point.x(),3)}, {round(point.y(),3)} \nDistance: {round(dim_dist,3)}'
                 self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                
+
                 self.createDimensionFeature()
                 self.dim_points.clear()
+
+        self.terminal_dock.command.setFocus()
                 
                 
                 

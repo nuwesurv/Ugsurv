@@ -9,26 +9,24 @@ from qgis.core import (
     QgsField,
     QgsWkbTypes,
     QgsLineSymbol,
-    QgsPalLayerSettings, 
-    QgsTextFormat, 
+    QgsPalLayerSettings,
+    QgsTextFormat,
     QgsVectorLayerSimpleLabeling,
     QgsPointLocator,
-    QgsWkbTypes,
     QgsFillSymbol,
     QgsSingleSymbolRenderer,
-    QgsCircularString, 
-    QgsCurvePolygon, 
-    QgsGeometry, 
-    QgsFeature,
+    QgsCircularString,
+    QgsCurvePolygon,
     QgsPoint,
-    QgsCoordinateReferenceSystem
+    QgsCoordinateReferenceSystem,
 )
 from qgis.PyQt.QtWidgets import QGraphicsTextItem
-from PyQt5.QtCore import QVariant, QEvent
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QGraphicsProxyWidget
+from PyQt5.QtCore import QVariant, QPoint
+from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtGui import QIcon, QFont, QColor
+from qgis.PyQt.QtGui import QFont, QColor
 from .snapSettingConfig import snapSettingConfig
+from .dynamic_input import DynamicInput
 import math
 from . import get_appropriate_crs_str
 
@@ -43,12 +41,23 @@ LABEL_FONT = QFont("Arial", 8)
 LABEL_COLOR = QColor("#393939")
 LABEL_SIZE = 10
 
+_HINT_STYLE = (
+    "QLabel {"
+    "  background-color: rgba(20, 20, 20, 210);"
+    "  color: #f0f0f0;"
+    "  border: 1px solid rgba(255, 255, 255, 80);"
+    "  border-radius: 4px;"
+    "  padding: 3px 8px;"
+    "  font-size: 9pt;"
+    "}"
+)
+
 
 class CircleDrawer(QgsMapTool):
     """
     A QGIS map tool that allows the user to draw circles by:
       1. Clicking a center point
-      2. Clicking a radius point
+      2. Clicking a radius point  —or—  typing a radius value
     The resulting circle is stored as a CurvePolygon (circular string) in a memory layer.
     """
 
@@ -76,9 +85,16 @@ class CircleDrawer(QgsMapTool):
         self.preview_circle_band = self._create_rubber_band(QgsWkbTypes.PolygonGeometry, Qt.DashLine, fill_alpha=10)
         self.radius_line_band = self._create_rubber_band(QgsWkbTypes.LineGeometry, Qt.DashLine)
         self.radius_text = self._create_text_item()
-        self._syncing = False
-        self.dynamic_input_proxy = self._create_dynamic_input()
         self._maptool = None   # set by UgsurvMaptool.set_tool()
+
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
+        # Floating dynamic input (single "Radius" field)
+        self._dinput = DynamicInput(canvas, terminal_dock, [{"key": "radius", "label": "Radius"}])
+        self._dinput.on_cancel = self.deactivate
 
     # -------------------------------------------------------------------------
     # Setup helpers
@@ -137,7 +153,6 @@ class CircleDrawer(QgsMapTool):
         provider.addAttributes([QgsField("radius", QVariant.Double)])
         layer.updateFields()
 
-        # Style
         symbol = QgsFillSymbol.createSimple({
             "outline_color": LAYER_COLOR_OUTLINE,
             "outline_width": "0.4",
@@ -145,18 +160,7 @@ class CircleDrawer(QgsMapTool):
             "color": LAYER_COLOR_FILL,
         })
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-
-        # Labels
-        label_settings = QgsPalLayerSettings()
-        label_settings.fieldName = "radius"
-        label_settings.placement = QgsPalLayerSettings.Line
-        text_format = QgsTextFormat()
-        text_format.setFont(LABEL_FONT)
-        text_format.setColor(LABEL_COLOR)
-        text_format.setSize(LABEL_SIZE)
-        label_settings.setFormat(text_format)
-        layer.setLabelsEnabled(True)
-        layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
+        layer.setLabelsEnabled(False)
 
         QgsProject.instance().addMapLayer(layer)
         layer.startEditing()
@@ -167,14 +171,8 @@ class CircleDrawer(QgsMapTool):
     # -------------------------------------------------------------------------
 
     def _build_circle_geometry(self, center: QgsPointXY, radius: float) -> QgsGeometry:
-        """
-        Build a QgsGeometry representing a full circle as a QgsCurvePolygon
-        made of a QgsCircularString. Five points define the full arc
-        (start == end to close it).
-        """
+        """Build a QgsGeometry circle as a QgsCurvePolygon / QgsCircularString."""
         cx, cy = center.x(), center.y()
-
-        # Cardinal points around the circle: E → S → W → N → E
         arc_points = [
             QgsPoint(cx + radius, cy),           # East  (start)
             QgsPoint(cx,          cy - radius),  # South
@@ -182,17 +180,14 @@ class CircleDrawer(QgsMapTool):
             QgsPoint(cx,          cy + radius),  # North
             QgsPoint(cx + radius, cy),           # East  (close)
         ]
-
-        circular_string = QgsCircularString()
-        circular_string.setPoints(arc_points)
-
-        curve_polygon = QgsCurvePolygon()
-        curve_polygon.setExteriorRing(circular_string)
-
-        return QgsGeometry(curve_polygon)
+        cs = QgsCircularString()
+        cs.setPoints(arc_points)
+        cp = QgsCurvePolygon()
+        cp.setExteriorRing(cs)
+        return QgsGeometry(cp)
 
     def _commit_circle(self, center: QgsPointXY, radius_point: QgsPointXY):
-        """Add a circle feature to the circle layer."""
+        """Add a circle feature to the circle layer and return the radius."""
         radius = center.distance(radius_point)
         geometry = self._build_circle_geometry(center, radius)
 
@@ -211,7 +206,6 @@ class CircleDrawer(QgsMapTool):
     # -------------------------------------------------------------------------
 
     def _update_snap_marker(self, point: QgsPointXY, snap_result):
-        """Show or hide the snap marker based on snap result."""
         if snap_result.isValid():
             self.snap_marker.setCenter(snap_result.point())
             self.snap_marker.setVisible(True)
@@ -229,18 +223,15 @@ class CircleDrawer(QgsMapTool):
         """Render rubber-band circle preview and radius line."""
         radius = center.distance(cursor)
 
-        # Circle preview
         self.preview_circle_band.reset(QgsWkbTypes.PolygonGeometry)
         circle_geom = QgsGeometry.fromPointXY(center).buffer(radius, 64)
         self.preview_circle_band.addGeometry(circle_geom, None)
         self.preview_circle_band.show()
 
-        # Radius line
         self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
         self.radius_line_band.addPoint(center)
         self.radius_line_band.addPoint(cursor)
 
-        # Floating radius label
         self._update_radius_label(center, cursor, radius)
 
     def _update_radius_label(self, center: QgsPointXY, cursor: QgsPointXY, radius: float):
@@ -252,138 +243,61 @@ class CircleDrawer(QgsMapTool):
         dx = cursor.x() - center.x()
         dy = cursor.y() - center.y()
         angle = -math.degrees(math.atan2(dy, dx))
-        # Keep text readable (avoid upside-down)
         if angle < -90:
             angle += 180
         elif angle > 90:
             angle -= 180
-
         canvas_pt = self.canvas.getCoordinateTransform().transform(mid)
         self.radius_text.setPos(canvas_pt.x(), canvas_pt.y())
         self.radius_text.setPlainText(f"{radius:.3f}")
         self.radius_text.setRotation(angle)
 
+    def _show_hint(self, screen_pos, text):
+        if not text:
+            self._hint.hide()
+            return
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self.canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self.canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
+
     def _clear_preview(self):
-        """Reset all temporary drawing feedback."""
         self.preview_circle_band.reset(QgsWkbTypes.PolygonGeometry)
         self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
         self.radius_text.setPlainText("")
         self.snap_marker.setVisible(False)
 
     # -------------------------------------------------------------------------
-    # Dynamic input box (AutoCAD-style floating widget)
+    # Input handling
     # -------------------------------------------------------------------------
 
-    def _create_dynamic_input(self):
-        container = QWidget()
-        container.setStyleSheet(
-            "QWidget  { background: #1a1a2e; border: 1px solid #4a9eff; }"
-            "QLabel   { color: #7fa8d4; font-size: 9px; border: none;"
-            "           padding: 2px 6px 1px 6px; }"
-            "QLineEdit { background: transparent; color: #e8e8e8; border: none;"
-            "            border-top: 1px solid #2a2a4e; padding: 3px 6px;"
-            "            font-size: 11px; min-width: 110px; }"
-        )
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+    def _on_radius_terminal(self, text: str):
+        """Called when user types a value in the terminal and presses Enter."""
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
+        self._apply_radius(text.strip())
 
-        self._dynamic_label = QLabel("Radius")
-        self._dynamic_line  = QLineEdit()
-        self._dynamic_line.returnPressed.connect(self._on_dynamic_input_enter)
-        self._dynamic_line.installEventFilter(self)
+    def _on_radius_committed(self, values: dict):
+        """Called when user presses Enter / Space in the floating input widget."""
+        # DynamicInput already called hide() before firing this callback
+        self.terminal_dock.clear_input_handler()
+        self._apply_radius(values["radius"])
 
-        layout.addWidget(self._dynamic_label)
-        layout.addWidget(self._dynamic_line)
-        container.adjustSize()
-
-        proxy = QGraphicsProxyWidget()
-        proxy.setWidget(container)
-        proxy.setZValue(100)
-        proxy.setVisible(False)
-        self.canvas.scene().addItem(proxy)
-        return proxy
-
-    def eventFilter(self, obj, event):
-        if obj is self._dynamic_line and event.type() == QEvent.KeyPress:
-            if event.key() == Qt.Key_Escape:
-                self.deactivate()
-                return True
-            if event.key() == Qt.Key_Space:
-                self._on_dynamic_input_enter()
-                return True
-        return super().eventFilter(obj, event)
-
-    def _show_dynamic_input(self, canvas_x, canvas_y):
-        self._dynamic_line.clear()
-        self.dynamic_input_proxy.setPos(canvas_x + 15, canvas_y + 15)
-        self.dynamic_input_proxy.setVisible(True)
-        self.terminal_dock.command.textChanged.connect(self._sync_terminal_to_dynamic)
-        self._dynamic_line.textChanged.connect(self._sync_dynamic_to_terminal)
-        self._dynamic_line.setFocus()
-
-    def _hide_dynamic_input(self):
-        self.dynamic_input_proxy.setVisible(False)
-        try:
-            self.terminal_dock.command.textChanged.disconnect(self._sync_terminal_to_dynamic)
-            self._dynamic_line.textChanged.disconnect(self._sync_dynamic_to_terminal)
-        except Exception:
-            pass
-        self._dynamic_line.clear()
-
-    def _sync_terminal_to_dynamic(self, text):
-        if not self._syncing:
-            self._syncing = True
-            self._dynamic_line.setText(text)
-            self._syncing = False
-
-    def _sync_dynamic_to_terminal(self, text):
-        if not self._syncing:
-            self._syncing = True
-            self.terminal_dock.command.setText(text)
-            self._syncing = False
-
-    def _on_dynamic_input_enter(self):
-        text = self._dynamic_line.text() or self._dynamic_line.placeholderText()
-        self._hide_dynamic_input()
-        self._on_radius_typed(text)
-
-    # -------------------------------------------------------------------------
-    # Terminal helpers
-    # -------------------------------------------------------------------------
-
-    def _display(self, message: str):
-        """Append a line to the terminal display (does not persist to commandOutputText)."""
-        self.terminal_dock.commandDisplay.setText(
-            self.terminal_dock.commandOutputText + message
-        )
-
-    def _log(self, message: str):
-        """Persist a line to commandOutputText and refresh the display."""
-        self.terminal_dock.commandOutputText += message
-        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-
-    # -------------------------------------------------------------------------
-    # QgsMapTool overrides
-    # -------------------------------------------------------------------------
-
-    def activate(self):
-        super().activate()
-        self.canvas.setFocus()
-        self._display("\nSelect center point …\n")
-
-    def _on_radius_typed(self, text: str):
-        """Handle a radius value typed in the terminal or dynamic input box."""
-        self._hide_dynamic_input()
+    def _apply_radius(self, text: str):
+        """Validate radius text and commit the circle, or re-show input on error."""
         try:
             radius = float(text)
             if radius <= 0:
                 raise ValueError
         except ValueError:
             self._log(f"\nInvalid radius '{text}' — enter a positive number")
-            self.terminal_dock.request_input("radius: ", self._on_radius_typed)
-            cp = self.canvas.getCoordinateTransform().transform(self.center_point)
-            self._show_dynamic_input(cp.x(), cp.y())
+            self._re_request_input()
             return
 
         radius_pt = QgsPointXY(self.center_point.x() + radius, self.center_point.y())
@@ -395,25 +309,54 @@ class CircleDrawer(QgsMapTool):
         self.is_drawing = False
         self._display("\nSelect center point …\n")
 
+    def _re_request_input(self):
+        """Re-show both the terminal prompt and the floating widget after a bad value."""
+        if not self.center_point:
+            return
+        self.terminal_dock.request_input("radius: ", self._on_radius_terminal)
+        self._dinput.on_commit = self._on_radius_committed
+        cp = self.canvas.getCoordinateTransform().transform(self.center_point)
+        self._dinput.show(cp.x(), cp.y())
+
+    # -------------------------------------------------------------------------
+    # Terminal helpers
+    # -------------------------------------------------------------------------
+
+    def _display(self, message: str):
+        self.terminal_dock.commandDisplay.setText(
+            self.terminal_dock.commandOutputText + message
+        )
+
+    def _log(self, message: str):
+        self.terminal_dock.commandOutputText += message
+        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+
+    # -------------------------------------------------------------------------
+    # QgsMapTool overrides
+    # -------------------------------------------------------------------------
+
+    def activate(self):
+        super().activate()
+        self.terminal_dock.command.setFocus()
+        self._display("\nSelect center point …\n")
+
     def deactivate(self):
         self.terminal_dock.clear_input_handler()
-        self._hide_dynamic_input()
+        self._dinput.destroy()
+
         if self._maptool:
             self._maptool.clear_tool()
         else:
             self.canvas.unsetMapTool(self)
             self.terminal_dock.command.setFocus()
 
-        # Persist edits
         self.circle_layer.updateExtents()
         self.circle_layer.commitChanges()
 
-        # Clean up UI
         self._clear_preview()
+        self._hint.hide()
         self.canvas.scene().removeItem(self.radius_text)
-        self.canvas.scene().removeItem(self.dynamic_input_proxy)
 
-        # Reset state
         self.center_point = None
         self.is_drawing = False
 
@@ -423,6 +366,9 @@ class CircleDrawer(QgsMapTool):
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.deactivate()
+
+    def mouseDoubleClickEvent(self, event):
+        self.terminal_dock.command.setFocus()
 
     # -------------------------------------------------------------------------
     # Mouse events
@@ -436,18 +382,16 @@ class CircleDrawer(QgsMapTool):
         self._update_snap_marker(cursor, snap_result)
 
         if not self.is_drawing:
-            # Phase 1: waiting for center click — just echo cursor position
             self._display(f"\nSelect center point: {cursor.x():.3f}, {cursor.y():.3f}\n")
+            self._show_hint(event.pos(), "Click center point")
         else:
-            # Phase 2: center chosen — show live circle preview
             self._draw_circle_preview(self.center_point, cursor)
             radius = self.center_point.distance(cursor)
             self._display(f"\nRadius: {radius:.3f}\n")
-            # Keep dynamic input box near cursor with live radius as placeholder
-            if self.dynamic_input_proxy.isVisible():
-                cp = self.canvas.getCoordinateTransform().transform(cursor)
-                self.dynamic_input_proxy.setPos(cp.x() + 15, cp.y() + 15)
-                self._dynamic_line.setPlaceholderText(f"{radius:.3f}")
+            # Move the floating input box near the cursor; update its placeholder live
+            cp = self.canvas.getCoordinateTransform().transform(cursor)
+            self._dinput.update(cp.x(), cp.y(), {"radius": f"{radius:.3f}"})
+            self._show_hint(event.pos(), "Click radius point  or  type radius + Enter")
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.RightButton:
@@ -457,37 +401,36 @@ class CircleDrawer(QgsMapTool):
         if event.button() != Qt.LeftButton:
             return
 
-        # Resolve snapped click position
         raw_point = self.toMapCoordinates(event.pos())
         snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
         clicked_point = snap_result.point() if snap_result.isValid() else raw_point
         self.snap_marker.setVisible(False)
 
-        # Ensure the layer is ready
         self.circle_layer = self._get_or_create_circle_layer()
 
         if not self.is_drawing:
-            # ── First click: record center ──────────────────────────────────
+            # First click: record center and show floating input
             self.center_point = clicked_point
             self.is_drawing = True
             self._log(f"\nCenter: {clicked_point.x():.3f}, {clicked_point.y():.3f}")
             self._display("\nEnter radius or click radius point…\n")
-            self.terminal_dock.request_input("radius: ", self._on_radius_typed)
+            self.terminal_dock.request_input("radius: ", self._on_radius_terminal)
+            self._dinput.on_commit = self._on_radius_committed
             cp = self.canvas.getCoordinateTransform().transform(clicked_point)
-            self._show_dynamic_input(cp.x(), cp.y())
+            self._dinput.show(cp.x(), cp.y())
 
         else:
-            # ── Second click: finalise circle (cancel any pending typed input) ──
-            self._hide_dynamic_input()
+            # Second click: commit circle using the clicked radius point
+            self._dinput.hide()
             self.terminal_dock.clear_input_handler()
             radius = self._commit_circle(self.center_point, clicked_point)
             self._log(
                 f"\nRadius point: {clicked_point.x():.3f}, {clicked_point.y():.3f}"
                 f"  |  Radius: {radius:.3f}"
             )
-
-            # Reset for the next circle
             self._clear_preview()
             self.center_point = None
             self.is_drawing = False
             self._display("\nSelect center point …\n")
+
+        self.terminal_dock.command.setFocus()

@@ -14,11 +14,12 @@ from qgis.core import (
     QgsPointLocator,
 )
 from qgis.PyQt.QtWidgets import QGraphicsTextItem
-from PyQt5.QtCore import QVariant, QEvent
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QGraphicsProxyWidget
+from PyQt5.QtCore import QVariant, QPoint
+from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from .snapSettingConfig import snapSettingConfig
+from .dynamic_input import DynamicInput
 import math
 from . import get_appropriate_crs_str
 
@@ -31,6 +32,17 @@ TEXT_COLOR = QColor(180, 70, 0)
 LABEL_FONT = QFont("Arial", 8)
 LABEL_COLOR = QColor("#393939")
 LABEL_SIZE = 10
+
+_HINT_STYLE = (
+    "QLabel {"
+    "  background-color: rgba(20, 20, 20, 210);"
+    "  color: #f0f0f0;"
+    "  border: 1px solid rgba(255, 255, 255, 80);"
+    "  border-radius: 4px;"
+    "  padding: 3px 8px;"
+    "  font-size: 9pt;"
+    "}"
+)
 
 
 class PolylineDrawer(QgsMapTool):
@@ -71,9 +83,19 @@ class PolylineDrawer(QgsMapTool):
         self.committed_band = self._create_rubber_band(Qt.SolidLine)
         self.preview_band   = self._create_rubber_band(Qt.DashLine)
         self.segment_text   = self._create_text_item()
-        self._syncing = False
-        self.dynamic_input_proxy = self._create_dynamic_input()
         self._maptool = None   # set by UgsurvMaptool.set_tool()
+
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
+        # Floating dynamic input (Distance + Bearing, Tab cycles between them)
+        self._dinput = DynamicInput(canvas, terminal_dock, [
+            {"key": "dist",    "label": "Distance"},
+            {"key": "bearing", "label": "Bearing (°)"},
+        ])
+        self._dinput.on_cancel = self.deactivate
 
     # -------------------------------------------------------------------------
     # Setup helpers
@@ -165,13 +187,11 @@ class PolylineDrawer(QgsMapTool):
     # -------------------------------------------------------------------------
 
     def _bearing(self, p1: QgsPointXY, p2: QgsPointXY) -> float:
-        """Azimuth from p1 to p2 in degrees (North = 0°, clockwise)."""
         dx = p2.x() - p1.x()
         dy = p2.y() - p1.y()
         return math.degrees(math.atan2(dx, dy)) % 360
 
     def _polar_to_point(self, origin: QgsPointXY, distance: float, bearing_deg: float) -> QgsPointXY:
-        """Return the point reached from origin by traveling distance at bearing_deg."""
         rad = math.radians(bearing_deg)
         return QgsPointXY(
             origin.x() + distance * math.sin(rad),
@@ -225,6 +245,21 @@ class PolylineDrawer(QgsMapTool):
         self.segment_text.setPlainText(f"{dist:.3f}")
         self.segment_text.setRotation(angle)
 
+    def _show_hint(self, screen_pos, text):
+        if not text:
+            self._hint.hide()
+            return
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self.canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self.canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
+
     def _clear_preview(self):
         self.committed_band.reset(QgsWkbTypes.LineGeometry)
         self.preview_band.reset(QgsWkbTypes.LineGeometry)
@@ -232,145 +267,43 @@ class PolylineDrawer(QgsMapTool):
         self.snap_marker.setVisible(False)
 
     # -------------------------------------------------------------------------
-    # Dynamic input box  (two-field AutoCAD-style: Distance | Bearing)
+    # Input handling
     # -------------------------------------------------------------------------
 
-    def _create_dynamic_input(self):
-        container = QWidget()
-        container.setStyleSheet(
-            "QWidget  { background: #1a1a2e; border: 1px solid #4a9eff; }"
-            "QLabel   { color: #7fa8d4; font-size: 9px; border: none;"
-            "           padding: 2px 6px 1px 6px; }"
-            "QLineEdit { background: transparent; color: #e8e8e8; border: none;"
-            "            border-top: 1px solid #2a2a4e; padding: 3px 6px;"
-            "            font-size: 11px; min-width: 120px; }"
-        )
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self._dist_label  = QLabel("Distance")
-        self._dist_line   = QLineEdit()
-        self._dist_line.returnPressed.connect(self._on_dynamic_input_enter)
-        self._dist_line.installEventFilter(self)
-
-        self._angle_label = QLabel("Bearing (°)")
-        self._angle_line  = QLineEdit()
-        self._angle_line.returnPressed.connect(self._on_dynamic_input_enter)
-        self._angle_line.installEventFilter(self)
-
-        layout.addWidget(self._dist_label)
-        layout.addWidget(self._dist_line)
-        layout.addWidget(self._angle_label)
-        layout.addWidget(self._angle_line)
-        container.adjustSize()
-
-        proxy = QGraphicsProxyWidget()
-        proxy.setWidget(container)
-        proxy.setZValue(100)
-        proxy.setVisible(False)
-        self.canvas.scene().addItem(proxy)
-        return proxy
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.KeyPress:
-            if event.key() == Qt.Key_Escape:
-                self.deactivate()
-                return True
-            if event.key() == Qt.Key_Tab:
-                # Tab / Shift+Tab cycles between fields
-                if event.modifiers() & Qt.ShiftModifier:
-                    if obj is self._angle_line:
-                        self._dist_line.setFocus()
-                    elif obj is self._dist_line:
-                        self._angle_line.setFocus()
-                else:
-                    if obj is self._dist_line:
-                        self._angle_line.setFocus()
-                    elif obj is self._angle_line:
-                        self._dist_line.setFocus()
-                return True
-            if event.key() in (Qt.Key_Down, Qt.Key_Right):
-                if obj is self._dist_line:
-                    self._angle_line.setFocus()
-                    return True
-            if event.key() in (Qt.Key_Up, Qt.Key_Left):
-                if obj is self._angle_line:
-                    self._dist_line.setFocus()
-                    return True
-            if event.key() == Qt.Key_Space:
-                self._on_dynamic_input_enter()
-                return True
-        return super().eventFilter(obj, event)
-
-    def _show_dynamic_input(self, canvas_x, canvas_y):
-        self._dist_line.clear()
-        self._angle_line.clear()
-        self.dynamic_input_proxy.setPos(canvas_x + 15, canvas_y + 15)
-        self.dynamic_input_proxy.setVisible(True)
-        self.terminal_dock.command.textChanged.connect(self._sync_terminal_to_dynamic)
-        self._dist_line.textChanged.connect(self._sync_dynamic_to_terminal)
-        self._angle_line.textChanged.connect(self._sync_dynamic_to_terminal)
-        self._dist_line.setFocus()
-
-    def _hide_dynamic_input(self):
-        self.dynamic_input_proxy.setVisible(False)
-        try:
-            self.terminal_dock.command.textChanged.disconnect(self._sync_terminal_to_dynamic)
-            self._dist_line.textChanged.disconnect(self._sync_dynamic_to_terminal)
-            self._angle_line.textChanged.disconnect(self._sync_dynamic_to_terminal)
-        except Exception:
-            pass
-        self._dist_line.clear()
-        self._angle_line.clear()
-
-    def _sync_terminal_to_dynamic(self, text):
-        if self._syncing:
+    def _on_polar_committed(self, values: dict):
+        """Called when user presses Enter / Space in the floating input widget."""
+        # DynamicInput already hid itself; clear terminal handler
+        self.terminal_dock.clear_input_handler()
+        dist_text  = values["dist"]
+        angle_text = values["bearing"]
+        if not dist_text.strip():
+            self._finish()
             return
-        self._syncing = True
-        if ',' in text:
-            idx = text.index(',')
-            self._dist_line.setText(text[:idx])
-            self._angle_line.setText(text[idx + 1:])
-        else:
-            self._dist_line.setText(text)
-            self._angle_line.clear()
-        self._syncing = False
-
-    def _sync_dynamic_to_terminal(self, _text=None):
-        if self._syncing:
-            return
-        self._syncing = True
-        dist = self._dist_line.text()
-        angle = self._angle_line.text()
-        self.terminal_dock.command.setText(f"{dist},{angle}" if angle else dist)
-        self._syncing = False
-
-    def _on_dynamic_input_enter(self):
-        dist_text  = self._dist_line.text()  or self._dist_line.placeholderText()
-        angle_text = self._angle_line.text() or self._angle_line.placeholderText()
-        self._hide_dynamic_input()
         if dist_text.strip().lower() == 'c':
             self._close()
             return
         self._process_polar_input(dist_text, angle_text)
 
-    # -------------------------------------------------------------------------
-    # Terminal helpers
-    # -------------------------------------------------------------------------
-
-    def _display(self, message):
-        self.terminal_dock.commandDisplay.setText(
-            self.terminal_dock.commandOutputText + message
-        )
-
-    def _log(self, message):
-        self.terminal_dock.commandOutputText += message
-        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-
-    # -------------------------------------------------------------------------
-    # Input handling
-    # -------------------------------------------------------------------------
+    def _on_terminal_input(self, text: str):
+        """Called when user types in the terminal and presses Enter."""
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
+        text = text.strip()
+        if not text:
+            self._finish()
+            return
+        if text.lower() == 'c':
+            self._close()
+            return
+        parts = text.replace(',', ' ').split()
+        if len(parts) == 1:
+            bearing_text = self._dinput._lines["bearing"].placeholderText() or "0"
+            self._process_polar_input(parts[0], bearing_text)
+        elif len(parts) >= 2:
+            self._process_polar_input(parts[0], parts[1])
+        else:
+            self._log(f"\nInvalid input '{text}' — use: distance  or  distance,bearing")
+            self._re_request_input()
 
     def _process_polar_input(self, dist_text, angle_text):
         """Calculate the next vertex from distance + bearing and add it."""
@@ -388,41 +321,23 @@ class PolylineDrawer(QgsMapTool):
         self._add_point(point)
         self._log(f"  →  dist: {distance:.3f}  bearing: {bearing:.2f}°")
 
-    def _on_terminal_input(self, text):
-        """Terminal accepts 'distance', 'distance,bearing', or 'c' to close."""
-        text = text.strip()
-        if not text:
-            self._finish()
-            return
-        if text.lower() == 'c':
-            self._close()
-            return
-        parts = text.replace(',', ' ').split()
-        if len(parts) == 1:
-            dist_text  = parts[0]
-            angle_text = self._angle_line.placeholderText() or "0"
-            self._process_polar_input(dist_text, angle_text)
-        elif len(parts) == 2:
-            self._process_polar_input(parts[0], parts[1])
-        else:
-            self._log(f"\nInvalid input '{text}' — use: distance  or  distance,bearing")
-            self._re_request_input()
-
     def _add_point(self, point: QgsPointXY):
         self.points.append(point)
         self.is_drawing = True
         self._log(f"\nPoint {len(self.points)}: {point.x():.3f}, {point.y():.3f}")
         self._redraw_committed_segments()
 
-        cp = self.canvas.getCoordinateTransform().transform(point)
-        self._show_dynamic_input(cp.x(), cp.y())
         self.terminal_dock.request_input("dist,bearing: ", self._on_terminal_input)
+        self._dinput.on_commit = self._on_polar_committed
+        cp = self.canvas.getCoordinateTransform().transform(point)
+        self._dinput.show(cp.x(), cp.y())
 
     def _re_request_input(self):
         if self.points:
+            self.terminal_dock.request_input("dist,bearing: ", self._on_terminal_input)
+            self._dinput.on_commit = self._on_polar_committed
             cp = self.canvas.getCoordinateTransform().transform(self.points[-1])
-            self._show_dynamic_input(cp.x(), cp.y())
-        self.terminal_dock.request_input("dist,bearing: ", self._on_terminal_input)
+            self._dinput.show(cp.x(), cp.y())
 
     def _close(self):
         """Close the polyline by connecting the last point back to the first."""
@@ -430,7 +345,7 @@ class PolylineDrawer(QgsMapTool):
             self._log("\nNeed at least 2 points to close")
             self._re_request_input()
             return
-        self._hide_dynamic_input()
+        self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self.points.append(QgsPointXY(self.points[0].x(), self.points[0].y()))
         self._log(f"\nClosed → {self.points[0].x():.3f}, {self.points[0].y():.3f}")
@@ -442,7 +357,7 @@ class PolylineDrawer(QgsMapTool):
 
     def _finish(self):
         """Commit the current polyline and reset for the next one."""
-        self._hide_dynamic_input()
+        self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self._commit_polyline()
         self._clear_preview()
@@ -451,17 +366,31 @@ class PolylineDrawer(QgsMapTool):
         self._display("\nClick first point…\n")
 
     # -------------------------------------------------------------------------
+    # Terminal helpers
+    # -------------------------------------------------------------------------
+
+    def _display(self, message):
+        self.terminal_dock.commandDisplay.setText(
+            self.terminal_dock.commandOutputText + message
+        )
+
+    def _log(self, message):
+        self.terminal_dock.commandOutputText += message
+        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+
+    # -------------------------------------------------------------------------
     # QgsMapTool overrides
     # -------------------------------------------------------------------------
 
     def activate(self):
         super().activate()
-        self.canvas.setFocus()
+        self.terminal_dock.command.setFocus()
         self._display("\nClick first point…\n")
 
     def deactivate(self):
         self.terminal_dock.clear_input_handler()
-        self._hide_dynamic_input()
+        self._dinput.destroy()
+
         if self._maptool:
             self._maptool.clear_tool()
         else:
@@ -472,8 +401,8 @@ class PolylineDrawer(QgsMapTool):
         self.polyline_layer.commitChanges()
 
         self._clear_preview()
+        self._hint.hide()
         self.canvas.scene().removeItem(self.segment_text)
-        self.canvas.scene().removeItem(self.dynamic_input_proxy)
 
         self.points = []
         self.is_drawing = False
@@ -505,14 +434,17 @@ class PolylineDrawer(QgsMapTool):
 
         if not self.is_drawing:
             self._display(f"\nFirst point: {cursor.x():.3f}, {cursor.y():.3f}\n")
+            self._show_hint(event.pos(), "Click first point")
         else:
             dist, bearing = self._draw_preview_segment(cursor)
             self._display(f"\nDist: {dist:.3f}   Bearing: {bearing:.2f}°\n")
-            if self.dynamic_input_proxy.isVisible():
-                cp = self.canvas.getCoordinateTransform().transform(cursor)
-                self.dynamic_input_proxy.setPos(cp.x() + 15, cp.y() + 15)
-                self._dist_line.setPlaceholderText(f"{dist:.3f}")
-                self._angle_line.setPlaceholderText(f"{bearing:.2f}")
+            # Move the floating input near cursor; update both placeholders live
+            cp = self.canvas.getCoordinateTransform().transform(cursor)
+            self._dinput.update(cp.x(), cp.y(), {
+                "dist":    f"{dist:.3f}",
+                "bearing": f"{bearing:.2f}",
+            })
+            self._show_hint(event.pos(), "Click next point  or  type dist,bearing + Enter")
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.RightButton:
@@ -529,7 +461,9 @@ class PolylineDrawer(QgsMapTool):
 
         self.polyline_layer = self._get_or_create_polyline_layer()
         self._add_point(clicked_point)
+        self.terminal_dock.command.setFocus()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
             self._finish()
+        self.terminal_dock.command.setFocus()

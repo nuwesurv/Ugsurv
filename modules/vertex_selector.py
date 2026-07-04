@@ -28,7 +28,10 @@ State machine
 from collections import namedtuple
 
 from qgis.core import (
+    QgsCircularString,
+    QgsCurvePolygon,
     QgsGeometry,
+    QgsPoint,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
@@ -36,8 +39,10 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtWidgets import QLabel
+from .dynamic_input import DynamicInput
 
 
 _SelVtx = namedtuple('_SelVtx', ['layer', 'fid', 'vidx', 'point'])
@@ -57,6 +62,23 @@ _C_FEATURE    = QColor(0, 200, 80, 220)     # green – edge-selected feature ou
 _C_FEAT_FILL  = QColor(0, 200, 80, 20)      # faint green fill
 _C_FEAT_VTX   = QColor(0, 180, 60, 200)     # green – vertex markers on selected feature
 _C_MID_MARKER = QColor(60, 180, 40, 220)    # medium green – segment midpoint "+" button
+
+_HINT_STYLE = (
+    "QLabel {"
+    "  background-color: rgba(20, 20, 20, 210);"
+    "  color: #f0f0f0;"
+    "  border: 1px solid rgba(255, 255, 255, 80);"
+    "  border-radius: 4px;"
+    "  padding: 3px 8px;"
+    "  font-size: 9pt;"
+    "}"
+)
+
+_HINT = {
+    _S_FEATURE: "Click a vertex to grip",
+    _S_GRIPPED: "Click grip again to move",
+    _S_MOVING:  "Click to place vertex",
+}
 
 
 class VertexSelector(QgsMapTool):
@@ -92,6 +114,15 @@ class VertexSelector(QgsMapTool):
         self._mid_markers = []   # "+" cross markers at segment midpoints
         self._mid_points  = []   # QgsPointXY for each midpoint (parallel to _mid_markers)
 
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
+        # MOVING (circle only): floating radius input
+        self._dinput = DynamicInput(canvas, terminal_dock, [{"key": "radius", "label": "New radius"}])
+        self._dinput.on_cancel = self._cancel_move
+
     # ------------------------------------------------------------------
     # Marker / rubber-band factories
     # ------------------------------------------------------------------
@@ -112,6 +143,51 @@ class VertexSelector(QgsMapTool):
         if dashed:
             band.setLineStyle(Qt.DashLine)
         return band
+
+    # ------------------------------------------------------------------
+    # Circle radius input helpers (DynamicInput-backed)
+    # ------------------------------------------------------------------
+
+    def _on_radius_committed(self, values: dict):
+        """Called when user presses Enter / Space in the floating input widget."""
+        self.terminal_dock.clear_input_handler()
+        self._apply_new_circle_radius(values["radius"])
+
+    def _on_radius_terminal(self, text: str):
+        """Called when user types a value in the terminal and presses Enter."""
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
+        self._apply_new_circle_radius(text.strip())
+
+    def _apply_new_circle_radius(self, radius_text: str):
+        """Validate, apply the new radius, and return to GRIPPED state."""
+        try:
+            radius = float(radius_text)
+            if radius <= 0:
+                raise ValueError
+        except ValueError:
+            self._log(f"\nInvalid radius '{radius_text}' — enter a positive number")
+            return
+
+        sv = self._gripped
+        feat = sv.layer.getFeature(sv.fid)
+        center = self._circle_center_from_geom(feat.geometry())
+        if center is None:
+            return
+
+        new_geom = self._build_circle_geom(center, radius)
+        if not sv.layer.isEditable():
+            sv.layer.startEditing()
+        sv.layer.changeGeometry(sv.fid, new_geom)
+        radius_idx = sv.layer.fields().indexOf("radius")
+        if radius_idx >= 0:
+            sv.layer.changeAttributeValue(sv.fid, radius_idx, round(radius, 3))
+        sv.layer.triggerRepaint()
+        self._log(f"\nRadius set to {radius:.3f}")
+
+        new_verts = self._feature_verts(sv.layer, sv.fid)
+        new_pt = new_verts[sv.vidx][1] if sv.vidx < len(new_verts) else sv.point
+        self._enter_gripped(_SelVtx(sv.layer, sv.fid, sv.vidx, new_pt))
 
     # ------------------------------------------------------------------
     # Cleanup helpers
@@ -254,25 +330,94 @@ class VertexSelector(QgsMapTool):
         self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
         self._move_band.setToGeometry(geom, sv.layer)
 
-        self._log("\nMove  →  move cursor to new position and click  |  Esc or RMB to cancel")
+        if sv.layer.name() == "circles" and not geom.isEmpty():
+            center = self._circle_center_from_geom(geom)
+            if center:
+                current_radius = center.distance(sv.point)
+                cp = self.canvas.getCoordinateTransform().transform(sv.point)
+                self.terminal_dock.request_input("new radius: ", self._on_radius_terminal)
+                self._dinput.on_commit = self._on_radius_committed
+                self._dinput.update(cp.x(), cp.y(), {"radius": f"{current_radius:.3f}"})
+                self._dinput.show(cp.x(), cp.y())
+            self._log("\nDrag or type new radius + Enter  |  Esc or RMB to cancel")
+        else:
+            self._log("\nMove  →  move cursor to new position and click  |  Esc or RMB to cancel")
 
     def _commit_move(self, map_pt):
         """Move the gripped vertex to map_pt and stay gripped at new position."""
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
         sv = self._gripped
         if not sv.layer.isEditable():
             sv.layer.startEditing()
-        sv.layer.moveVertex(map_pt.x(), map_pt.y(), sv.fid, sv.vidx)
-        sv.layer.triggerRepaint()
 
+        if sv.layer.name() == "circles":
+            self._commit_circle_vertex_move(sv, map_pt)
+        else:
+            sv.layer.moveVertex(map_pt.x(), map_pt.y(), sv.fid, sv.vidx)
+
+        sv.layer.triggerRepaint()
         self._log(
             f"\nMoved  ({sv.point.x():.3f}, {sv.point.y():.3f})"
             f" → ({map_pt.x():.3f}, {map_pt.y():.3f})"
         )
-        # Re-grip at new position (re-reads updated geometry from layer)
         new_sv = _SelVtx(sv.layer, sv.fid, sv.vidx, map_pt)
         self._enter_gripped(new_sv)
 
+    def _circle_center_from_geom(self, geom):
+        """Return the center QgsPointXY of a 5-point circle geometry (E/S/W/N/E)."""
+        verts = self._geom_verts(geom)
+        if len(verts) < 3:
+            return None
+        v0, v2 = verts[0][1], verts[2][1]   # East and West are equidistant from center
+        return QgsPointXY((v0.x() + v2.x()) / 2, (v0.y() + v2.y()) / 2)
+
+    def _build_circle_geom(self, center, radius):
+        """Rebuild a 5-point QgsCurvePolygon circle from center + radius."""
+        cx, cy = center.x(), center.y()
+        arc_pts = [
+            QgsPoint(cx + radius, cy),
+            QgsPoint(cx,          cy - radius),
+            QgsPoint(cx - radius, cy),
+            QgsPoint(cx,          cy + radius),
+            QgsPoint(cx + radius, cy),
+        ]
+        cs = QgsCircularString()
+        cs.setPoints(arc_pts)
+        cp = QgsCurvePolygon()
+        cp.setExteriorRing(cs)
+        return QgsGeometry(cp)
+
+    def _circle_geom_for_drag(self, geom, drag_pt):
+        """Return a circle QgsGeometry resized so the dragged point lies on the circumference."""
+        center = self._circle_center_from_geom(geom)
+        if center is None:
+            return QgsGeometry(geom)
+        new_radius = center.distance(drag_pt)
+        if new_radius < 1e-9:
+            return QgsGeometry(geom)
+        return self._build_circle_geom(center, new_radius)
+
+    def _commit_circle_vertex_move(self, sv, map_pt):
+        """Resize the circle so map_pt lies on its circumference, keeping center fixed."""
+        feat = sv.layer.getFeature(sv.fid)
+        geom = feat.geometry()
+        center = self._circle_center_from_geom(geom)
+        if center is None:
+            sv.layer.moveVertex(map_pt.x(), map_pt.y(), sv.fid, sv.vidx)
+            return
+        new_radius = center.distance(map_pt)
+        if new_radius < 1e-9:
+            return
+        new_geom = self._build_circle_geom(center, new_radius)
+        sv.layer.changeGeometry(sv.fid, new_geom)
+        radius_idx = sv.layer.fields().indexOf("radius")
+        if radius_idx >= 0:
+            sv.layer.changeAttributeValue(sv.fid, radius_idx, round(new_radius, 3))
+
     def _cancel_move(self):
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
         self._rm(self._move_band)
         self._move_band = None
         if self._geom_band:
@@ -458,6 +603,22 @@ class VertexSelector(QgsMapTool):
             return self._gripped.layer, self._gripped.fid
         return None
 
+    def _show_hint(self, screen_pos):
+        text = _HINT.get(self._state, "")
+        if not text:
+            self._hint.hide()
+            return
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self.canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self.canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
+
     def _log(self, msg):
         self.terminal_dock.commandOutputText += msg
         self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
@@ -468,7 +629,7 @@ class VertexSelector(QgsMapTool):
 
     def activate(self):
         super().activate()
-        self.canvas.setFocus()
+        self.terminal_dock.command.setFocus()
         # Recreate hover marker if it was removed when a drawing tool took over
         if self._hover_marker is None:
             self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
@@ -480,6 +641,9 @@ class VertexSelector(QgsMapTool):
         this tool IS the default; the maptool handles its own reversion.
         """
         self._enter_idle()
+        self._dinput.hide()
+        self.terminal_dock.clear_input_handler()
+        self._hint.hide()
         self._rm(self._hover_marker)
         self._hover_marker = None   # recreated in activate() when we come back
         super().deactivate()
@@ -492,12 +656,22 @@ class VertexSelector(QgsMapTool):
             sv   = self._gripped
             feat = sv.layer.getFeature(sv.fid)
             if not feat.geometry().isEmpty():
-                geom_copy = QgsGeometry(feat.geometry())
-                geom_copy.moveVertex(map_pt.x(), map_pt.y(), sv.vidx)
-                self._move_band.setToGeometry(geom_copy, sv.layer)
+                if sv.layer.name() == "circles":
+                    preview = self._circle_geom_for_drag(feat.geometry(), map_pt)
+                    # Keep input box near cursor; update placeholder with live radius
+                    center = self._circle_center_from_geom(feat.geometry())
+                    if center:
+                        cp = self.canvas.getCoordinateTransform().transform(map_pt)
+                        self._dinput.update(cp.x(), cp.y(), {"radius": f"{center.distance(map_pt):.3f}"})
+                else:
+                    preview = QgsGeometry(feat.geometry())
+                    preview.moveVertex(map_pt.x(), map_pt.y(), sv.vidx)
+                self._move_band.setToGeometry(preview, sv.layer)
+            self._show_hint(event.pos())
             return
 
         if self._state == _S_GRIPPED:
+            self._show_hint(event.pos())
             return  # grip markers already drawn; no extra hover feedback needed
 
         # IDLE or FEATURE — show yellow hover circle on the nearest vertex
@@ -509,6 +683,7 @@ class VertexSelector(QgsMapTool):
             self._hover_marker.setVisible(True)
         else:
             self._hover_marker.setVisible(False)
+        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
@@ -526,6 +701,7 @@ class VertexSelector(QgsMapTool):
 
         if self._state == _S_MOVING:
             self._commit_move(map_pt)
+            self.terminal_dock.command.setFocus()
             return
 
         sv = self._find_vertex_near(map_pt)
@@ -568,8 +744,13 @@ class VertexSelector(QgsMapTool):
             if edge:
                 self._enter_feature(*edge)
 
+        self.terminal_dock.command.setFocus()
+
     def canvasReleaseEvent(self, event):
         pass   # all logic handled in press
+
+    def mouseDoubleClickEvent(self, event):
+        self.terminal_dock.command.setFocus()
 
     def keyPressEvent(self, event):
         key = event.key()

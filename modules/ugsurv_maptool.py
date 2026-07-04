@@ -212,9 +212,12 @@ class UgsurvMaptool(QgsMapTool):
             self._active_tool.keyPressEvent(event)
 
     def _redirect_to_terminal(self, event):
-        cmd = self.terminal_dock.command
-        QApplication.sendEvent(cmd, event)
-        cmd.setFocus()
+        try:
+            cmd = self.terminal_dock.command
+            QApplication.sendEvent(cmd, event)
+            cmd.setFocus()
+        except RuntimeError:
+            pass
 
     def keyReleaseEvent(self, event):
         if self._active_tool and hasattr(self._active_tool, 'keyReleaseEvent'):

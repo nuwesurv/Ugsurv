@@ -18,7 +18,8 @@ Two-phase workflow:
 """
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsGeometry,
     QgsPointXY,
@@ -40,6 +41,22 @@ _ST_SELECT = 0
 _ST_TRIM   = 1
 
 _HIT_PX = 10
+
+_HINT_STYLE = (
+    "QLabel {"
+    "  background-color: rgba(20, 20, 20, 210);"
+    "  color: #f0f0f0;"
+    "  border: 1px solid rgba(255, 255, 255, 80);"
+    "  border-radius: 4px;"
+    "  padding: 3px 8px;"
+    "  font-size: 9pt;"
+    "}"
+)
+
+_HINT = {
+    _ST_SELECT: "Click cutting edges",
+    _ST_TRIM:   "Click segment to trim",
+}
 
 
 class TrimTool(QgsMapTool):
@@ -67,9 +84,30 @@ class TrimTool(QgsMapTool):
         self._pending_trims = []
         self._selected_bands = []
 
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _show_hint(self, screen_pos):
+        text = _HINT.get(self._state, "")
+        if not text:
+            self._hint.hide()
+            return
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self.canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self.canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
 
     def _make_band(self, color, width=2, dashed=False):
         band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
@@ -464,6 +502,7 @@ class TrimTool(QgsMapTool):
 
         self._state = _ST_SELECT
         self._modified_layers.clear()
+        self._hint.hide()
 
         if self._maptool:
             self._maptool.clear_tool()
@@ -473,6 +512,7 @@ class TrimTool(QgsMapTool):
 
     def canvasMoveEvent(self, event):
         self._update_preview(self.toMapCoordinates(event.pos()))
+        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
