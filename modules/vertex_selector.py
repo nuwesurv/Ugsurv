@@ -761,9 +761,16 @@ class VertexSelector(QgsMapTool):
             if area_acres_idx >= 0:
                 sv.layer.changeAttributeValue(sv.fid, area_acres_idx, 0.0)
 
-    def _find_vertex_near(self, map_pt):
+    def _find_vertex_near(self, map_pt, prefer=None):
+        """Return the nearest _SelVtx within hit tolerance.
+
+        prefer=(layer, fid): if a vertex from that feature is within tolerance
+        it is returned unconditionally, even when a vertex from another feature
+        is geometrically closer (handles shared/coincident boundary vertices).
+        """
         tol  = self._hit_tol()
         best, best_d = None, tol
+        preferred, preferred_d = None, tol
         rect = QgsRectangle(
             map_pt.x() - tol, map_pt.y() - tol,
             map_pt.x() + tol, map_pt.y() + tol,
@@ -772,12 +779,20 @@ class VertexSelector(QgsMapTool):
             for feat in lyr.getFeatures(rect):
                 if feat.geometry().isEmpty():
                     continue
+                is_pref = (prefer is not None
+                           and id(lyr) == id(prefer[0])
+                           and feat.id() == prefer[1])
                 for vidx, vpt in self._geom_verts(feat.geometry()):
                     d = map_pt.distance(vpt)
-                    if d < best_d:
-                        best_d = d
-                        best = _SelVtx(lyr, feat.id(), vidx, vpt)
-        return best
+                    if is_pref:
+                        if d < preferred_d:
+                            preferred_d = d
+                            preferred = _SelVtx(lyr, feat.id(), vidx, vpt)
+                    else:
+                        if d < best_d:
+                            best_d = d
+                            best = _SelVtx(lyr, feat.id(), vidx, vpt)
+        return preferred if preferred is not None else best
 
     def _find_edge_near(self, map_pt):
         """Return (layer, fid) of the nearest feature whose edge is within tol of map_pt.
@@ -1138,7 +1153,14 @@ class VertexSelector(QgsMapTool):
 
         map_pt = raw_pt
 
-        sv = self._find_vertex_near(map_pt)
+        # Prefer the active feature's vertices to avoid accidentally grabbing
+        # a neighbour feature that shares a coincident boundary vertex.
+        if self._state == _S_GRIPPED:
+            sv = self._find_vertex_near(map_pt, prefer=(self._gripped.layer, self._gripped.fid))
+        elif self._state == _S_FEATURE:
+            sv = self._find_vertex_near(map_pt, prefer=(self._sel_layer, self._sel_fid))
+        else:
+            sv = self._find_vertex_near(map_pt)
 
         if self._state == _S_GRIPPED:
             if sv and self._gripped_can_extend() and self._is_opposite_endpoint(sv):
