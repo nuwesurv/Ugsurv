@@ -138,6 +138,18 @@ class VertexSelector(QgsMapTool):
         self._is_dragging      = False
         self._drag_band        = None   # QgsRubberBand rectangle
 
+        # Segment drag state (edge click + drag in _S_FEATURE)
+        self._seg_press_pos = None   # QPoint screen pos where edge press started
+        self._seg_vidx1     = None   # first vertex index of the dragged segment
+        self._seg_vidx2     = None   # second vertex index
+        self._seg_orig_geom = None   # geometry copy before drag starts
+        self._seg_dragging  = False
+        self._seg_band      = None   # orange dashed preview band
+
+        # Vertex press-drag state (vertex click + drag in _S_FEATURE → instant move)
+        self._vtx_press_pos = None   # QPoint screen pos where vertex was pressed
+        self._vtx_dragging  = False  # True once drag threshold exceeded
+
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
         self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -242,6 +254,15 @@ class VertexSelector(QgsMapTool):
         self._drag_start_state = None
         self._is_dragging      = False
 
+    def _end_seg_drag(self):
+        self._rm(self._seg_band)
+        self._seg_band      = None
+        self._seg_press_pos = None
+        self._seg_vidx1     = None
+        self._seg_vidx2     = None
+        self._seg_orig_geom = None
+        self._seg_dragging  = False
+
     def _clear_feature(self):
         for m in self._feature_vtx_markers:
             self._rm(m)
@@ -297,6 +318,9 @@ class VertexSelector(QgsMapTool):
         self._clear_feature()
         self._clear_extra_selection()
         self._clear_drag()
+        self._end_seg_drag()
+        self._vtx_press_pos = None
+        self._vtx_dragging  = False
         if self._hover_marker is not None:
             self._hover_marker.setVisible(False)
 
@@ -326,7 +350,7 @@ class VertexSelector(QgsMapTool):
 
         verts = self._feature_verts(layer, fid)
         for _, vpt in verts:
-            m = self._make_marker(_C_FEAT_VTX, QgsVertexMarker.ICON_CIRCLE, 8)
+            m = self._make_marker(_C_FEAT_VTX, QgsVertexMarker.ICON_CIRCLE, 6)
             m.setCenter(vpt)
             self._feature_vtx_markers.append(m)
 
@@ -372,7 +396,7 @@ class VertexSelector(QgsMapTool):
             m = self._make_marker(
                 _C_GRIP_HOT if hot else _C_FEAT_VTX,
                 QgsVertexMarker.ICON_BOX if hot else QgsVertexMarker.ICON_CIRCLE,
-                12 if hot else 8,
+                8 if hot else 6,
             )
             m.setCenter(vpt)
             self._grip_markers.append(m)
@@ -384,6 +408,18 @@ class VertexSelector(QgsMapTool):
             gt = QgsWkbTypes.geometryType(geom.wkbType())
             self._geom_band = self._make_band(gt, _C_FEATURE, _C_FEAT_FILL, width=2)
             self._geom_band.setToGeometry(geom, sv.layer)
+
+        # Keep "+" markers at segment midpoints so the user can still insert vertices
+        self._sel_layer = sv.layer
+        self._sel_fid   = sv.fid
+        for i in range(len(verts) - 1):
+            pt1, pt2 = verts[i][1], verts[i + 1][1]
+            mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
+            m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
+            m.setCenter(mid)
+            m.setPenWidth(2)
+            self._mid_markers.append(m)
+            self._mid_points.append(mid)
 
         self._log(
             f"\nGripped vertex {sv.vidx + 1}/{len(verts)}"
@@ -527,7 +563,12 @@ class VertexSelector(QgsMapTool):
         sv.layer.triggerRepaint()
         self._log(f"\nDeleted vertex {sv.vidx + 1} of feature {sv.fid} on '{sv.layer.name()}'")
         self._update_closed_attrs(sv)
-        self._enter_idle()
+        # Stay on the feature so the user can keep editing without losing the selection
+        updated = sv.layer.getFeature(sv.fid)
+        if updated.isValid() and not updated.geometry().isEmpty():
+            self._enter_feature(sv.layer, sv.fid)
+        else:
+            self._enter_idle()
 
     def _delete_feature(self):
         all_sel = self.get_selected_features()
@@ -550,7 +591,7 @@ class VertexSelector(QgsMapTool):
         self._enter_idle()
 
     def _insert_vertex_on_segment(self, map_pt):
-        """Insert a new vertex at map_pt on the selected feature's nearest segment."""
+        """Insert a new vertex at map_pt, then immediately enter move mode on it."""
         lyr, fid = self._sel_layer, self._sel_fid
         feat = lyr.getFeature(fid)
         geom = feat.geometry()
@@ -566,8 +607,11 @@ class VertexSelector(QgsMapTool):
             lyr.startEditing()
         lyr.changeGeometry(fid, QgsGeometry.fromPolylineXY(pts))
         lyr.triggerRepaint()
-        self._log(f"\nInserted vertex at ({map_pt.x():.3f}, {map_pt.y():.3f})")
-        self._enter_feature(lyr, fid)   # refresh green highlight with new vertex
+        self._log(f"\nInserted vertex — drag or click to place  |  Esc / RMB to cancel")
+        # Grip the new vertex and immediately start moving it
+        new_sv = _SelVtx(lyr, fid, vertex_after, map_pt)
+        self._enter_gripped(new_sv)
+        self._enter_moving()
 
     def _is_opposite_endpoint(self, sv):
         """True if sv is the opposite endpoint of the same feature as the gripped vertex."""
@@ -783,6 +827,79 @@ class VertexSelector(QgsMapTool):
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
+    # Segment drag helpers
+    # ------------------------------------------------------------------
+
+    def _find_nearest_segment(self, map_pt, geom):
+        """Return (vidx1, vidx2) of the segment in geom nearest to map_pt."""
+        try:
+            _, _, after_vertex, _ = geom.closestSegmentWithContext(
+                QgsPoint(map_pt.x(), map_pt.y())
+            )
+        except Exception:
+            return None
+        if after_vertex is None or after_vertex <= 0:
+            return None
+        return (after_vertex - 1, after_vertex)
+
+    def _update_seg_band(self, dx, dy):
+        orig = self._seg_orig_geom
+        verts = self._geom_verts(orig)
+        if not verts:
+            return
+        preview = QgsGeometry(orig)
+        n = len(verts)
+        v1 = verts[self._seg_vidx1][1]
+        v2 = verts[self._seg_vidx2][1]
+        preview.moveVertex(v1.x() + dx, v1.y() + dy, self._seg_vidx1)
+        preview.moveVertex(v2.x() + dx, v2.y() + dy, self._seg_vidx2)
+        # Sync duplicate first/last vertex of closed polylines
+        if self._is_closed_polyline(orig):
+            if self._seg_vidx1 == 0:
+                preview.moveVertex(v1.x() + dx, v1.y() + dy, n - 1)
+            elif self._seg_vidx1 == n - 1:
+                preview.moveVertex(v1.x() + dx, v1.y() + dy, 0)
+            if self._seg_vidx2 == 0:
+                preview.moveVertex(v2.x() + dx, v2.y() + dy, n - 1)
+            elif self._seg_vidx2 == n - 1:
+                preview.moveVertex(v2.x() + dx, v2.y() + dy, 0)
+        if self._seg_band is None:
+            gt = QgsWkbTypes.geometryType(preview.wkbType())
+            self._seg_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2, dashed=True)
+        self._seg_band.setToGeometry(preview, self._sel_layer)
+
+    def _commit_seg_drag(self, vidx1, vidx2, dx, dy):
+        lyr, fid = self._sel_layer, self._sel_fid
+        feat  = lyr.getFeature(fid)
+        geom  = feat.geometry()
+        verts = self._geom_verts(geom)
+        if not verts:
+            return
+        v1 = verts[vidx1][1]
+        v2 = verts[vidx2][1]
+        if not lyr.isEditable():
+            lyr.startEditing()
+        lyr.moveVertex(v1.x() + dx, v1.y() + dy, fid, vidx1)
+        lyr.moveVertex(v2.x() + dx, v2.y() + dy, fid, vidx2)
+        # Sync duplicate first/last vertex of closed polylines
+        n = len(verts)
+        updated = lyr.getFeature(fid).geometry()
+        if self._is_closed_polyline(updated):
+            if vidx1 == 0:
+                lyr.moveVertex(v1.x() + dx, v1.y() + dy, fid, n - 1)
+            elif vidx1 == n - 1:
+                lyr.moveVertex(v1.x() + dx, v1.y() + dy, fid, 0)
+            if vidx2 == 0:
+                lyr.moveVertex(v2.x() + dx, v2.y() + dy, fid, n - 1)
+            elif vidx2 == n - 1:
+                lyr.moveVertex(v2.x() + dx, v2.y() + dy, fid, 0)
+        lyr.triggerRepaint()
+        self._log(f"\nMoved segment  Δ({dx:.3f}, {dy:.3f})")
+        sv_dummy = _SelVtx(lyr, fid, vidx1, QgsPointXY(v1.x() + dx, v1.y() + dy))
+        self._update_closed_attrs(sv_dummy)
+        self._enter_feature(lyr, fid)
+
+    # ------------------------------------------------------------------
     # Drag-to-select helpers
     # ------------------------------------------------------------------
 
@@ -890,6 +1007,19 @@ class VertexSelector(QgsMapTool):
     def canvasMoveEvent(self, event):
         raw_pt = self.toMapCoordinates(event.pos())
 
+        # Segment drag: left button held + started from edge click
+        if self._seg_press_pos is not None and (event.buttons() & Qt.LeftButton):
+            delta = event.pos() - self._seg_press_pos
+            if not self._seg_dragging and (abs(delta.x()) > _DRAG_PX or abs(delta.y()) > _DRAG_PX):
+                self._seg_dragging = True
+            if self._seg_dragging:
+                start_map = self.toMapCoordinates(self._seg_press_pos)
+                cur_map   = self.toMapCoordinates(event.pos())
+                self._update_seg_band(cur_map.x() - start_map.x(), cur_map.y() - start_map.y())
+                if self._hover_marker is not None:
+                    self._hover_marker.setVisible(False)
+                return
+
         # Drag-to-select: left button held + started from empty space
         if self._drag_start is not None and (event.buttons() & Qt.LeftButton):
             delta = event.pos() - self._drag_start
@@ -900,6 +1030,30 @@ class VertexSelector(QgsMapTool):
                 if self._hover_marker is not None:
                     self._hover_marker.setVisible(False)
                 return
+
+        # Vertex press-drag: left button held after clicking a vertex in _S_FEATURE
+        if self._vtx_press_pos is not None and (event.buttons() & Qt.LeftButton):
+            delta = event.pos() - self._vtx_press_pos
+            if not self._vtx_dragging and (abs(delta.x()) > _DRAG_PX or abs(delta.y()) > _DRAG_PX):
+                self._vtx_dragging = True
+                # Silently enter moving mode (no dialog, no log noise)
+                self._state = _S_MOVING
+                if self._geom_band:
+                    self._geom_band.setVisible(False)
+                self._rm(self._move_band)
+                self._move_band = None
+                sv   = self._gripped
+                feat = sv.layer.getFeature(sv.fid)
+                geom = feat.geometry()
+                gt   = (QgsWkbTypes.geometryType(geom.wkbType())
+                        if not geom.isEmpty() else QgsWkbTypes.LineGeometry)
+                self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
+                self._move_band.setToGeometry(geom, sv.layer)
+                if self._hover_marker is not None:
+                    self._hover_marker.setVisible(False)
+            if not self._vtx_dragging:
+                return  # within threshold — wait
+            # _vtx_dragging is True → fall through to _S_MOVING handler below
 
         if self._state == _S_MOVING:
             map_pt = self._snap_point(event.pos(), raw_pt)
@@ -987,71 +1141,82 @@ class VertexSelector(QgsMapTool):
         sv = self._find_vertex_near(map_pt)
 
         if self._state == _S_GRIPPED:
-            if self._same_grip(sv):
-                self._enter_moving()        # second click on same grip → move
-            elif sv and self._gripped_can_extend() and self._is_opposite_endpoint(sv):
+            if sv and self._gripped_can_extend() and self._is_opposite_endpoint(sv):
                 # Clicked the opposite endpoint of the same feature → close the line
                 if self._move_band is not None:
                     self._move_band.reset(QgsWkbTypes.LineGeometry)
                 self._snap_marker.setVisible(False)
                 self._extend_line(sv.point)
-            elif sv and id(sv.layer) == id(self._gripped.layer) and sv.fid == self._gripped.fid:
-                self._enter_gripped(sv)     # different vertex of same feature → switch grip
-            elif sv and not self._gripped_can_extend():
-                pass   # neighbour vertex while gripped on mid-vertex — stay gripped
-            elif self._gripped_can_extend():
-                # Gripped on endpoint: extend, landing precisely on a neighbour vertex if hit
-                commit_pt = sv.point if sv is not None else self._snap_point(event.pos(), raw_pt)
-                self._snap_marker.setVisible(False)
-                if self._move_band is not None:
-                    self._move_band.reset(QgsWkbTypes.LineGeometry)
-                self._extend_line(commit_pt)
+            elif sv:
+                # Any vertex clicked (same or different feature) → grip it and move immediately
+                self._enter_gripped(sv)
+                self._enter_moving()
+                self._vtx_press_pos = event.pos()
             else:
-                self._enter_idle()          # mid-vertex gripped + empty space → deselect
+                mpt = self._find_midpoint_near(map_pt)
+                if mpt is not None:
+                    self._insert_vertex_on_segment(mpt)
+                elif self._gripped_can_extend():
+                    # Gripped on endpoint, clicked empty space → extend the line
+                    commit_pt = self._snap_point(event.pos(), raw_pt)
+                    self._snap_marker.setVisible(False)
+                    if self._move_band is not None:
+                        self._move_band.reset(QgsWkbTypes.LineGeometry)
+                    self._extend_line(commit_pt)
+                else:
+                    self._enter_idle()          # empty space → deselect
             return
 
         if self._state == _S_FEATURE:
-            mpt = self._find_midpoint_near(map_pt)
-            if mpt is not None:
-                self._insert_vertex_on_segment(mpt)  # "+" clicked → insert at exact midpoint
-                return
             shift = bool(event.modifiers() & Qt.ShiftModifier)
+
+            # 1. Vertex of active feature — highest priority.
+            #    Checked before '+' so stacked/close vertices are always grippable.
             if sv and id(sv.layer) == id(self._sel_layer) and sv.fid == self._sel_fid:
                 if shift:
-                    # Shift+click on active feature → deselect it entirely
                     self._enter_idle()
                 else:
-                    self._enter_gripped(sv)          # vertex on selected feature → grip it
-            else:
-                sel_feat = self._sel_layer.getFeature(self._sel_fid)
-                sel_geom = sel_feat.geometry()
-                tol      = self._hit_tol()
-                check_pt = sv.point if sv is not None else map_pt
-                if (not sel_geom.isEmpty()
-                        and sel_geom.distance(QgsGeometry.fromPointXY(check_pt)) <= tol):
-                    if shift:
-                        self._enter_idle()           # Shift+click active feature edge → deselect
-                    else:
-                        self._insert_vertex_on_segment(check_pt)
+                    self._enter_gripped(sv)
+                    self._enter_moving()               # skip grip step — go straight to move
+                    self._vtx_press_pos = event.pos()  # also support press-drag
+                return
+
+            # 2. '+' midpoint marker — only reachable when no active-feature vertex was hit.
+            mpt = self._find_midpoint_near(map_pt)
+            if mpt is not None:
+                self._insert_vertex_on_segment(mpt)
+                return
+
+            # 3. Edge of active feature, another feature, or empty space.
+            sel_feat = self._sel_layer.getFeature(self._sel_fid)
+            sel_geom = sel_feat.geometry()
+            tol      = self._hit_tol()
+            check_pt = sv.point if sv is not None else map_pt
+            if (not sel_geom.isEmpty()
+                    and sel_geom.distance(QgsGeometry.fromPointXY(check_pt)) <= tol):
+                if shift:
+                    self._enter_idle()           # Shift+click active feature edge → deselect
                 else:
-                    # Click is not on the active feature — check for another feature
-                    edge = self._find_edge_near(map_pt)
-                    if edge:
-                        other_lyr, other_fid = edge
-                        if shift:
-                            # Shift+click another feature → remove it from selection
-                            if not self._remove_from_extra(other_lyr, other_fid):
-                                # Not in extra: check if it's somehow the active one
-                                if (id(other_lyr) == id(self._sel_layer)
-                                        and other_fid == self._sel_fid):
-                                    self._enter_idle()
-                        else:
-                            # Plain click another feature → add to multi-selection
-                            self._enter_feature(other_lyr, other_fid)
+                    # Record potential segment drag; drag = move segment, plain click = nothing
+                    seg = self._find_nearest_segment(map_pt, sel_geom)
+                    if seg is not None:
+                        self._seg_press_pos = event.pos()
+                        self._seg_vidx1, self._seg_vidx2 = seg
+                        self._seg_orig_geom = QgsGeometry(sel_geom)
+            else:
+                edge = self._find_edge_near(map_pt)
+                if edge:
+                    other_lyr, other_fid = edge
+                    if shift:
+                        if not self._remove_from_extra(other_lyr, other_fid):
+                            if (id(other_lyr) == id(self._sel_layer)
+                                    and other_fid == self._sel_fid):
+                                self._enter_idle()
                     else:
-                        # Empty space — defer: drag selects, plain click clears
-                        self._drag_start       = event.pos()
-                        self._drag_start_state = _S_FEATURE
+                        self._enter_feature(other_lyr, other_fid)
+                else:
+                    self._drag_start       = event.pos()
+                    self._drag_start_state = _S_FEATURE
             return
 
         # IDLE
@@ -1061,6 +1226,7 @@ class VertexSelector(QgsMapTool):
                 self._remove_from_extra(sv.layer, sv.fid)
             else:
                 self._enter_gripped(sv)
+                self._vtx_press_pos = event.pos()  # track for immediate drag
         else:
             edge = self._find_edge_near(map_pt)
             if edge:
@@ -1077,7 +1243,43 @@ class VertexSelector(QgsMapTool):
         self.terminal_dock.command.setFocus()
 
     def canvasReleaseEvent(self, event):
-        if event.button() != Qt.LeftButton or self._drag_start is None:
+        if event.button() != Qt.LeftButton:
+            return
+
+        # Vertex press-drag release
+        if self._vtx_press_pos is not None:
+            was_dragging        = self._vtx_dragging
+            self._vtx_press_pos = None
+            self._vtx_dragging  = False
+            if was_dragging:
+                raw_pt    = self.toMapCoordinates(event.pos())
+                commit_pt = self._snap_point(event.pos(), raw_pt)
+                self._snap_marker.setVisible(False)
+                self._commit_move(commit_pt)
+                self.terminal_dock.command.setFocus()
+            # plain click: already gripped, stay there
+            return
+
+        # Segment drag release
+        if self._seg_press_pos is not None:
+            was_dragging = self._seg_dragging
+            press_pos    = self._seg_press_pos
+            vidx1        = self._seg_vidx1
+            vidx2        = self._seg_vidx2
+            self._end_seg_drag()
+            if was_dragging:
+                start_map = self.toMapCoordinates(press_pos)
+                cur_map   = self.toMapCoordinates(event.pos())
+                self._commit_seg_drag(
+                    vidx1, vidx2,
+                    cur_map.x() - start_map.x(),
+                    cur_map.y() - start_map.y(),
+                )
+            # plain click on edge: do nothing — stay in FEATURE state as-is
+            return
+
+        # Rect drag-to-select release
+        if self._drag_start is None:
             return
         start_pos    = self._drag_start
         start_state  = self._drag_start_state
