@@ -27,7 +27,7 @@ from . import crs_utils
 LAYER_NAME = "polylines"
 LAYER_COLOR = "#E05C00"
 RUBBER_BAND_COLOR = QColor(224, 92, 0)
-SNAP_MARKER_COLOR = QColor(224, 92, 0)
+SNAP_MARKER_COLOR = QColor(66, 135, 245)
 TEXT_COLOR = QColor(180, 70, 0)
 LABEL_FONT = QFont("Arial", 8)
 LABEL_COLOR = QColor("#393939")

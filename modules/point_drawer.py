@@ -26,6 +26,7 @@ from qgis.core import (
     QgsSingleSymbolRenderer,
 )
 from .dynamic_input import DynamicInput
+from .snap_config import snapSettingConfig
 
 
 _LAYER_NAME = "_points"
@@ -53,6 +54,7 @@ class PointDrawer(QgsMapTool):
         self._snap_ind     = None
 
         self._layer = self._get_or_create_layer()
+        snapSettingConfig()
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -84,7 +86,7 @@ class PointDrawer(QgsMapTool):
         symbol = QgsMarkerSymbol.createSimple({
             "color": "0,140,220,255",
             "outline_style": "no",
-            "size": "3",
+            "size": "2",
         })
         lyr.setRenderer(QgsSingleSymbolRenderer(symbol))
         QgsProject.instance().addMapLayer(lyr)

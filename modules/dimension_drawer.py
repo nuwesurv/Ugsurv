@@ -73,7 +73,7 @@ class DimensionDrawer(QgsMapTool):
 
         # create it once when initializing your tool
         self.snap_marker = QgsVertexMarker(self.canvas)
-        self.snap_marker.setColor(QColor(255, 0, 0))  # red
+        self.snap_marker.setColor(QColor(66, 135, 245))
         self.snap_marker.setIconSize(10)
         self.snap_marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
         self.snap_marker.setPenWidth(2)

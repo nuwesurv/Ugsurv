@@ -110,7 +110,7 @@ class VertexSelector(QgsMapTool):
         self._hover_marker.setVisible(False)
 
         # MOVING: cyan snap indicator
-        self._snap_marker = self._make_marker(QColor(0, 180, 255, 220), QgsVertexMarker.ICON_CIRCLE, 10)
+        self._snap_marker = self._make_marker(QColor(66, 135, 245, 220), QgsVertexMarker.ICON_CIRCLE, 10)
         self._snap_marker.setVisible(False)
 
         # GRIPPED: one marker per vertex of the gripped feature
@@ -772,6 +772,13 @@ class VertexSelector(QgsMapTool):
         if match.isValid():
             snapped = match.point()
             self._snap_marker.setCenter(snapped)
+            icon_map = {
+                QgsPointLocator.Vertex:          QgsVertexMarker.ICON_CIRCLE,
+                QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE,
+                QgsPointLocator.Area:            QgsVertexMarker.ICON_RHOMBUS,
+                QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,
+            }
+            self._snap_marker.setIconType(icon_map.get(match.type(), QgsVertexMarker.ICON_X))
             self._snap_marker.setVisible(True)
             return snapped
         self._snap_marker.setVisible(False)
@@ -1114,7 +1121,7 @@ class VertexSelector(QgsMapTool):
             self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
             self._hover_marker.setVisible(False)
         if self._snap_marker is None:
-            self._snap_marker = self._make_marker(QColor(0, 180, 255, 220), QgsVertexMarker.ICON_CIRCLE, 10)
+            self._snap_marker = self._make_marker(QColor(66, 135, 245, 220), QgsVertexMarker.ICON_CIRCLE, 10)
             self._snap_marker.setVisible(False)
 
     def deactivate(self):

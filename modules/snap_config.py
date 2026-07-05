@@ -1,4 +1,8 @@
 from qgis.core import QgsProject, QgsSnappingConfig, QgsTolerance
+from qgis.core import QgsSettings
+from qgis.PyQt.QtGui import QColor
+
+_SNAP_COLOR = QColor(66, 135, 245)
 
 def snapSettingConfig():
     '''
@@ -25,3 +29,6 @@ def snapSettingConfig():
         snapping_config.setUnits(QgsTolerance.Pixels)
     # Important: set it back to the project
     project.setSnappingConfig(snapping_config)
+
+    # Set snap indicator color used by QgsSnapIndicator (read at construction time)
+    QgsSettings().setValue("/qgis/digitizing/snap_color", _SNAP_COLOR)

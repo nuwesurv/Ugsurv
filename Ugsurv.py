@@ -378,6 +378,10 @@ class Ugsurv:
             fake = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
             active.keyPressEvent(fake)
 
+        # Always clear any partially typed text in the terminal command field
+        if hasattr(self, 'terminal_dock') and self.terminal_dock:
+            self.terminal_dock.command.clear()
+
     def acceptInput(self):
         # If a QGIS built-in tool displaced ours, reclaim the canvas before acting.
         if hasattr(self, 'global_map_tool') and self.global_map_tool:
