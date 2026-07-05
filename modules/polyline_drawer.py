@@ -20,11 +20,12 @@ from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
+from .layer_utils import add_to_plugin_group
 import math
 from . import crs_utils
 
 
-LAYER_NAME = "polylines"
+LAYER_NAME = "_polylines"
 LAYER_COLOR = "#E05C00"
 RUBBER_BAND_COLOR = QColor(224, 92, 0)
 SNAP_MARKER_COLOR = QColor(66, 135, 245)
@@ -174,7 +175,7 @@ class PolylineDrawer(QgsMapTool):
         })
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
-        QgsProject.instance().addMapLayer(layer)
+        add_to_plugin_group(layer)
         layer.startEditing()
         return layer
 
@@ -435,7 +436,6 @@ class PolylineDrawer(QgsMapTool):
             self.terminal_dock.command.setFocus()
 
         self.polyline_layer.updateExtents()
-        self.polyline_layer.commitChanges()
 
         self._clear_preview()
         self._hint.hide()

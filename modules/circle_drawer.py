@@ -27,6 +27,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
+from .layer_utils import add_to_plugin_group
 import math
 from . import crs_utils
 
@@ -162,7 +163,7 @@ class CircleDrawer(QgsMapTool):
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
         layer.setLabelsEnabled(False)
 
-        QgsProject.instance().addMapLayer(layer)
+        add_to_plugin_group(layer)
         layer.startEditing()
         return layer
 
@@ -351,7 +352,6 @@ class CircleDrawer(QgsMapTool):
             self.terminal_dock.command.setFocus()
 
         self.circle_layer.updateExtents()
-        self.circle_layer.commitChanges()
 
         self._clear_preview()
         self._hint.hide()

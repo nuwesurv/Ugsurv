@@ -481,13 +481,8 @@ class TrimTool(QgsMapTool):
 
     def _finish(self):
         self._confirm_all_trims()
-        for lyr in self._modified_layers:
-            try:
-                lyr.commitChanges()
-            except Exception:
-                pass
         if self._modified_layers:
-            self._log(f"\nCommitted changes to {len(self._modified_layers)} layer(s)")
+            self._log(f"\nApplied changes to {len(self._modified_layers)} layer(s)")
         self.deactivate()
 
     # ------------------------------------------------------------------

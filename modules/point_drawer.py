@@ -27,6 +27,7 @@ from qgis.core import (
 )
 from .dynamic_input import DynamicInput
 from .snap_config import snapSettingConfig
+from .layer_utils import add_to_plugin_group
 
 
 _LAYER_NAME = "_points"
@@ -89,7 +90,7 @@ class PointDrawer(QgsMapTool):
             "size": "2",
         })
         lyr.setRenderer(QgsSingleSymbolRenderer(symbol))
-        QgsProject.instance().addMapLayer(lyr)
+        add_to_plugin_group(lyr)
         lyr.startEditing()
         return lyr
 
@@ -206,10 +207,6 @@ class PointDrawer(QgsMapTool):
         self.terminal_dock.clear_input_handler()
         self._snap_ind = None
         self._hint.hide()
-        try:
-            self._layer.commitChanges()
-        except Exception:
-            pass
         if self._maptool:
             self._maptool.clear_tool()
         self._log("\n........\n")

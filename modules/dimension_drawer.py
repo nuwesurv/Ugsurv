@@ -22,6 +22,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
+from .layer_utils import add_to_plugin_group
 from . import crs_utils
 import math
 
@@ -180,9 +181,7 @@ class DimensionDrawer(QgsMapTool):
         else:
             self.canvas.unsetMapTool(self)
             self.terminal_dock.command.setFocus()
-        # Commit any remaining edits
         self.dim_layer.updateExtents()
-        self.dim_layer.commitChanges()
 
         # Hide snap marker and clear state
         self.rubber_band.reset(QgsWkbTypes.LineGeometry)
@@ -204,7 +203,7 @@ class DimensionDrawer(QgsMapTool):
             
             
     def getDimensionLayer(self):
-        layer_name = "dimension_layer"
+        layer_name = "_dimension_layer"
         layers = QgsProject.instance().mapLayersByName(layer_name)
 
         if layers:
@@ -215,7 +214,7 @@ class DimensionDrawer(QgsMapTool):
         # provider.addAttributes([QgsField("distance", "double")])
         provider.addAttributes([QgsField("distance", QVariant.Double)])
         self.dim_layer.updateFields()
-        QgsProject.instance().addMapLayer(self.dim_layer)
+        add_to_plugin_group(self.dim_layer)
         
         # Set the symbol settings
         self.symbol = QgsLineSymbol.createSimple({
