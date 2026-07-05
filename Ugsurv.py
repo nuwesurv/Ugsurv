@@ -82,6 +82,7 @@ from .modules.join_tool import JoinTool
 from .modules.break_tool import BreakTool
 from .modules.chamfer_tool import ChamferTool
 from .modules.explode_tool import ExplodeTool
+from .modules.point_drawer import PointDrawer
 import ast
 
 
@@ -124,7 +125,7 @@ class Ugsurv:
         # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap', 'move', 'trim', 'copy', 'offset', 'rotate', 'scale', 'break', 'chamfer', 'explode'] # was created for suggection purposes.
+        self.command_list = ['pp', 'dim', 'adim', 'circle', 'point', 'ts', 'pt_overlap', 'move', 'trim', 'copy', 'offset', 'rotate', 'scale', 'break', 'chamfer', 'explode'] # was created for suggection purposes.
         ...
         self.active = False  # Track plugin toggle state
         ...
@@ -313,7 +314,7 @@ class Ugsurv:
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.terminal_dock.set_commands([
             # Drawing tools (AutoCAD-standard names)
-            'CIRCLE', 'PLINE', 'DIM', 'ADIM',
+            'CIRCLE', 'POINT', 'PLINE', 'DIM', 'ADIM',
             'MOVE', 'COPY', 'ROTATE', 'SCALE', 'OFFSET',
             'TRIM', 'EXTEND', 'JOIN',
             'BREAK', 'CHAMFER', 'EXPLODE',
@@ -439,6 +440,7 @@ class Ugsurv:
             self.terminal_dock.commandOutputText += (
                 "\n── Drawing ──────────────────────────"
                 "\n  CIRCLE  [C ]   Draw a circle"
+                "\n  POINT   [PT]   Place point(s) by click or X,Y"
                 "\n  PLINE   [PL]   Draw a polyline"
                 "\n  MOVE    [M ]   Move a feature"
                 "\n  COPY    [CO]   Copy a feature to new position(s)"
@@ -484,6 +486,9 @@ class Ugsurv:
 
         elif cmd in ('circle', 'c'):
             self.global_map_tool.set_tool(CircleDrawer(self.canvas, self.terminal_dock))
+
+        elif cmd in ('point', 'pt'):
+            self.global_map_tool.set_tool(PointDrawer(self.canvas, self.terminal_dock))
 
         elif cmd in ('pline', 'pl'):
             self.global_map_tool.set_tool(PolylineDrawer(self.canvas, self.terminal_dock))

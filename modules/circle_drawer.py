@@ -31,7 +31,7 @@ import math
 from . import crs_utils
 
 
-LAYER_NAME = "circles"
+LAYER_NAME = "_circles"
 LAYER_COLOR_OUTLINE = "#E05C00"
 LAYER_COLOR_FILL = "224,92,0,0"
 RUBBER_BAND_COLOR = QColor(224, 92, 0)
