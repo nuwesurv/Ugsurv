@@ -66,6 +66,10 @@ _C_FEAT_VTX    = QColor(  0, 180,  60, 200)   # green – vertex markers on sele
 _C_MID_MARKER  = QColor( 60, 180,  40, 220)   # medium green – segment midpoint "+" button
 _C_SEL_EXTRA   = QColor(  0, 180, 220, 200)   # teal – secondary selected features
 _C_SEL_EX_FILL = QColor(  0, 180, 220,  20)   # faint teal fill
+_C_DRAG_BORDER = QColor(  0, 120, 255, 200)   # blue – drag-select rectangle border
+_C_DRAG_FILL   = QColor(  0, 120, 255,  25)   # faint blue fill
+
+_DRAG_PX = 5   # pixels the mouse must move before a press is treated as a drag
 
 _HINT_STYLE = (
     "QLabel {"
@@ -127,6 +131,12 @@ class VertexSelector(QgsMapTool):
         # Multi-selection: secondary selected features (not the current active one)
         self._sel_extra_bands = []   # QgsRubberBand per secondary feature
         self._sel_extra_items = []   # (layer, fid) parallel to above
+
+        # Drag-to-select state
+        self._drag_start       = None   # QPoint screen pos where drag started
+        self._drag_start_state = None   # _S_IDLE or _S_FEATURE at drag start
+        self._is_dragging      = False
+        self._drag_band        = None   # QgsRubberBand rectangle
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -225,6 +235,13 @@ class VertexSelector(QgsMapTool):
         self._rm(self._move_band)
         self._move_band = None
 
+    def _clear_drag(self):
+        self._rm(self._drag_band)
+        self._drag_band        = None
+        self._drag_start       = None
+        self._drag_start_state = None
+        self._is_dragging      = False
+
     def _clear_feature(self):
         for m in self._feature_vtx_markers:
             self._rm(m)
@@ -279,6 +296,7 @@ class VertexSelector(QgsMapTool):
         self._clear_bands()
         self._clear_feature()
         self._clear_extra_selection()
+        self._clear_drag()
         if self._hover_marker is not None:
             self._hover_marker.setVisible(False)
 
@@ -764,6 +782,40 @@ class VertexSelector(QgsMapTool):
     # Logging
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Drag-to-select helpers
+    # ------------------------------------------------------------------
+
+    def _update_drag_band(self, screen_pos):
+        p1 = self.toMapCoordinates(self._drag_start)
+        p2 = self.toMapCoordinates(screen_pos)
+        if self._drag_band is None:
+            self._drag_band = self._make_band(
+                QgsWkbTypes.PolygonGeometry, _C_DRAG_BORDER, _C_DRAG_FILL
+            )
+        rect = QgsRectangle(p1.x(), p1.y(), p2.x(), p2.y())
+        self._drag_band.setToGeometry(QgsGeometry.fromRect(rect), None)
+
+    def _select_in_rect(self, rect):
+        rect_geom = QgsGeometry.fromRect(rect)
+        found = []
+        for lyr in self._vector_layers():
+            for feat in lyr.getFeatures(rect):
+                geom = feat.geometry()
+                if geom.isEmpty():
+                    continue
+                if geom.intersects(rect_geom):
+                    found.append((lyr, feat.id()))
+        if not found:
+            self._log("\nNo features in selection rectangle")
+            return
+        for lyr, fid in found:
+            self._enter_feature(lyr, fid)
+        n = len(self.get_selected_features())
+        self._log(f"\n{n} feature(s) selected")
+
+    # ------------------------------------------------------------------
+
     def get_selected_feature(self):
         """Return (layer, fid) if a feature is currently highlighted or gripped, else None."""
         if self._state == _S_FEATURE:
@@ -837,6 +889,17 @@ class VertexSelector(QgsMapTool):
 
     def canvasMoveEvent(self, event):
         raw_pt = self.toMapCoordinates(event.pos())
+
+        # Drag-to-select: left button held + started from empty space
+        if self._drag_start is not None and (event.buttons() & Qt.LeftButton):
+            delta = event.pos() - self._drag_start
+            if not self._is_dragging and (abs(delta.x()) > _DRAG_PX or abs(delta.y()) > _DRAG_PX):
+                self._is_dragging = True
+            if self._is_dragging:
+                self._update_drag_band(event.pos())
+                if self._hover_marker is not None:
+                    self._hover_marker.setVisible(False)
+                return
 
         if self._state == _S_MOVING:
             map_pt = self._snap_point(event.pos(), raw_pt)
@@ -986,7 +1049,9 @@ class VertexSelector(QgsMapTool):
                             # Plain click another feature → add to multi-selection
                             self._enter_feature(other_lyr, other_fid)
                     else:
-                        self._enter_idle()           # click empty space → clear all
+                        # Empty space — defer: drag selects, plain click clears
+                        self._drag_start       = event.pos()
+                        self._drag_start_state = _S_FEATURE
             return
 
         # IDLE
@@ -1004,11 +1069,31 @@ class VertexSelector(QgsMapTool):
                     self._remove_from_extra(other_lyr, other_fid)
                 else:
                     self._enter_feature(*edge)
+            else:
+                # Empty space — start drag-to-select
+                self._drag_start       = event.pos()
+                self._drag_start_state = _S_IDLE
 
         self.terminal_dock.command.setFocus()
 
     def canvasReleaseEvent(self, event):
-        pass   # all logic handled in press
+        if event.button() != Qt.LeftButton or self._drag_start is None:
+            return
+        start_pos    = self._drag_start
+        start_state  = self._drag_start_state
+        was_dragging = self._is_dragging
+        self._clear_drag()
+
+        if was_dragging:
+            p1 = self.toMapCoordinates(start_pos)
+            p2 = self.toMapCoordinates(event.pos())
+            rect = QgsRectangle(
+                min(p1.x(), p2.x()), min(p1.y(), p2.y()),
+                max(p1.x(), p2.x()), max(p1.y(), p2.y()),
+            )
+            self._select_in_rect(rect)
+        elif start_state == _S_FEATURE:
+            self._enter_idle()   # plain click on empty space in FEATURE → clear
 
     def mouseDoubleClickEvent(self, event):
         self.terminal_dock.command.setFocus()
