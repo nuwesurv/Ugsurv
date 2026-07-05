@@ -22,7 +22,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
 from . import crs_utils
 import math
 
@@ -202,51 +202,53 @@ class DimensionDrawer(QgsMapTool):
         self.terminal_dock.command.setFocus()
             
             
-    def getDimensionLayer(self):
-        layer_name = "_dimension_layer"
-        layers = QgsProject.instance().mapLayersByName(layer_name)
+    def _apply_dim_style(self, layer):
+        symbol = QgsLineSymbol.createSimple({
+            'color': 'transparent',
+            'width': '0',
+            'line_style': 'dashed',
+        })
+        layer.renderer().setSymbol(symbol)
 
-        if layers:
-            return layers[0]
+        label_settings = QgsPalLayerSettings()
+        label_settings.fieldName = 'distance'
+        label_settings.placement = QgsPalLayerSettings.Line
 
-        self.dim_layer = QgsVectorLayer(f"LineString?crs=EPSG:{self.appropriate_crs}", layer_name, "memory")
-        provider = self.dim_layer.dataProvider()
-        # provider.addAttributes([QgsField("distance", "double")])
-        provider.addAttributes([QgsField("distance", QVariant.Double)])
-        self.dim_layer.updateFields()
-        add_to_plugin_group(self.dim_layer)
-        
-        # Set the symbol settings
-        self.symbol = QgsLineSymbol.createSimple({
-                    'color': 'transparent',
-                    'width': '0',
-                    'line_style': 'dashed'
-                })
-        self.dim_layer.renderer().setSymbol(self.symbol)
-        
-        # Set label settings
-        self.label_settings = QgsPalLayerSettings()
-        self.label_settings.fieldName = 'distance'  # field to show
-        self.label_settings.placement = QgsPalLayerSettings.Line  # place labels along lines
-        
         _font = QFont("Century Gothic", 10)
         _font.setBold(True)
         _font.setItalic(True)
-        self.text_format = QgsTextFormat()
-        self.text_format.setFont(_font)
-        self.text_format.setColor(QColor(0, 0, 0))
-        self.text_format.setSize(10)
+        text_format = QgsTextFormat()
+        text_format.setFont(_font)
+        text_format.setColor(QColor(0, 0, 0))
+        text_format.setSize(10)
+        label_settings.setFormat(text_format)
 
-        self.label_settings.setFormat(self.text_format)
-        
-        self.labeling = QgsVectorLayerSimpleLabeling(self.label_settings)
-        self.dim_layer.setLabelsEnabled(True)
-        self.dim_layer.setLabeling(self.labeling)
-        self.dim_layer.triggerRepaint()
-        
-        self.dim_layer.startEditing()
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
+        layer.setLabelsEnabled(True)
+        layer.triggerRepaint()
 
-        return self.dim_layer
+    def getDimensionLayer(self):
+        layer_name = "_dimension_layer"
+        layers = QgsProject.instance().mapLayersByName(layer_name)
+        if layers:
+            return layers[0]
+
+        layer = open_layer_from_gpkg(layer_name)
+        if layer:
+            self._apply_dim_style(layer)
+            add_to_plugin_group(layer)
+            layer.startEditing()
+            return layer
+
+        mem = QgsVectorLayer(f"LineString?crs=EPSG:{self.appropriate_crs}", layer_name, "memory")
+        mem.dataProvider().addAttributes([QgsField("distance", QVariant.Double)])
+        mem.updateFields()
+
+        layer = create_layer_in_gpkg(mem)
+        self._apply_dim_style(layer)
+        add_to_plugin_group(layer)
+        layer.startEditing()
+        return layer
 
 
 

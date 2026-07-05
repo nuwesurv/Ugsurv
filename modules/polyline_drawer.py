@@ -20,7 +20,7 @@ from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
 import math
 from . import crs_utils
 
@@ -140,6 +140,13 @@ class PolylineDrawer(QgsMapTool):
                 layer.startEditing()
             self._ensure_fields(layer)
             return layer
+        layer = open_layer_from_gpkg(LAYER_NAME)
+        if layer:
+            self._ensure_fields(layer)
+            self._apply_polyline_style(layer)
+            add_to_plugin_group(layer)
+            layer.startEditing()
+            return layer
         return self._create_polyline_layer()
 
     def _ensure_fields(self, layer):
@@ -153,21 +160,7 @@ class PolylineDrawer(QgsMapTool):
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
 
-    def _create_polyline_layer(self):
-        layer = QgsVectorLayer(
-            f"LineString?crs=EPSG:{self.appropriate_crs}",
-            LAYER_NAME,
-            "memory"
-        )
-        provider = layer.dataProvider()
-        provider.addAttributes([
-            QgsField("length",     QVariant.Double),
-            QgsField("closed",     QVariant.Bool),
-            QgsField("area_sqm",   QVariant.Double),
-            QgsField("area_acres", QVariant.Double),
-        ])
-        layer.updateFields()
-
+    def _apply_polyline_style(self, layer):
         symbol = QgsLineSymbol.createSimple({
             "color": LAYER_COLOR,
             "width": "0.4",
@@ -175,6 +168,22 @@ class PolylineDrawer(QgsMapTool):
         })
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
+    def _create_polyline_layer(self):
+        mem = QgsVectorLayer(
+            f"LineString?crs=EPSG:{self.appropriate_crs}",
+            LAYER_NAME,
+            "memory"
+        )
+        mem.dataProvider().addAttributes([
+            QgsField("length",     QVariant.Double),
+            QgsField("closed",     QVariant.Bool),
+            QgsField("area_sqm",   QVariant.Double),
+            QgsField("area_acres", QVariant.Double),
+        ])
+        mem.updateFields()
+
+        layer = create_layer_in_gpkg(mem)
+        self._apply_polyline_style(layer)
         add_to_plugin_group(layer)
         layer.startEditing()
         return layer

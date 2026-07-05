@@ -27,7 +27,7 @@ from qgis.core import (
 )
 from .dynamic_input import DynamicInput
 from .snap_config import snapSettingConfig
-from .layer_utils import add_to_plugin_group
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
 
 
 _LAYER_NAME = "_points"
@@ -79,17 +79,27 @@ class PointDrawer(QgsMapTool):
             if not lyr.isEditable():
                 lyr.startEditing()
             return lyr
+        lyr = open_layer_from_gpkg(_LAYER_NAME)
+        if lyr:
+            self._apply_point_style(lyr)
+            add_to_plugin_group(lyr)
+            lyr.startEditing()
+            return lyr
         return self._create_layer()
 
-    def _create_layer(self):
-        crs = QgsProject.instance().crs().authid()
-        lyr = QgsVectorLayer(f"Point?crs={crs}", _LAYER_NAME, "memory")
+    def _apply_point_style(self, lyr):
         symbol = QgsMarkerSymbol.createSimple({
             "color": "0,140,220,255",
             "outline_style": "no",
             "size": "2",
         })
         lyr.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+    def _create_layer(self):
+        crs = QgsProject.instance().crs().authid()
+        mem = QgsVectorLayer(f"Point?crs={crs}", _LAYER_NAME, "memory")
+        lyr = create_layer_in_gpkg(mem)
+        self._apply_point_style(lyr)
         add_to_plugin_group(lyr)
         lyr.startEditing()
         return lyr
