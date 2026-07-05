@@ -493,20 +493,30 @@ class Ugsurv:
             self.global_map_tool.set_tool(ExtendTool(self.canvas, self.terminal_dock))
 
         elif cmd in ('join', 'j'):
-            self.global_map_tool.set_tool(JoinTool(self.canvas, self.terminal_dock))
+            preselect = None
+            vs = self.global_map_tool._default_tool
+            if hasattr(vs, 'get_selected_features'):
+                sel = vs.get_selected_features()
+                if sel:
+                    preselect = sel
+            self.global_map_tool.set_tool(JoinTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('move', 'm'):
             preselect = None
             vs = self.global_map_tool._default_tool
-            if hasattr(vs, 'get_selected_feature'):
-                preselect = vs.get_selected_feature()
+            if hasattr(vs, 'get_selected_features'):
+                sel = vs.get_selected_features()
+                if sel:
+                    preselect = sel
             self.global_map_tool.set_tool(MoveTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('copy', 'co'):
             preselect = None
             vs = self.global_map_tool._default_tool
-            if hasattr(vs, 'get_selected_feature'):
-                preselect = vs.get_selected_feature()
+            if hasattr(vs, 'get_selected_features'):
+                sel = vs.get_selected_features()
+                if sel:
+                    preselect = sel
             self.global_map_tool.set_tool(CopyTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('offset', 'o', 'ofs'):
@@ -524,8 +534,10 @@ class Ugsurv:
         elif cmd in ('rotate', 'ro'):
             preselect = None
             vs = self.global_map_tool._default_tool
-            if hasattr(vs, 'get_selected_feature'):
-                preselect = vs.get_selected_feature()
+            if hasattr(vs, 'get_selected_features'):
+                sel = vs.get_selected_features()
+                if sel:
+                    preselect = sel
             self.global_map_tool.set_tool(RotateTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('dim', 'di'):

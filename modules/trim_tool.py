@@ -242,20 +242,30 @@ class TrimTool(QgsMapTool):
     # Cutting-edge management
     # ------------------------------------------------------------------
 
-    def _toggle_cutting_edge(self, layer, feat):
+    def _update_cutting_edge(self, layer, feat, shift=False):
         key  = (id(layer), feat.id())
         keys = [(id(l), fid) for l, fid in self._cutting_edges]
-        if key in keys:
-            idx = keys.index(key)
-            self._cutting_edges.pop(idx)
-            self._rm(self._cutting_bands.pop(idx))
-            self._log(f"\nDeselected: '{layer.name()}' fid {feat.id()}")
+        if shift:
+            if key in keys:
+                idx = keys.index(key)
+                self._cutting_edges.pop(idx)
+                self._rm(self._cutting_bands.pop(idx))
+                self._log(f"\nDeselected: '{layer.name()}' fid {feat.id()}"
+                          f"  ({len(self._cutting_edges)} selected)")
+            else:
+                self._log("\nNot in cutting-edge selection")
         else:
-            self._cutting_edges.append((layer, feat.id()))
-            band = self._make_band(_C_EDGE, width=3)
-            band.setToGeometry(feat.geometry(), layer)
-            self._cutting_bands.append(band)
-            self._log(f"\nCutting edge: '{layer.name()}' fid {feat.id()}")
+            if key not in keys:
+                self._cutting_edges.append((layer, feat.id()))
+                band = self._make_band(_C_EDGE, width=3)
+                band.setToGeometry(feat.geometry(), layer)
+                self._cutting_bands.append(band)
+                self._log(f"\nCutting edge: '{layer.name()}' fid {feat.id()}"
+                          f"  ({len(self._cutting_edges)} selected)")
+            else:
+                self._log(f"\nAlready selected"
+                          f"  ({len(self._cutting_edges)} cutting edges)"
+                          "  — Shift+click to deselect")
 
     def _cutting_geoms_for(self, exclude_layer=None, exclude_fid=None):
         geoms = []
@@ -274,10 +284,10 @@ class TrimTool(QgsMapTool):
     def _pending_key(self, layer, fid, trim_idx):
         return (id(layer), fid, trim_idx)
 
-    def _toggle_mark(self, layer, feat, click_pt):
+    def _update_mark(self, layer, feat, click_pt, shift=False):
         """
         Mark the segment under click_pt for trimming (adds a red band).
-        If that exact segment is already marked, deselect it instead.
+        Shift+click removes the mark if already present.
         """
         line_geom = feat.geometry()
         if line_geom.isEmpty() or line_geom.isMultipart():
@@ -300,28 +310,33 @@ class TrimTool(QgsMapTool):
             for l, fid, _, _, ti in self._pending_trims
         ]
 
-        if key in existing_keys:
-            # Toggle off — remove this mark
-            idx = existing_keys.index(key)
-            self._pending_trims.pop(idx)
-            self._rm(self._selected_bands.pop(idx))
-            n = len(self._pending_trims)
-            self._log(f"\nDeselected segment  ({n} marked)")
+        if shift:
+            if key in existing_keys:
+                idx = existing_keys.index(key)
+                self._pending_trims.pop(idx)
+                self._rm(self._selected_bands.pop(idx))
+                n = len(self._pending_trims)
+                self._log(f"\nDeselected segment  ({n} marked)")
+            else:
+                self._log("\nSegment not marked")
         else:
-            # Add new mark
-            d_a, d_b = boundaries[trim_idx], boundaries[trim_idx + 1]
-            sub = self._sub_line(line_geom, d_a, d_b)
-            if sub is None:
-                return
-            self._pending_trims.append((layer, feat.id(), line_geom, boundaries, trim_idx))
-            band = self._make_band(_C_SELECTED, width=4)
-            band.setToGeometry(sub, layer)
-            self._selected_bands.append(band)
-            n = len(self._pending_trims)
-            self._log(
-                f"\nMarked  {d_b - d_a:.3f} units  on '{layer.name()}'"
-                f"  ({n} segment{'s' if n > 1 else ''} selected)"
-            )
+            if key in existing_keys:
+                self._log(f"\nSegment already marked  ({len(self._pending_trims)} total)"
+                          "  — Shift+click to deselect")
+            else:
+                d_a, d_b = boundaries[trim_idx], boundaries[trim_idx + 1]
+                sub = self._sub_line(line_geom, d_a, d_b)
+                if sub is None:
+                    return
+                self._pending_trims.append((layer, feat.id(), line_geom, boundaries, trim_idx))
+                band = self._make_band(_C_SELECTED, width=4)
+                band.setToGeometry(sub, layer)
+                self._selected_bands.append(band)
+                n = len(self._pending_trims)
+                self._log(
+                    f"\nMarked  {d_b - d_a:.3f} units  on '{layer.name()}'"
+                    f"  ({n} segment{'s' if n > 1 else ''} selected)"
+                )
 
         self._preview_band.setVisible(False)
 
@@ -527,17 +542,19 @@ class TrimTool(QgsMapTool):
         if event.button() != Qt.LeftButton:
             return
 
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
+
         if self._state == _ST_SELECT:
             layer, feat = self._find_line_near(map_pt)
             if feat is not None:
-                self._toggle_cutting_edge(layer, feat)
+                self._update_cutting_edge(layer, feat, shift=shift)
             else:
                 self._log("\nNo line found near click — click directly on a line")
 
         elif self._state == _ST_TRIM:
             layer, feat = self._find_line_near(map_pt)
             if feat is not None:
-                self._toggle_mark(layer, feat, map_pt)
+                self._update_mark(layer, feat, map_pt, shift=shift)
             else:
                 self._log("\nNo line found near click")
 

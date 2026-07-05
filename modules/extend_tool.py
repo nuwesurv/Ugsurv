@@ -242,20 +242,30 @@ class ExtendTool(QgsMapTool):
     # Boundary edge management
     # ------------------------------------------------------------------
 
-    def _toggle_boundary(self, layer, feat):
+    def _update_boundary(self, layer, feat, shift=False):
         key  = (id(layer), feat.id())
         keys = [(id(l), fid) for l, fid in self._boundary_edges]
-        if key in keys:
-            idx = keys.index(key)
-            self._boundary_edges.pop(idx)
-            self._rm(self._boundary_bands.pop(idx))
-            self._log(f"\nDeselected: '{layer.name()}' fid {feat.id()}")
+        if shift:
+            if key in keys:
+                idx = keys.index(key)
+                self._boundary_edges.pop(idx)
+                self._rm(self._boundary_bands.pop(idx))
+                self._log(f"\nDeselected: '{layer.name()}' fid {feat.id()}"
+                          f"  ({len(self._boundary_edges)} selected)")
+            else:
+                self._log("\nNot in boundary-edge selection")
         else:
-            self._boundary_edges.append((layer, feat.id()))
-            band = self._make_band(_C_EDGE, width=3)
-            band.setToGeometry(feat.geometry(), layer)
-            self._boundary_bands.append(band)
-            self._log(f"\nBoundary edge: '{layer.name()}' fid {feat.id()}")
+            if key not in keys:
+                self._boundary_edges.append((layer, feat.id()))
+                band = self._make_band(_C_EDGE, width=3)
+                band.setToGeometry(feat.geometry(), layer)
+                self._boundary_bands.append(band)
+                self._log(f"\nBoundary edge: '{layer.name()}' fid {feat.id()}"
+                          f"  ({len(self._boundary_edges)} selected)")
+            else:
+                self._log(f"\nAlready selected"
+                          f"  ({len(self._boundary_edges)} boundary edges)"
+                          "  — Shift+click to deselect")
 
     # ------------------------------------------------------------------
     # Multi-selection: mark / deselect / confirm all
@@ -264,7 +274,7 @@ class ExtendTool(QgsMapTool):
     def _pending_key(self, layer, fid, ep_idx):
         return (id(layer), fid, ep_idx)
 
-    def _toggle_extend(self, layer, feat, map_pt):
+    def _update_extend(self, layer, feat, map_pt, shift=False):
         line_geom = feat.geometry()
         if line_geom.isEmpty() or line_geom.isMultipart():
             self._log("\nMultipart geometry — extend not supported (use single-part lines)")
@@ -283,22 +293,29 @@ class ExtendTool(QgsMapTool):
         key      = self._pending_key(layer, feat.id(), ep_idx)
         existing = [self._pending_key(l, fid, ei) for l, fid, ei, _, _ in self._pending]
 
-        if key in existing:
-            idx = existing.index(key)
-            self._pending.pop(idx)
-            self._rm(self._pending_bands.pop(idx))
-            self._log(f"\nDeselected extension  ({len(self._pending)} marked)")
+        if shift:
+            if key in existing:
+                idx = existing.index(key)
+                self._pending.pop(idx)
+                self._rm(self._pending_bands.pop(idx))
+                self._log(f"\nDeselected extension  ({len(self._pending)} marked)")
+            else:
+                self._log("\nExtension not marked")
         else:
-            ext_geom = QgsGeometry.fromPolylineXY([ep, ext_pt])
-            self._pending.append((layer, feat.id(), ep_idx, ep, ext_pt))
-            band = self._make_band(_C_SELECTED, width=3, dashed=True)
-            band.setToGeometry(ext_geom, layer)
-            self._pending_bands.append(band)
-            n = len(self._pending)
-            self._log(
-                f"\nMarked extension  {ep.distance(ext_pt):.3f} units"
-                f"  on '{layer.name()}'  ({n} end{'s' if n > 1 else ''} selected)"
-            )
+            if key in existing:
+                self._log(f"\nExtension already marked  ({len(self._pending)} total)"
+                          "  — Shift+click to deselect")
+            else:
+                ext_geom = QgsGeometry.fromPolylineXY([ep, ext_pt])
+                self._pending.append((layer, feat.id(), ep_idx, ep, ext_pt))
+                band = self._make_band(_C_SELECTED, width=3, dashed=True)
+                band.setToGeometry(ext_geom, layer)
+                self._pending_bands.append(band)
+                n = len(self._pending)
+                self._log(
+                    f"\nMarked extension  {ep.distance(ext_pt):.3f} units"
+                    f"  on '{layer.name()}'  ({n} end{'s' if n > 1 else ''} selected)"
+                )
 
         self._preview_band.setVisible(False)
 
@@ -465,16 +482,18 @@ class ExtendTool(QgsMapTool):
         if event.button() != Qt.LeftButton:
             return
 
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
+
         if self._state == _ST_SELECT:
             layer, feat = self._find_line_near(map_pt)
             if feat is not None:
-                self._toggle_boundary(layer, feat)
+                self._update_boundary(layer, feat, shift=shift)
             else:
                 self._log("\nNo line found near click — click directly on a line")
         elif self._state == _ST_EXTEND:
             layer, feat = self._find_line_near(map_pt)
             if feat is not None:
-                self._toggle_extend(layer, feat, map_pt)
+                self._update_extend(layer, feat, map_pt, shift=shift)
             else:
                 self._log("\nNo line found near click")
 

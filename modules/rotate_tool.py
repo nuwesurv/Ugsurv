@@ -120,15 +120,12 @@ class RotateTool(QgsMapTool):
         self._maptool      = None
         self._preselect    = preselect
 
-        self._state     = _ST_SELECT
-        self._sel_layer = None
-        self._sel_fid   = None
-        self._sel_geom  = None
-        self._base_pt   = None
-        self._snap_pt   = None
-
-        self._hl_band      = None
-        self._preview_band = None
+        self._state        = _ST_SELECT
+        self._sel_features = []   # list of (layer, fid, geom_copy)
+        self._sel_bands    = []   # highlight band per feature
+        self._prev_bands   = []   # preview band per feature
+        self._base_pt      = None
+        self._snap_pt      = None
         self._snap_ind     = None
 
         self._hint = QLabel(canvas)
@@ -218,10 +215,12 @@ class RotateTool(QgsMapTool):
         self._hint.raise_()
 
     def _clear_bands(self):
-        self._rm(self._hl_band)
-        self._hl_band = None
-        self._rm(self._preview_band)
-        self._preview_band = None
+        for b in self._sel_bands:
+            self._rm(b)
+        for b in self._prev_bands:
+            self._rm(b)
+        self._sel_bands  = []
+        self._prev_bands = []
 
     def _reset(self):
         self._dinput.hide()
@@ -229,12 +228,10 @@ class RotateTool(QgsMapTool):
         self._clear_bands()
         if self._snap_ind:
             self._snap_ind.setMatch(QgsPointLocator.Match())
-        self._state     = _ST_SELECT
-        self._sel_layer = None
-        self._sel_fid   = None
-        self._sel_geom  = None
-        self._base_pt   = None
-        self._snap_pt   = None
+        self._state        = _ST_SELECT
+        self._sel_features = []
+        self._base_pt      = None
+        self._snap_pt      = None
 
     # ------------------------------------------------------------------
     # DynamicInput callbacks
@@ -270,27 +267,52 @@ class RotateTool(QgsMapTool):
     # ------------------------------------------------------------------
 
     def _enter_base(self, layer, fid, geom):
+        """Called when a single feature is clicked in _ST_SELECT."""
         self._clear_bands()
-        self._sel_layer = layer
-        self._sel_fid   = fid
-        self._sel_geom  = geom
-        self._state     = _ST_BASE
-
+        self._sel_features = [(layer, fid, QgsGeometry(geom))]
         gt = QgsWkbTypes.geometryType(geom.wkbType())
-        self._hl_band = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
-        self._hl_band.setToGeometry(geom, layer)
-        self._preview_band = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
-        self._preview_band.setVisible(False)
-
+        hl = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
+        hl.setToGeometry(geom, layer)
+        self._sel_bands.append(hl)
+        prev = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
+        prev.setVisible(False)
+        self._prev_bands.append(prev)
+        self._state = _ST_BASE
         self._log(
             f"\nSelected '{layer.name()}' fid {fid}"
             f"  →  click rotation centre  |  Esc / RMB to cancel"
         )
 
+    def _load_preselect(self, items):
+        """Load a list of (layer, fid) tuples as the selection, enter _ST_BASE."""
+        self._clear_bands()
+        self._sel_features = []
+        for layer, fid in items:
+            feat = layer.getFeature(fid)
+            if not feat.isValid() or feat.geometry().isEmpty():
+                continue
+            geom = QgsGeometry(feat.geometry())
+            self._sel_features.append((layer, fid, geom))
+            gt = QgsWkbTypes.geometryType(geom.wkbType())
+            hl = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
+            hl.setToGeometry(geom, layer)
+            self._sel_bands.append(hl)
+            prev = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
+            prev.setVisible(False)
+            self._prev_bands.append(prev)
+        if self._sel_features:
+            self._state = _ST_BASE
+            n = len(self._sel_features)
+            self._log(
+                f"\n{n} feature(s) selected"
+                f"  →  click rotation centre  |  Esc / RMB to cancel"
+            )
+
     def _enter_angle(self, base_pt):
         self._base_pt = base_pt
         self._state   = _ST_ANGLE
-        self._preview_band.setVisible(True)
+        for b in self._prev_bands:
+            b.setVisible(True)
         self._log("\nClick to set angle  or  type degrees + Enter  |  Esc / RMB to cancel")
         cp = self.canvas.getCoordinateTransform().transform(base_pt)
         self._dinput.on_commit = self._on_angle_committed
@@ -306,10 +328,11 @@ class RotateTool(QgsMapTool):
 
     def _update_preview(self, snap_pt):
         if self._state == _ST_ANGLE and self._base_pt:
-            angle   = self._cursor_angle(snap_pt)
-            cx, cy  = self._base_pt.x(), self._base_pt.y()
-            rotated = _rotate_geom(self._sel_geom, cx, cy, angle)
-            self._preview_band.setToGeometry(rotated, self._sel_layer)
+            angle  = self._cursor_angle(snap_pt)
+            cx, cy = self._base_pt.x(), self._base_pt.y()
+            for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
+                rotated = _rotate_geom(geom, cx, cy, angle)
+                band.setToGeometry(rotated, layer)
 
     def _commit(self, screen_pos):
         snap_pt = self._snap(screen_pos)
@@ -320,16 +343,17 @@ class RotateTool(QgsMapTool):
 
     def _apply_rotate(self, angle_deg: float):
         cx, cy   = self._base_pt.x(), self._base_pt.y()
-        lyr, fid = self._sel_layer, self._sel_fid
-        new_geom = _rotate_geom(self._sel_geom, cx, cy, angle_deg)
-        if not lyr.isEditable():
-            lyr.startEditing()
-        lyr.changeGeometry(fid, new_geom)
-        lyr.triggerRepaint()
-        self._log(
-            f"\nRotated  {angle_deg:.2f}°  around ({cx:.3f}, {cy:.3f})"
-            f"  on '{lyr.name()}'"
-        )
+        modified = set()
+        for layer, fid, geom in self._sel_features:
+            new_geom = _rotate_geom(geom, cx, cy, angle_deg)
+            if not layer.isEditable():
+                layer.startEditing()
+            layer.changeGeometry(fid, new_geom)
+            modified.add(layer)
+        for lyr in modified:
+            lyr.triggerRepaint()
+        n = len(self._sel_features)
+        self._log(f"\nRotated {n} feature(s)  {angle_deg:.2f}°  around ({cx:.3f}, {cy:.3f})")
         self.deactivate()
 
     # ------------------------------------------------------------------
@@ -342,11 +366,16 @@ class RotateTool(QgsMapTool):
         self._snap_ind = QgsSnapIndicator(self.canvas)
 
         if self._preselect:
-            layer, fid = self._preselect
+            items = self._preselect
             self._preselect = None
-            feat = layer.getFeature(fid)
-            if feat.isValid() and not feat.geometry().isEmpty():
-                self._enter_base(layer, fid, QgsGeometry(feat.geometry()))
+            if isinstance(items, list):
+                self._load_preselect(items)
+            else:
+                layer, fid = items
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._enter_base(layer, fid, QgsGeometry(feat.geometry()))
+            if self._sel_features:
                 return
 
         self._log(
@@ -359,6 +388,7 @@ class RotateTool(QgsMapTool):
         self._dinput.destroy()
         self.terminal_dock.clear_input_handler()
         self._clear_bands()
+        self._sel_features = []
         self._snap_ind = None
         self._hint.hide()
         self._state = _ST_SELECT

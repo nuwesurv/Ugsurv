@@ -57,11 +57,12 @@ _HINT_STYLE = (
 class JoinTool(QgsMapTool):
     """Click polylines to build a join set; Enter chains them into one."""
 
-    def __init__(self, canvas, terminal_dock):
+    def __init__(self, canvas, terminal_dock, preselect=None):
         super().__init__(canvas)
         self.canvas        = canvas
         self.terminal_dock = terminal_dock
         self._maptool      = None   # injected by UgsurvMaptool.set_tool()
+        self._preselect    = preselect
 
         self._selected  = []    # ordered list of (layer, fid)
         self._sel_bands = {}    # (id(layer), fid) → QgsRubberBand (green)
@@ -345,7 +346,26 @@ class JoinTool(QgsMapTool):
 
     def activate(self):
         super().activate()
-        self.canvas.setFocus()   # keep focus on canvas so Enter reaches keyPressEvent
+        self.canvas.setFocus()
+
+        if self._preselect:
+            items = self._preselect
+            self._preselect = None
+            for layer, fid in items:
+                feat = layer.getFeature(fid)
+                geom = feat.geometry()
+                if (geom.isEmpty()
+                        or QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry):
+                    continue
+                if not self._is_selected(layer, fid):
+                    self._select(layer, fid)
+            if len(self._selected) >= 2:
+                self._join_and_commit()
+                return
+            elif len(self._selected) == 1:
+                self._log("\nJOIN: 1 line preloaded — click more polylines, then Enter to join\n")
+                return
+
         self._log("\nJOIN: click polylines to select, Enter to join\n")
 
     def deactivate(self):

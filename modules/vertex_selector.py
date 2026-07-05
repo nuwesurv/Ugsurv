@@ -56,14 +56,16 @@ _S_FEATURE = 3   # feature highlighted by edge click; no vertex gripped yet
 
 _HIT_PX = 10
 
-_C_HOVER      = QColor(255, 210, 0, 240)    # yellow – hover circle
-_C_GRIP_HOT   = QColor(0, 60, 220, 255)     # deep blue – hot (gripped) vertex
-_C_MOVE       = QColor(255, 130, 0, 220)    # orange – live-preview in MOVING
-_C_MOVE_FILL  = QColor(255, 130, 0, 30)     # faint orange fill
-_C_FEATURE    = QColor(0, 200, 80, 220)     # green – edge-selected feature outline
-_C_FEAT_FILL  = QColor(0, 200, 80, 20)      # faint green fill
-_C_FEAT_VTX   = QColor(0, 180, 60, 200)     # green – vertex markers on selected feature
-_C_MID_MARKER = QColor(60, 180, 40, 220)    # medium green – segment midpoint "+" button
+_C_HOVER       = QColor(255, 210,   0, 240)   # yellow – hover circle
+_C_GRIP_HOT    = QColor(  0,  60, 220, 255)   # deep blue – hot (gripped) vertex
+_C_MOVE        = QColor(255, 130,   0, 220)   # orange – live-preview in MOVING
+_C_MOVE_FILL   = QColor(255, 130,   0,  30)   # faint orange fill
+_C_FEATURE     = QColor(  0, 200,  80, 220)   # green – active selected feature outline
+_C_FEAT_FILL   = QColor(  0, 200,  80,  20)   # faint green fill
+_C_FEAT_VTX    = QColor(  0, 180,  60, 200)   # green – vertex markers on selected feature
+_C_MID_MARKER  = QColor( 60, 180,  40, 220)   # medium green – segment midpoint "+" button
+_C_SEL_EXTRA   = QColor(  0, 180, 220, 200)   # teal – secondary selected features
+_C_SEL_EX_FILL = QColor(  0, 180, 220,  20)   # faint teal fill
 
 _HINT_STYLE = (
     "QLabel {"
@@ -121,6 +123,10 @@ class VertexSelector(QgsMapTool):
         self._feature_vtx_markers = []
         self._mid_markers = []   # "+" cross markers at segment midpoints
         self._mid_points  = []   # QgsPointXY for each midpoint (parallel to _mid_markers)
+
+        # Multi-selection: secondary selected features (not the current active one)
+        self._sel_extra_bands = []   # QgsRubberBand per secondary feature
+        self._sel_extra_items = []   # (layer, fid) parallel to above
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -232,6 +238,36 @@ class VertexSelector(QgsMapTool):
         self._sel_layer = None
         self._sel_fid   = None
 
+    def _clear_extra_selection(self):
+        for b in self._sel_extra_bands:
+            self._rm(b)
+        self._sel_extra_bands = []
+        self._sel_extra_items = []
+
+    def _add_to_extra_selection(self, layer, fid):
+        key = (id(layer), fid)
+        if any((id(l), f) == key for l, f in self._sel_extra_items):
+            return
+        feat = layer.getFeature(fid)
+        geom = feat.geometry()
+        if geom.isEmpty():
+            return
+        gt = QgsWkbTypes.geometryType(geom.wkbType())
+        band = self._make_band(gt, _C_SEL_EXTRA, _C_SEL_EX_FILL, width=2, dashed=True)
+        band.setToGeometry(geom, layer)
+        self._sel_extra_bands.append(band)
+        self._sel_extra_items.append((layer, fid))
+
+    def _remove_from_extra(self, layer, fid):
+        key  = (id(layer), fid)
+        keys = [(id(l), f) for l, f in self._sel_extra_items]
+        if key not in keys:
+            return False
+        idx = keys.index(key)
+        self._rm(self._sel_extra_bands.pop(idx))
+        self._sel_extra_items.pop(idx)
+        return True
+
     # ------------------------------------------------------------------
     # State transitions
     # ------------------------------------------------------------------
@@ -242,11 +278,24 @@ class VertexSelector(QgsMapTool):
         self._clear_grip_markers()
         self._clear_bands()
         self._clear_feature()
+        self._clear_extra_selection()
         if self._hover_marker is not None:
             self._hover_marker.setVisible(False)
 
     def _enter_feature(self, layer, fid):
-        """Highlight the feature whose edge was clicked."""
+        """Highlight the feature whose edge was clicked.
+
+        The previously active feature (if different) is demoted to the
+        secondary selection set so it stays highlighted as a teal band.
+        """
+        # Promote the current active to secondary selection before switching
+        if self._sel_layer is not None:
+            if not (id(layer) == id(self._sel_layer) and fid == self._sel_fid):
+                self._add_to_extra_selection(self._sel_layer, self._sel_fid)
+
+        # If the incoming feature was already in secondary selection, promote it
+        self._remove_from_extra(layer, fid)
+
         self._clear_grip_markers()
         self._clear_bands()
         self._clear_feature()
@@ -280,9 +329,12 @@ class VertexSelector(QgsMapTool):
             self._feature_band = self._make_band(gt, _C_FEATURE, _C_FEAT_FILL, width=2)
             self._feature_band.setToGeometry(geom, layer)
 
+        n_total = 1 + len(self._sel_extra_items)
+        extra_msg = f"  ({n_total} selected total)" if n_total > 1 else ""
         self._log(
-            f"\nFeature {fid} of '{layer.name()}' selected"
-            f"  →  click a vertex to grip it  |  click '+' to insert at midpoint"
+            f"\nFeature {fid} of '{layer.name()}' selected{extra_msg}"
+            f"  →  click a vertex to grip it  |  click '+' to insert"
+            f"  |  Shift+click to deselect"
         )
 
     def _enter_gripped(self, sv):
@@ -460,12 +512,23 @@ class VertexSelector(QgsMapTool):
         self._enter_idle()
 
     def _delete_feature(self):
-        lyr, fid = self._sel_layer, self._sel_fid
-        if not lyr.isEditable():
-            lyr.startEditing()
-        lyr.deleteFeature(fid)
-        lyr.triggerRepaint()
-        self._log(f"\nDeleted feature {fid} of '{lyr.name()}'")
+        all_sel = self.get_selected_features()
+        if not all_sel:
+            return
+        modified = set()
+        for lyr, fid in all_sel:
+            if not lyr.isEditable():
+                lyr.startEditing()
+            lyr.deleteFeature(fid)
+            modified.add(lyr)
+        for lyr in modified:
+            lyr.triggerRepaint()
+        n = len(all_sel)
+        if n == 1:
+            lyr, fid = all_sel[0]
+            self._log(f"\nDeleted feature {fid} of '{lyr.name()}'")
+        else:
+            self._log(f"\nDeleted {n} features")
         self._enter_idle()
 
     def _insert_vertex_on_segment(self, map_pt):
@@ -709,6 +772,15 @@ class VertexSelector(QgsMapTool):
             return self._gripped.layer, self._gripped.fid
         return None
 
+    def get_selected_features(self):
+        """Return all selected features as a list of (layer, fid) — active first, then extras."""
+        result = []
+        active = self.get_selected_feature()
+        if active and active[0] is not None:
+            result.append(active)
+        result.extend(self._sel_extra_items)
+        return result
+
     def _show_hint(self, screen_pos):
         if self._state == _S_GRIPPED and self._gripped_can_extend():
             text = "Click grip to move  |  click to extend line"
@@ -880,31 +952,58 @@ class VertexSelector(QgsMapTool):
             if mpt is not None:
                 self._insert_vertex_on_segment(mpt)  # "+" clicked → insert at exact midpoint
                 return
+            shift = bool(event.modifiers() & Qt.ShiftModifier)
             if sv and id(sv.layer) == id(self._sel_layer) and sv.fid == self._sel_fid:
-                self._enter_gripped(sv)              # vertex on selected feature → grip it
+                if shift:
+                    # Shift+click on active feature → deselect it entirely
+                    self._enter_idle()
+                else:
+                    self._enter_gripped(sv)          # vertex on selected feature → grip it
             else:
-                # Only act on the selected feature; never switch to another from here.
-                # When the click snapped to a neighbour vertex, use its exact position
-                # so the distance check against A's edge is precise and the inserted
-                # vertex lands at exactly the shared coordinate.
                 sel_feat = self._sel_layer.getFeature(self._sel_fid)
                 sel_geom = sel_feat.geometry()
                 tol      = self._hit_tol()
                 check_pt = sv.point if sv is not None else map_pt
                 if (not sel_geom.isEmpty()
                         and sel_geom.distance(QgsGeometry.fromPointXY(check_pt)) <= tol):
-                    self._insert_vertex_on_segment(check_pt)
+                    if shift:
+                        self._enter_idle()           # Shift+click active feature edge → deselect
+                    else:
+                        self._insert_vertex_on_segment(check_pt)
                 else:
-                    self._enter_idle()   # truly away from selected feature → deselect
+                    # Click is not on the active feature — check for another feature
+                    edge = self._find_edge_near(map_pt)
+                    if edge:
+                        other_lyr, other_fid = edge
+                        if shift:
+                            # Shift+click another feature → remove it from selection
+                            if not self._remove_from_extra(other_lyr, other_fid):
+                                # Not in extra: check if it's somehow the active one
+                                if (id(other_lyr) == id(self._sel_layer)
+                                        and other_fid == self._sel_fid):
+                                    self._enter_idle()
+                        else:
+                            # Plain click another feature → add to multi-selection
+                            self._enter_feature(other_lyr, other_fid)
+                    else:
+                        self._enter_idle()           # click empty space → clear all
             return
 
         # IDLE
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
         if sv:
-            self._enter_gripped(sv)
+            if shift:
+                self._remove_from_extra(sv.layer, sv.fid)
+            else:
+                self._enter_gripped(sv)
         else:
             edge = self._find_edge_near(map_pt)
             if edge:
-                self._enter_feature(*edge)
+                other_lyr, other_fid = edge
+                if shift:
+                    self._remove_from_extra(other_lyr, other_fid)
+                else:
+                    self._enter_feature(*edge)
 
         self.terminal_dock.command.setFocus()
 

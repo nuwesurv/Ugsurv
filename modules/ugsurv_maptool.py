@@ -46,6 +46,11 @@ class _CanvasKeyFilter(QObject):
         text = event.text()
         key  = event.key()
 
+        # Space while a drawing tool is active → same action as Enter (confirm/finish)
+        if key == Qt.Key_Space and mt._active_tool and mt._active_tool is not mt._default_tool:
+            mt._active_tool.keyPressEvent(event)
+            return True
+
         if text and text.isprintable():
             mt._redirect_to_terminal(event)
             return True  # consumed — QGIS never sees it
