@@ -66,8 +66,10 @@ _C_FEAT_VTX    = QColor(  0, 180,  60, 200)   # green – vertex markers on sele
 _C_MID_MARKER  = QColor( 60, 180,  40, 220)   # medium green – segment midpoint "+" button
 _C_SEL_EXTRA   = QColor(  0, 180, 220, 200)   # teal – secondary selected features
 _C_SEL_EX_FILL = QColor(  0, 180, 220,  20)   # faint teal fill
-_C_DRAG_BORDER = QColor(  0, 120, 255, 200)   # blue – drag-select rectangle border
+_C_DRAG_BORDER = QColor(  0, 120, 255, 200)   # blue  – window (L→R) drag border
 _C_DRAG_FILL   = QColor(  0, 120, 255,  25)   # faint blue fill
+_C_CROSS_BORDER= QColor(  0, 200,  80, 200)   # green – crossing (R→L) drag border
+_C_CROSS_FILL  = QColor(  0, 200,  80,  20)   # faint green fill
 
 _DRAG_PX = 5   # pixels the mouse must move before a press is treated as a drag
 
@@ -921,14 +923,20 @@ class VertexSelector(QgsMapTool):
     def _update_drag_band(self, screen_pos):
         p1 = self.toMapCoordinates(self._drag_start)
         p2 = self.toMapCoordinates(screen_pos)
+        crossing = screen_pos.x() < self._drag_start.x()   # R→L = crossing
+        border = _C_CROSS_BORDER if crossing else _C_DRAG_BORDER
+        fill   = _C_CROSS_FILL   if crossing else _C_DRAG_FILL
         if self._drag_band is None:
-            self._drag_band = self._make_band(
-                QgsWkbTypes.PolygonGeometry, _C_DRAG_BORDER, _C_DRAG_FILL
-            )
+            self._drag_band = self._make_band(QgsWkbTypes.PolygonGeometry, border, fill)
+        self._drag_band.setColor(border)
+        self._drag_band.setFillColor(fill)
+        self._drag_band.setLineStyle(Qt.DashLine if crossing else Qt.SolidLine)
         rect = QgsRectangle(p1.x(), p1.y(), p2.x(), p2.y())
         self._drag_band.setToGeometry(QgsGeometry.fromRect(rect), None)
 
-    def _select_in_rect(self, rect):
+    def _select_in_rect(self, rect, crossing):
+        """Select features. crossing=True keeps features that merely intersect;
+        crossing=False (window/L→R) keeps only features fully inside the rect."""
         rect_geom = QgsGeometry.fromRect(rect)
         found = []
         for lyr in self._vector_layers():
@@ -936,15 +944,39 @@ class VertexSelector(QgsMapTool):
                 geom = feat.geometry()
                 if geom.isEmpty():
                     continue
-                if geom.intersects(rect_geom):
-                    found.append((lyr, feat.id()))
+                if crossing:
+                    if geom.intersects(rect_geom):
+                        found.append((lyr, feat.id()))
+                else:
+                    if rect_geom.contains(geom):
+                        found.append((lyr, feat.id()))
         if not found:
             self._log("\nNo features in selection rectangle")
             return
         for lyr, fid in found:
             self._enter_feature(lyr, fid)
         n = len(self.get_selected_features())
-        self._log(f"\n{n} feature(s) selected")
+        mode = "crossing" if crossing else "window"
+        self._log(f"\n{n} feature(s) selected ({mode})")
+
+    def _grip_vertices_in_rect(self, rect):
+        """When a feature is active, grip the vertex of that feature inside rect."""
+        lyr = self._sel_layer or (self._gripped.layer if self._gripped else None)
+        fid = self._sel_fid   or (self._gripped.fid   if self._gripped else None)
+        if lyr is None:
+            return
+        verts = self._feature_verts(lyr, fid)
+        inside = [_SelVtx(lyr, fid, vidx, vpt)
+                  for vidx, vpt in verts if rect.contains(vpt)]
+        if not inside:
+            self._log("\nNo vertices in selection rectangle")
+            return
+        cx = (rect.xMinimum() + rect.xMaximum()) / 2
+        cy = (rect.yMinimum() + rect.yMaximum()) / 2
+        center = QgsPointXY(cx, cy)
+        sv = min(inside, key=lambda s: s.point.distance(center))
+        self._enter_gripped(sv)
+        self._log(f"\nVertex {sv.vidx + 1} selected via rectangle")
 
     # ------------------------------------------------------------------
 
@@ -1186,7 +1218,9 @@ class VertexSelector(QgsMapTool):
                         self._move_band.reset(QgsWkbTypes.LineGeometry)
                     self._extend_line(commit_pt)
                 else:
-                    self._enter_idle()          # empty space → deselect
+                    # Empty space — start drag so user can box-select a vertex
+                    self._drag_start       = event.pos()
+                    self._drag_start_state = _S_GRIPPED
             return
 
         if self._state == _S_FEATURE:
@@ -1309,15 +1343,19 @@ class VertexSelector(QgsMapTool):
         self._clear_drag()
 
         if was_dragging:
-            p1 = self.toMapCoordinates(start_pos)
-            p2 = self.toMapCoordinates(event.pos())
+            p1       = self.toMapCoordinates(start_pos)
+            p2       = self.toMapCoordinates(event.pos())
+            crossing = event.pos().x() < start_pos.x()   # R→L = crossing
             rect = QgsRectangle(
                 min(p1.x(), p2.x()), min(p1.y(), p2.y()),
                 max(p1.x(), p2.x()), max(p1.y(), p2.y()),
             )
-            self._select_in_rect(rect)
-        elif start_state == _S_FEATURE:
-            self._enter_idle()   # plain click on empty space in FEATURE → clear
+            if start_state in (_S_FEATURE, _S_GRIPPED):
+                self._grip_vertices_in_rect(rect)
+            else:
+                self._select_in_rect(rect, crossing)
+        elif start_state in (_S_FEATURE, _S_GRIPPED):
+            self._enter_idle()   # plain click on empty space → clear
 
     def mouseDoubleClickEvent(self, event):
         self.terminal_dock.command.setFocus()
