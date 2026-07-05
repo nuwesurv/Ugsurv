@@ -74,7 +74,13 @@ from .modules.ugsurv_maptool import UgsurvMaptool
 from .modules.trim_tool import TrimTool
 from .modules.extend_tool import ExtendTool
 from .modules.move_tool import MoveTool
+from .modules.copy_tool import CopyTool
+from .modules.offset_tool import OffsetTool
+from .modules.rotate_tool import RotateTool
 from .modules.join_tool import JoinTool
+from .modules.break_tool import BreakTool
+from .modules.chamfer_tool import ChamferTool
+from .modules.explode_tool import ExplodeTool
 import ast
 
 
@@ -117,7 +123,7 @@ class Ugsurv:
         # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap', 'move', 'trim'] # was created for suggection purposes.
+        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap', 'move', 'trim', 'copy', 'offset', 'rotate', 'break', 'chamfer', 'explode'] # was created for suggection purposes.
         ...
         self.active = False  # Track plugin toggle state
         ...
@@ -306,7 +312,10 @@ class Ugsurv:
         self.terminal_dock = TerminalDialog(self.iface.mainWindow())
         self.terminal_dock.set_commands([
             # Drawing tools (AutoCAD-standard names)
-            'CIRCLE', 'PLINE', 'DIM', 'ADIM', 'TRIM', 'EXTEND', 'JOIN',
+            'CIRCLE', 'PLINE', 'DIM', 'ADIM',
+            'MOVE', 'COPY', 'ROTATE', 'OFFSET',
+            'TRIM', 'EXTEND', 'JOIN',
+            'BREAK', 'CHAMFER', 'EXPLODE',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
             'SPIKY', 'PTOVERLAP', 'IMPORT', 'GAME',
@@ -430,9 +439,16 @@ class Ugsurv:
                 "\n── Drawing ──────────────────────────"
                 "\n  CIRCLE  [C ]   Draw a circle"
                 "\n  PLINE   [PL]   Draw a polyline"
+                "\n  MOVE    [M ]   Move a feature"
+                "\n  COPY    [CO]   Copy a feature to new position(s)"
+                "\n  ROTATE  [RO]   Rotate a feature around a base point"
+                "\n  OFFSET  [O ]   Parallel copy of a line at fixed distance"
                 "\n  TRIM    [TR]   Trim lines at cutting edges"
                 "\n  EXTEND  [EX]   Extend polyline to a boundary"
                 "\n  JOIN    [J ]   Join separate polylines into one"
+                "\n  BREAK   [BR]   Split a line into two at a clicked point"
+                "\n  CHAMFER [CHA]  Bevel two lines with a straight segment"
+                "\n  EXPLODE [X ]   Break multipart / polyline into segments"
                 "\n  DIM     [DI]   Dimension a segment / two points"
                 "\n  ADIM    [AD]   Dimension all segments of a feature"
                 "\n── Vertex editor (always active) ────"
@@ -485,6 +501,32 @@ class Ugsurv:
             if hasattr(vs, 'get_selected_feature'):
                 preselect = vs.get_selected_feature()
             self.global_map_tool.set_tool(MoveTool(self.canvas, self.terminal_dock, preselect=preselect))
+
+        elif cmd in ('copy', 'co'):
+            preselect = None
+            vs = self.global_map_tool._default_tool
+            if hasattr(vs, 'get_selected_feature'):
+                preselect = vs.get_selected_feature()
+            self.global_map_tool.set_tool(CopyTool(self.canvas, self.terminal_dock, preselect=preselect))
+
+        elif cmd in ('offset', 'o', 'ofs'):
+            self.global_map_tool.set_tool(OffsetTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('break', 'br'):
+            self.global_map_tool.set_tool(BreakTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('chamfer', 'cha'):
+            self.global_map_tool.set_tool(ChamferTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('explode', 'x'):
+            self.global_map_tool.set_tool(ExplodeTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('rotate', 'ro'):
+            preselect = None
+            vs = self.global_map_tool._default_tool
+            if hasattr(vs, 'get_selected_feature'):
+                preselect = vs.get_selected_feature()
+            self.global_map_tool.set_tool(RotateTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('dim', 'di'):
             self.global_map_tool.set_tool(DimensionDrawer(self.canvas, self.terminal_dock, 'single'))
