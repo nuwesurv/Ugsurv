@@ -120,7 +120,9 @@ class VertexSelector(QgsMapTool):
         self._geom_band = None
 
         # MOVING: live rubber band updated every mouse move
-        self._move_band = None
+        self._move_band        = None
+        self._move_extra_bands = []   # rubber bands for shared vertices on extra features
+        self._move_extra_data  = []   # [(layer, fid, vidx)] parallel to above
 
         # FEATURE: edge-selected feature highlight
         self._sel_layer = None
@@ -248,6 +250,10 @@ class VertexSelector(QgsMapTool):
         self._geom_band = None
         self._rm(self._move_band)
         self._move_band = None
+        for b in self._move_extra_bands:
+            self._rm(b)
+        self._move_extra_bands = []
+        self._move_extra_data  = []
 
     def _clear_drag(self):
         self._rm(self._drag_band)
@@ -429,6 +435,23 @@ class VertexSelector(QgsMapTool):
             f"  →  click grip again to move, Del to delete"
         )
 
+    def _shared_vertices(self, orig_pt, tol=1e-9):
+        """Return [(layer, fid, vidx)] for vertices on extra-selected features
+        that are coincident with orig_pt — these move together with the grip."""
+        result = []
+        for lyr, fid in self._sel_extra_items:
+            feat = lyr.getFeature(fid)
+            if not feat.isValid():
+                continue
+            geom = feat.geometry()
+            if geom.isEmpty():
+                continue
+            for vidx, vpt in self._geom_verts(geom):
+                if abs(vpt.x() - orig_pt.x()) < tol and abs(vpt.y() - orig_pt.y()) < tol:
+                    result.append((lyr, fid, vidx))
+                    break   # one match per feature is enough
+        return result
+
     def _enter_moving(self):
         """Activate live rubber-band move mode."""
         self._state = _S_MOVING
@@ -436,6 +459,10 @@ class VertexSelector(QgsMapTool):
             self._geom_band.setVisible(False)   # hide static outline; move band takes over
         self._rm(self._move_band)               # discard any extend-preview band
         self._move_band = None
+        for b in self._move_extra_bands:
+            self._rm(b)
+        self._move_extra_bands = []
+        self._move_extra_data  = []
 
         sv   = self._gripped
         feat = sv.layer.getFeature(sv.fid)
@@ -447,6 +474,17 @@ class VertexSelector(QgsMapTool):
         )
         self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
         self._move_band.setToGeometry(geom, sv.layer)
+
+        # Prepare preview bands for shared vertices on extra selected features
+        for lyr, fid, vidx in self._shared_vertices(sv.point):
+            xfeat = lyr.getFeature(fid)
+            xgeom = xfeat.geometry()
+            if not xgeom.isEmpty():
+                xgt  = QgsWkbTypes.geometryType(xgeom.wkbType())
+                band = self._make_band(xgt, _C_MOVE, _C_MOVE_FILL, width=2)
+                band.setToGeometry(xgeom, lyr)
+                self._move_extra_bands.append(band)
+                self._move_extra_data.append((lyr, fid, vidx))
 
         if sv.layer.name() == "circles" and not geom.isEmpty():
             center = self._circle_center_from_geom(geom)
@@ -485,9 +523,28 @@ class VertexSelector(QgsMapTool):
             self._update_closed_attrs(sv)
 
         sv.layer.triggerRepaint()
+
+        # Move coincident vertices on all other selected features
+        for lyr, fid, vidx in self._move_extra_data:
+            if not lyr.isEditable():
+                lyr.startEditing()
+            lyr.moveVertex(map_pt.x(), map_pt.y(), fid, vidx)
+            # Sync closed-polyline duplicate endpoint if needed
+            extra_feat = lyr.getFeature(fid)
+            extra_geom = extra_feat.geometry()
+            if not extra_geom.isEmpty() and self._is_closed_polyline(extra_geom):
+                xverts = self._geom_verts(extra_geom)
+                first_i, last_i = xverts[0][0], xverts[-1][0]
+                if vidx == first_i:
+                    lyr.moveVertex(map_pt.x(), map_pt.y(), fid, last_i)
+                elif vidx == last_i:
+                    lyr.moveVertex(map_pt.x(), map_pt.y(), fid, first_i)
+            lyr.triggerRepaint()
+
         self._log(
             f"\nMoved  ({sv.point.x():.3f}, {sv.point.y():.3f})"
             f" → ({map_pt.x():.3f}, {map_pt.y():.3f})"
+            + (f"  [{len(self._move_extra_data)} shared]" if self._move_extra_data else "")
         )
         new_sv = _SelVtx(sv.layer, sv.fid, sv.vidx, map_pt)
         self._enter_gripped(new_sv)
@@ -549,6 +606,10 @@ class VertexSelector(QgsMapTool):
         self._snap_marker.setVisible(False)
         self._rm(self._move_band)
         self._move_band = None
+        for b in self._move_extra_bands:
+            self._rm(b)
+        self._move_extra_bands = []
+        self._move_extra_data  = []
         if self._geom_band:
             self._geom_band.setVisible(True)
         self._state = _S_GRIPPED
@@ -556,6 +617,10 @@ class VertexSelector(QgsMapTool):
 
     def _delete_gripped(self):
         sv = self._gripped
+
+        # Find shared vertices on extra-selected features before modifying anything
+        shared = self._shared_vertices(sv.point)
+
         if not sv.layer.isEditable():
             sv.layer.startEditing()
         feat = sv.layer.getFeature(sv.fid)
@@ -563,8 +628,25 @@ class VertexSelector(QgsMapTool):
         geom.deleteVertex(sv.vidx)
         sv.layer.changeGeometry(sv.fid, geom)
         sv.layer.triggerRepaint()
-        self._log(f"\nDeleted vertex {sv.vidx + 1} of feature {sv.fid} on '{sv.layer.name()}'")
         self._update_closed_attrs(sv)
+
+        # Delete coincident vertex on each extra-selected feature
+        for lyr, fid, vidx in shared:
+            if not lyr.isEditable():
+                lyr.startEditing()
+            xfeat = lyr.getFeature(fid)
+            xgeom = QgsGeometry(xfeat.geometry())
+            xgeom.deleteVertex(vidx)
+            lyr.changeGeometry(fid, xgeom)
+            lyr.triggerRepaint()
+            self._update_closed_attrs(_SelVtx(lyr, fid, vidx, sv.point))
+
+        n_shared = len(shared)
+        self._log(
+            f"\nDeleted vertex {sv.vidx + 1} of '{sv.layer.name()}'"
+            + (f"  [{n_shared} shared]" if n_shared else "")
+        )
+
         # Stay on the feature so the user can keep editing without losing the selection
         updated = sv.layer.getFeature(sv.fid)
         if updated.isValid() and not updated.geometry().isEmpty():
@@ -1127,6 +1209,21 @@ class VertexSelector(QgsMapTool):
                         elif sv.vidx == last_idx:
                             preview.moveVertex(map_pt.x(), map_pt.y(), first_idx)
                 self._move_band.setToGeometry(preview, sv.layer)
+            # Update preview for shared vertices on extra selected features
+            for i, (xlyr, xfid, xvidx) in enumerate(self._move_extra_data):
+                xfeat = xlyr.getFeature(xfid)
+                xgeom = xfeat.geometry()
+                if not xgeom.isEmpty() and i < len(self._move_extra_bands):
+                    xprev = QgsGeometry(xgeom)
+                    xprev.moveVertex(map_pt.x(), map_pt.y(), xvidx)
+                    if self._is_closed_polyline(xgeom):
+                        xverts = self._geom_verts(xgeom)
+                        xi0, xi1 = xverts[0][0], xverts[-1][0]
+                        if xvidx == xi0:
+                            xprev.moveVertex(map_pt.x(), map_pt.y(), xi1)
+                        elif xvidx == xi1:
+                            xprev.moveVertex(map_pt.x(), map_pt.y(), xi0)
+                    self._move_extra_bands[i].setToGeometry(xprev, xlyr)
             self._show_hint(event.pos())
             return
 
