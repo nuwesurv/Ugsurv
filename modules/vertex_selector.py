@@ -486,7 +486,7 @@ class VertexSelector(QgsMapTool):
                 self._move_extra_bands.append(band)
                 self._move_extra_data.append((lyr, fid, vidx))
 
-        if sv.layer.name() == "circles" and not geom.isEmpty():
+        if sv.layer.name() == "_circles" and not geom.isEmpty():
             center = self._circle_center_from_geom(geom)
             if center:
                 current_radius = center.distance(sv.point)
@@ -507,7 +507,7 @@ class VertexSelector(QgsMapTool):
         if not sv.layer.isEditable():
             sv.layer.startEditing()
 
-        if sv.layer.name() == "circles":
+        if sv.layer.name() == "_circles":
             self._commit_circle_vertex_move(sv, map_pt)
         else:
             feat = sv.layer.getFeature(sv.fid)
@@ -1197,7 +1197,7 @@ class VertexSelector(QgsMapTool):
             sv   = self._gripped
             feat = sv.layer.getFeature(sv.fid)
             if not feat.geometry().isEmpty():
-                if sv.layer.name() == "circles":
+                if sv.layer.name() == "_circles":
                     preview = self._circle_geom_for_drag(feat.geometry(), map_pt)
                     # Keep input box near cursor; update placeholder with live radius
                     center = self._circle_center_from_geom(feat.geometry())
