@@ -77,6 +77,7 @@ from .modules.move_tool import MoveTool
 from .modules.copy_tool import CopyTool
 from .modules.offset_tool import OffsetTool
 from .modules.rotate_tool import RotateTool
+from .modules.scale_tool import ScaleTool
 from .modules.join_tool import JoinTool
 from .modules.break_tool import BreakTool
 from .modules.chamfer_tool import ChamferTool
@@ -123,7 +124,7 @@ class Ugsurv:
         # ====================================================================================
         # plugin intanstisions
         self.canvas = self.iface.mapCanvas()
-        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap', 'move', 'trim', 'copy', 'offset', 'rotate', 'break', 'chamfer', 'explode'] # was created for suggection purposes.
+        self.command_list = ['pp', 'dim', 'adim', 'circle', 'ts', 'pt_overlap', 'move', 'trim', 'copy', 'offset', 'rotate', 'scale', 'break', 'chamfer', 'explode'] # was created for suggection purposes.
         ...
         self.active = False  # Track plugin toggle state
         ...
@@ -313,7 +314,7 @@ class Ugsurv:
         self.terminal_dock.set_commands([
             # Drawing tools (AutoCAD-standard names)
             'CIRCLE', 'PLINE', 'DIM', 'ADIM',
-            'MOVE', 'COPY', 'ROTATE', 'OFFSET',
+            'MOVE', 'COPY', 'ROTATE', 'SCALE', 'OFFSET',
             'TRIM', 'EXTEND', 'JOIN',
             'BREAK', 'CHAMFER', 'EXPLODE',
             # Survey tools
@@ -442,6 +443,7 @@ class Ugsurv:
                 "\n  MOVE    [M ]   Move a feature"
                 "\n  COPY    [CO]   Copy a feature to new position(s)"
                 "\n  ROTATE  [RO]   Rotate a feature around a base point"
+                "\n  SCALE   [SC]   Scale a feature from a base point"
                 "\n  OFFSET  [O ]   Parallel copy of a line at fixed distance"
                 "\n  TRIM    [TR]   Trim lines at cutting edges"
                 "\n  EXTEND  [EX]   Extend polyline to a boundary"
@@ -530,6 +532,15 @@ class Ugsurv:
 
         elif cmd in ('explode', 'x'):
             self.global_map_tool.set_tool(ExplodeTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('scale', 'sc'):
+            preselect = None
+            vs = self.global_map_tool._default_tool
+            if hasattr(vs, 'get_selected_features'):
+                sel = vs.get_selected_features()
+                if sel:
+                    preselect = sel
+            self.global_map_tool.set_tool(ScaleTool(self.canvas, self.terminal_dock, preselect=preselect))
 
         elif cmd in ('rotate', 'ro'):
             preselect = None
