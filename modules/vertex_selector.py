@@ -44,7 +44,7 @@ from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from .dynamic_input import DynamicInput
-from .snapSettingConfig import snapSettingConfig
+from .snap_config import snapSettingConfig
 
 
 _SelVtx = namedtuple('_SelVtx', ['layer', 'fid', 'vidx', 'point'])

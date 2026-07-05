@@ -54,23 +54,23 @@ from .resources import *
 from .modules.terminal import TerminalDialog
 
 import os.path
-from .modules.keymap import KeyPressFilter
+from .modules.key_filter import KeyPressFilter
 import math
 from .modules.dimension_drawer import DimensionDrawer
-from .modules.totalstation_laser_game import Game1
-from .modules.snapSettingConfig import snapSettingConfig
+from .modules.laser_game import Game1
+from .modules.snap_config import snapSettingConfig
 from .modules.topology_solver import TopologySolver
 from .modules.fix_geometry import FixGeometry
-from .module_wz_dialogs.parcelplotter_dialog import ParcelPlotterDialog
-from .module_wz_dialogs.import_print import ImportPrintDialog
+from .module_wz_dialogs.parcel_plotter import ParcelPlotterDialog
+from .module_wz_dialogs.layout_importer import ImportPrintDialog
 from .module_wz_dialogs.append_geometry import GeometryAppenderDock
 from .module_wz_dialogs.crs_adjust import CrsAdjustDock
-from .module_wz_dialogs.spiky_geoms import SpikyGeomsDock
+from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
 from .modules.vertex_selector import VertexSelector
-from .modules.ugsurv_maptool import UgsurvMaptool
+from .modules.maptool import UgsurvMaptool
 from .modules.trim_tool import TrimTool
 from .modules.extend_tool import ExtendTool
 from .modules.move_tool import MoveTool

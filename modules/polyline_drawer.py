@@ -18,10 +18,10 @@ from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
-from .snapSettingConfig import snapSettingConfig
+from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
 import math
-from . import get_appropriate_crs_str
+from . import crs_utils
 
 
 LAYER_NAME = "polylines"
@@ -69,7 +69,7 @@ class PolylineDrawer(QgsMapTool):
         self.is_drawing = False  # True after the first point is placed
 
         # CRS
-        self.appropriate_crs = get_appropriate_crs_str.get_canvas_epsg(self.canvas)
+        self.appropriate_crs = crs_utils.get_canvas_epsg(self.canvas)
         self._apply_project_crs()
 
         # Layer

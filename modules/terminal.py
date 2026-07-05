@@ -7,7 +7,7 @@ from PyQt5.QtGui import QIcon, QTextCursor
 from PyQt5.QtCore import Qt, QEvent, QPoint
 from qgis.core import QgsPointXY
 import os
-from .keymap import KeyPressFilter
+from .key_filter import KeyPressFilter
 
 
 class TerminalDialog(QDockWidget):

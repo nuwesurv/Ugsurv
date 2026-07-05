@@ -20,9 +20,9 @@ from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
-from .snapSettingConfig import snapSettingConfig
+from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
-from . import get_appropriate_crs_str
+from . import crs_utils
 import math
 
 
@@ -46,7 +46,7 @@ class DimensionDrawer(QgsMapTool):
         extent = self.canvas.extent()
 
         # Set the coordinate sytem to 36N
-        self.appropriate_crs = get_appropriate_crs_str.get_canvas_epsg(self.canvas)
+        self.appropriate_crs = crs_utils.get_canvas_epsg(self.canvas)
         self.crs = QgsCoordinateReferenceSystem(f"EPSG:{self.appropriate_crs}")
         QgsProject.instance().setCrs(self.crs)
         
