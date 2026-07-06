@@ -29,7 +29,6 @@ from collections import namedtuple
 
 from qgis.core import (
     QgsCircularString,
-    QgsCurvePolygon,
     QgsGeometry,
     QgsPoint,
     QgsPointLocator,
@@ -107,7 +106,7 @@ class VertexSelector(QgsMapTool):
         snapSettingConfig()
 
         # IDLE: yellow hover circle near cursor
-        self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
+        self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 9)
         self._hover_marker.setVisible(False)
 
         # MOVING: cyan snap indicator
@@ -571,7 +570,7 @@ class VertexSelector(QgsMapTool):
         return QgsPointXY((v0.x() + v2.x()) / 2, (v0.y() + v2.y()) / 2)
 
     def _build_circle_geom(self, center, radius):
-        """Rebuild a 5-point QgsCurvePolygon circle from center + radius."""
+        """Rebuild a 5-point closed QgsCircularString (polyline) from center + radius."""
         cx, cy = center.x(), center.y()
         arc_pts = [
             QgsPoint(cx + radius, cy),
@@ -582,9 +581,7 @@ class VertexSelector(QgsMapTool):
         ]
         cs = QgsCircularString()
         cs.setPoints(arc_pts)
-        cp = QgsCurvePolygon()
-        cp.setExteriorRing(cs)
-        return QgsGeometry(cp)
+        return QgsGeometry(cs)
 
     def _circle_geom_for_drag(self, geom, drag_pt):
         """Return a circle QgsGeometry resized so the dragged point lies on the circumference."""
@@ -1246,7 +1243,7 @@ class VertexSelector(QgsMapTool):
         self.terminal_dock.command.setFocus()
         # Recreate markers if they were removed when a drawing tool took over
         if self._hover_marker is None:
-            self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
+            self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 9)
             self._hover_marker.setVisible(False)
         if self._snap_marker is None:
             self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CIRCLE, 10)

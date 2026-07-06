@@ -13,10 +13,8 @@ from qgis.core import (
     QgsTextFormat,
     QgsVectorLayerSimpleLabeling,
     QgsPointLocator,
-    QgsFillSymbol,
     QgsSingleSymbolRenderer,
     QgsCircularString,
-    QgsCurvePolygon,
     QgsPoint,
     QgsCoordinateReferenceSystem,
 )
@@ -83,7 +81,7 @@ class CircleDrawer(QgsMapTool):
 
         # UI elements
         self.snap_marker = self._create_snap_marker()
-        self.preview_circle_band = self._create_rubber_band(QgsWkbTypes.PolygonGeometry, Qt.DashLine, fill_alpha=10)
+        self.preview_circle_band = self._create_rubber_band(QgsWkbTypes.LineGeometry, Qt.DashLine)
         self.radius_line_band = self._create_rubber_band(QgsWkbTypes.LineGeometry, Qt.DashLine)
         self.radius_text = self._create_text_item()
         self._maptool = None   # set by UgsurvMaptool.set_tool()
@@ -150,19 +148,17 @@ class CircleDrawer(QgsMapTool):
         return self._create_circle_layer()
 
     def _apply_circle_style(self, layer):
-        symbol = QgsFillSymbol.createSimple({
-            "outline_color": LAYER_COLOR_OUTLINE,
-            "outline_width": "0.4",
-            "outline_style": "solid",
-            "color": LAYER_COLOR_FILL,
+        symbol = QgsLineSymbol.createSimple({
+            "color": LAYER_COLOR_OUTLINE,
+            "width": "0.4",
         })
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
         layer.setLabelsEnabled(False)
 
     def _create_circle_layer(self):
-        """Create a new CurvePolygon layer (file-backed in GPKG, memory fallback)."""
+        """Create a new CircularString line layer (file-backed in GPKG, memory fallback)."""
         mem = QgsVectorLayer(
-            f"CurvePolygon?crs=EPSG:{self.appropriate_crs}&curve=yes",
+            f"CircularString?crs=EPSG:{self.appropriate_crs}",
             LAYER_NAME,
             "memory"
         )
@@ -180,7 +176,7 @@ class CircleDrawer(QgsMapTool):
     # -------------------------------------------------------------------------
 
     def _build_circle_geometry(self, center: QgsPointXY, radius: float) -> QgsGeometry:
-        """Build a QgsGeometry circle as a QgsCurvePolygon / QgsCircularString."""
+        """Build a QgsGeometry circle as a closed QgsCircularString (polyline)."""
         cx, cy = center.x(), center.y()
         arc_points = [
             QgsPoint(cx + radius, cy),           # East  (start)
@@ -191,9 +187,7 @@ class CircleDrawer(QgsMapTool):
         ]
         cs = QgsCircularString()
         cs.setPoints(arc_points)
-        cp = QgsCurvePolygon()
-        cp.setExteriorRing(cs)
-        return QgsGeometry(cp)
+        return QgsGeometry(cs)
 
     def _commit_circle(self, center: QgsPointXY, radius_point: QgsPointXY):
         """Add a circle feature to the circle layer and return the radius."""
@@ -232,9 +226,18 @@ class CircleDrawer(QgsMapTool):
         """Render rubber-band circle preview and radius line."""
         radius = center.distance(cursor)
 
-        self.preview_circle_band.reset(QgsWkbTypes.PolygonGeometry)
-        circle_geom = QgsGeometry.fromPointXY(center).buffer(radius, 64)
-        self.preview_circle_band.addGeometry(circle_geom, None)
+        self.preview_circle_band.reset(QgsWkbTypes.LineGeometry)
+        cx, cy = center.x(), center.y()
+        cs_pts = [
+            QgsPoint(cx + radius, cy),
+            QgsPoint(cx,          cy - radius),
+            QgsPoint(cx - radius, cy),
+            QgsPoint(cx,          cy + radius),
+            QgsPoint(cx + radius, cy),
+        ]
+        cs = QgsCircularString()
+        cs.setPoints(cs_pts)
+        self.preview_circle_band.addGeometry(QgsGeometry(cs), None)
         self.preview_circle_band.show()
 
         self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
@@ -277,7 +280,7 @@ class CircleDrawer(QgsMapTool):
         self._hint.raise_()
 
     def _clear_preview(self):
-        self.preview_circle_band.reset(QgsWkbTypes.PolygonGeometry)
+        self.preview_circle_band.reset(QgsWkbTypes.LineGeometry)
         self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
         self.radius_text.setPlainText("")
         self.snap_marker.setVisible(False)
