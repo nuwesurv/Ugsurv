@@ -100,8 +100,9 @@ class VertexSelector(QgsMapTool):
         self.terminal_dock = terminal_dock
         self._maptool      = None   # injected by UgsurvMaptool.set_default_tool()
 
-        self._state   = _S_IDLE
-        self._gripped = None        # _SelVtx – the hot grip
+        self._state          = _S_IDLE
+        self._gripped        = None   # _SelVtx – the hot grip
+        self._moving_center  = False  # True when _S_MOVING translates a whole circle
 
         snapSettingConfig()
 
@@ -110,8 +111,13 @@ class VertexSelector(QgsMapTool):
         self._hover_marker.setVisible(False)
 
         # MOVING: cyan snap indicator
-        self._snap_marker = self._make_marker(QColor(66, 135, 245, 220), QgsVertexMarker.ICON_CIRCLE, 10)
+        self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CIRCLE, 10)
         self._snap_marker.setVisible(False)
+
+        # IDLE/FEATURE/MOVING: circle-center snap indicator ("+" cross)
+        self._center_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CROSS, 14)
+        self._center_marker.setPenWidth(2)
+        self._center_marker.setVisible(False)
 
         # GRIPPED: one marker per vertex of the gripped feature
         self._grip_markers = []
@@ -319,8 +325,9 @@ class VertexSelector(QgsMapTool):
     # ------------------------------------------------------------------
 
     def _enter_idle(self):
-        self._state   = _S_IDLE
-        self._gripped = None
+        self._state          = _S_IDLE
+        self._gripped        = None
+        self._moving_center  = False
         self._clear_grip_markers()
         self._clear_bands()
         self._clear_feature()
@@ -362,15 +369,16 @@ class VertexSelector(QgsMapTool):
             m.setCenter(vpt)
             self._feature_vtx_markers.append(m)
 
-        # "+" markers at the midpoint of every segment
-        for i in range(len(verts) - 1):
-            pt1, pt2 = verts[i][1], verts[i + 1][1]
-            mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
-            m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
-            m.setCenter(mid)
-            m.setPenWidth(2)
-            self._mid_markers.append(m)
-            self._mid_points.append(mid)
+        # "+" markers at segment midpoints — skip for circles (chords ≠ arc)
+        if layer.name() != "_circles":
+            for i in range(len(verts) - 1):
+                pt1, pt2 = verts[i][1], verts[i + 1][1]
+                mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
+                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
+                m.setCenter(mid)
+                m.setPenWidth(2)
+                self._mid_markers.append(m)
+                self._mid_points.append(mid)
 
         feat = layer.getFeature(fid)
         geom = feat.geometry()
@@ -417,17 +425,18 @@ class VertexSelector(QgsMapTool):
             self._geom_band = self._make_band(gt, _C_FEATURE, _C_FEAT_FILL, width=2)
             self._geom_band.setToGeometry(geom, sv.layer)
 
-        # Keep "+" markers at segment midpoints so the user can still insert vertices
+        # Keep "+" markers at segment midpoints — skip for circles (chords ≠ arc)
         self._sel_layer = sv.layer
         self._sel_fid   = sv.fid
-        for i in range(len(verts) - 1):
-            pt1, pt2 = verts[i][1], verts[i + 1][1]
-            mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
-            m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
-            m.setCenter(mid)
-            m.setPenWidth(2)
-            self._mid_markers.append(m)
-            self._mid_points.append(mid)
+        if sv.layer.name() != "_circles":
+            for i in range(len(verts) - 1):
+                pt1, pt2 = verts[i][1], verts[i + 1][1]
+                mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
+                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
+                m.setCenter(mid)
+                m.setPenWidth(2)
+                self._mid_markers.append(m)
+                self._mid_points.append(mid)
 
         self._log(
             f"\nGripped vertex {sv.vidx + 1}/{len(verts)}"
@@ -507,7 +516,11 @@ class VertexSelector(QgsMapTool):
         if not sv.layer.isEditable():
             sv.layer.startEditing()
 
-        if sv.layer.name() == "_circles":
+        if sv.layer.name() == "_circles" and self._moving_center:
+            self._moving_center = False
+            self._commit_circle_center_move(sv, map_pt)
+            return
+        elif sv.layer.name() == "_circles":
             self._commit_circle_vertex_move(sv, map_pt)
         else:
             feat = sv.layer.getFeature(sv.fid)
@@ -600,7 +613,82 @@ class VertexSelector(QgsMapTool):
         if radius_idx >= 0:
             sv.layer.changeAttributeValue(sv.fid, radius_idx, round(new_radius, 3))
 
+    def _find_circle_center_feature(self, map_pt):
+        """Return (layer, fid, center_pt) of the nearest _circles center within hit tolerance, or None."""
+        tol  = self._hit_tol()
+        rect = QgsRectangle(
+            map_pt.x() - tol, map_pt.y() - tol,
+            map_pt.x() + tol, map_pt.y() + tol,
+        )
+        best_lyr, best_fid, best_center, best_dist = None, None, None, tol
+        for lyr in self._vector_layers():
+            if lyr.name() != "_circles":
+                continue
+            for feat in lyr.getFeatures(rect):
+                center = self._circle_center_from_geom(feat.geometry())
+                if center is None:
+                    continue
+                dist = map_pt.distance(center)
+                if dist < best_dist:
+                    best_dist   = dist
+                    best_lyr    = lyr
+                    best_fid    = feat.id()
+                    best_center = center
+        if best_lyr is None:
+            return None
+        return (best_lyr, best_fid, best_center)
+
+    def _enter_moving_center(self, layer, fid):
+        """Enter whole-circle translate mode: the center tracks the cursor."""
+        self._clear_grip_markers()
+        self._clear_bands()
+        self._clear_feature()
+        if self._hover_marker is not None:
+            self._hover_marker.setVisible(False)
+
+        verts = self._feature_verts(layer, fid)
+        if not verts:
+            return
+        # Use vertex 0 (East point) as sentinel grip so _commit_move can read the radius
+        sv = _SelVtx(layer, fid, verts[0][0], verts[0][1])
+        self._gripped       = sv
+        self._sel_layer     = layer
+        self._sel_fid       = fid
+        self._moving_center = True
+        self._state         = _S_MOVING
+
+        feat = layer.getFeature(fid)
+        geom = feat.geometry()
+        if not geom.isEmpty():
+            gt = QgsWkbTypes.geometryType(geom.wkbType())
+            self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
+            self._move_band.setToGeometry(geom, layer)
+
+        self._log("\nMoving circle — click to place new center  |  Esc / RMB to cancel")
+
+    def _commit_circle_center_move(self, sv, new_center):
+        """Translate the circle so its center is at new_center, preserving radius."""
+        feat = sv.layer.getFeature(sv.fid)
+        geom = feat.geometry()
+        orig_center = self._circle_center_from_geom(geom)
+        if orig_center is None:
+            return
+        radius = orig_center.distance(sv.point)   # sv.point = original East vertex
+        new_geom = self._build_circle_geom(new_center, radius)
+        sv.layer.changeGeometry(sv.fid, new_geom)
+        radius_idx = sv.layer.fields().indexOf("radius")
+        if radius_idx >= 0:
+            sv.layer.changeAttributeValue(sv.fid, radius_idx, round(radius, 3))
+        sv.layer.triggerRepaint()
+        self._log(
+            f"\nCircle moved  center ({orig_center.x():.3f}, {orig_center.y():.3f})"
+            f" → ({new_center.x():.3f}, {new_center.y():.3f})"
+        )
+        new_east = QgsPointXY(new_center.x() + radius, new_center.y())
+        self._enter_gripped(_SelVtx(sv.layer, sv.fid, sv.vidx, new_east))
+
     def _cancel_move(self):
+        self._moving_center = False
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self._snap_marker.setVisible(False)
@@ -761,13 +849,51 @@ class VertexSelector(QgsMapTool):
     # Snap helper
     # ------------------------------------------------------------------
 
+    def _find_circle_center_snap(self, map_pt):
+        """Return QgsPointXY of the nearest _circles center within snap tolerance, or None."""
+        tol = self._hit_tol()
+        rect = QgsRectangle(
+            map_pt.x() - tol, map_pt.y() - tol,
+            map_pt.x() + tol, map_pt.y() + tol,
+        )
+        best_center, best_dist = None, tol
+        for lyr in self._vector_layers():
+            if lyr.name() != "_circles":
+                continue
+            for feat in lyr.getFeatures(rect):
+                center = self._circle_center_from_geom(feat.geometry())
+                if center:
+                    dist = map_pt.distance(center)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_center = center
+        return best_center
+
+    def _update_center_marker(self, map_pt):
+        """Show/hide the circle-center snap indicator based on cursor proximity."""
+        if self._state == _S_MOVING or self._center_marker is None:
+            if self._center_marker:
+                self._center_marker.setVisible(False)
+            return
+        center = self._find_circle_center_snap(map_pt)
+        if center:
+            self._center_marker.setCenter(center)
+            self._center_marker.setVisible(True)
+        else:
+            self._center_marker.setVisible(False)
+
     def _snap_point(self, screen_pt, raw_pt):
         """Return snapped point using QGIS native snapping, or raw_pt if no snap.
 
-        Uses canvas.snappingUtils() so CRS transformations and project snapping
-        config are handled automatically — unlike a manual getFeatures(rect) query
-        which requires the rect to be in the layer's own CRS.
+        Circle centers are checked first and take priority over normal snap.
         """
+        center = self._find_circle_center_snap(raw_pt)
+        if center and self._snap_marker:
+            self._snap_marker.setCenter(center)
+            self._snap_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+            self._snap_marker.setVisible(True)
+            return center
+
         match = self.canvas.snappingUtils().snapToMap(screen_pt)
         if match.isValid():
             snapped = match.point()
@@ -1087,7 +1213,9 @@ class VertexSelector(QgsMapTool):
         return result
 
     def _show_hint(self, screen_pos):
-        if self._state == _S_GRIPPED and self._gripped_can_extend():
+        if self._state == _S_MOVING and self._moving_center:
+            text = "Click to place circle center"
+        elif self._state == _S_GRIPPED and self._gripped_can_extend():
             text = "Click grip to move  |  click to extend line"
         else:
             text = _HINT.get(self._state, "")
@@ -1121,8 +1249,12 @@ class VertexSelector(QgsMapTool):
             self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 14)
             self._hover_marker.setVisible(False)
         if self._snap_marker is None:
-            self._snap_marker = self._make_marker(QColor(66, 135, 245, 220), QgsVertexMarker.ICON_CIRCLE, 10)
+            self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CIRCLE, 10)
             self._snap_marker.setVisible(False)
+        if self._center_marker is None:
+            self._center_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CROSS, 14)
+            self._center_marker.setPenWidth(2)
+            self._center_marker.setVisible(False)
 
     def deactivate(self):
         """Called by UgsurvMaptool._evict() when a drawing tool takes over.
@@ -1138,10 +1270,15 @@ class VertexSelector(QgsMapTool):
         self._snap_marker.setVisible(False)
         self._rm(self._snap_marker)
         self._snap_marker = None
+        if self._center_marker is not None:
+            self._center_marker.setVisible(False)
+            self._rm(self._center_marker)
+            self._center_marker = None
         super().deactivate()
 
     def canvasMoveEvent(self, event):
         raw_pt = self.toMapCoordinates(event.pos())
+        self._update_center_marker(raw_pt)
 
         # Segment drag: left button held + started from edge click
         if self._seg_press_pos is not None and (event.buttons() & Qt.LeftButton):
@@ -1197,7 +1334,16 @@ class VertexSelector(QgsMapTool):
             sv   = self._gripped
             feat = sv.layer.getFeature(sv.fid)
             if not feat.geometry().isEmpty():
-                if sv.layer.name() == "_circles":
+                if sv.layer.name() == "_circles" and self._moving_center:
+                    # Translate: rebuild circle at cursor position, same radius
+                    orig_center = self._circle_center_from_geom(feat.geometry())
+                    if orig_center:
+                        radius  = orig_center.distance(sv.point)
+                        preview = self._build_circle_geom(map_pt, radius)
+                        self._move_band.setToGeometry(preview, sv.layer)
+                    self._show_hint(event.pos())
+                    return
+                elif sv.layer.name() == "_circles":
                     preview = self._circle_geom_for_drag(feat.geometry(), map_pt)
                     # Keep input box near cursor; update placeholder with live radius
                     center = self._circle_center_from_geom(feat.geometry())
@@ -1288,6 +1434,14 @@ class VertexSelector(QgsMapTool):
             return
 
         map_pt = raw_pt
+
+        # Circle-center click: enter whole-circle translate mode (optional — only
+        # when cursor is near the center cross, not a cardinal vertex).
+        if not (event.modifiers() & Qt.ShiftModifier):
+            center_hit = self._find_circle_center_feature(map_pt)
+            if center_hit:
+                self._enter_moving_center(center_hit[0], center_hit[1])
+                return
 
         # Prefer the active feature's vertices to avoid accidentally grabbing
         # a neighbour feature that shares a coincident boundary vertex.
