@@ -3,12 +3,17 @@ AutoCAD-style SCALE tool.
 
 Workflow
 ────────
-1. Click any feature   → highlighted green         (_ST_SELECT → _ST_BASE)
-2. Click base point    → scale origin              (_ST_BASE   → _ST_SCALE)
-3. Move cursor         → live scaled preview; factor shown in DynamicInput
-4. Click              → apply scale at cursor distance
-   Type factor + Enter → apply that factor precisely
-   Escape / RMB        → cancel
+1. Click features to build a selection set.
+   Shift+click removes a feature from the set.
+   Enter / Space / RMB (with selection) → confirm and proceed.
+
+2. Click scale origin  → snaps to nearest vertex.
+
+3. Move cursor         → live scaled preview; factor shown in DynamicInput.
+   Click               → apply scale at cursor distance.
+   Type factor + Enter → apply that factor precisely.
+   Enter / Space       → accept current cursor factor.
+   Escape / RMB        → cancel.
 
 Scale factor is derived from cursor distance / reference distance, where the
 reference distance is the average distance from the base point to the centroids
@@ -46,7 +51,7 @@ _ST_SCALE  = 2
 _HIT_PX = 10
 
 _HINT = {
-    _ST_SELECT: "Click a feature to scale",
+    _ST_SELECT: "Click features  (Shift+click = deselect  |  Enter = confirm)",
     _ST_BASE:   "Click scale origin",
     _ST_SCALE:  "Click to set scale  or  type factor",
 }
@@ -108,7 +113,7 @@ def _scale_geom(geom, cx, cy, factor):
 
 
 class ScaleTool(QgsMapTool):
-    """Scale entire features — AutoCAD-style select → origin → factor."""
+    """Scale features — AutoCAD-style multi-select → origin → factor."""
 
     def __init__(self, canvas, terminal_dock, preselect=None):
         super().__init__(canvas)
@@ -224,6 +229,40 @@ class ScaleTool(QgsMapTool):
         self._hint.show()
         self._hint.raise_()
 
+    # ------------------------------------------------------------------
+    # Selection management
+    # ------------------------------------------------------------------
+
+    def _sel_key(self, layer, fid):
+        return (id(layer), fid)
+
+    def _existing_keys(self):
+        return [self._sel_key(l, f) for l, f, _ in self._sel_features]
+
+    def _add_to_selection(self, layer, fid, geom):
+        if self._sel_key(layer, fid) in self._existing_keys():
+            return False
+        self._sel_features.append((layer, fid, QgsGeometry(geom)))
+        gt = QgsWkbTypes.geometryType(geom.wkbType())
+        hl = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
+        hl.setToGeometry(geom, layer)
+        self._sel_bands.append(hl)
+        prev = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
+        prev.setVisible(False)
+        self._prev_bands.append(prev)
+        return True
+
+    def _remove_from_selection(self, layer, fid):
+        key  = self._sel_key(layer, fid)
+        keys = self._existing_keys()
+        if key not in keys:
+            return False
+        idx = keys.index(key)
+        self._sel_features.pop(idx)
+        self._rm(self._sel_bands.pop(idx))
+        self._rm(self._prev_bands.pop(idx))
+        return True
+
     def _clear_bands(self):
         for b in self._sel_bands:
             self._rm(b)
@@ -232,16 +271,19 @@ class ScaleTool(QgsMapTool):
         self._sel_bands  = []
         self._prev_bands = []
 
+    def _clear_selection(self):
+        self._clear_bands()
+        self._sel_features = []
+
     def _reset(self):
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
-        self._clear_bands()
+        self._clear_selection()
         if self._snap_ind:
             self._snap_ind.setMatch(QgsPointLocator.Match())
-        self._state        = _ST_SELECT
-        self._sel_features = []
-        self._base_pt      = None
-        self._snap_pt      = None
+        self._state   = _ST_SELECT
+        self._base_pt = None
+        self._snap_pt = None
 
     # ------------------------------------------------------------------
     # DynamicInput callbacks
@@ -279,51 +321,29 @@ class ScaleTool(QgsMapTool):
     # State transitions
     # ------------------------------------------------------------------
 
-    def _enter_base(self, layer, fid, geom):
-        self._clear_bands()
-        self._sel_features = [(layer, fid, QgsGeometry(geom))]
-        gt = QgsWkbTypes.geometryType(geom.wkbType())
-        hl = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
-        hl.setToGeometry(geom, layer)
-        self._sel_bands.append(hl)
-        prev = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
-        prev.setVisible(False)
-        self._prev_bands.append(prev)
+    def _enter_base(self):
+        for b in self._prev_bands:
+            b.setVisible(False)
         self._state = _ST_BASE
+        n = len(self._sel_features)
         self._log(
-            f"\nSelected '{layer.name()}' fid {fid}"
-            f"  →  click scale origin  |  Esc / RMB to cancel"
+            f"\n{n} feature(s) selected"
+            "  →  click scale origin  |  Esc / RMB to cancel"
         )
 
     def _load_preselect(self, items):
-        self._clear_bands()
-        self._sel_features = []
+        self._clear_selection()
         for layer, fid in items:
             feat = layer.getFeature(fid)
             if not feat.isValid() or feat.geometry().isEmpty():
                 continue
-            geom = QgsGeometry(feat.geometry())
-            self._sel_features.append((layer, fid, geom))
-            gt = QgsWkbTypes.geometryType(geom.wkbType())
-            hl = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
-            hl.setToGeometry(geom, layer)
-            self._sel_bands.append(hl)
-            prev = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
-            prev.setVisible(False)
-            self._prev_bands.append(prev)
+            self._add_to_selection(layer, fid, QgsGeometry(feat.geometry()))
         if self._sel_features:
-            self._state = _ST_BASE
-            n = len(self._sel_features)
-            self._log(
-                f"\n{n} feature(s) selected"
-                f"  →  click scale origin  |  Esc / RMB to cancel"
-            )
+            self._enter_base()
 
     def _enter_scale(self, base_pt):
         self._base_pt = base_pt
 
-        # Reference distance: average dist from base to feature centroids.
-        # Cursor at this distance = 1x scale; 2x distance = 2x scale, etc.
         dists = []
         for _, _, geom in self._sel_features:
             c = geom.centroid().asPoint()
@@ -331,7 +351,6 @@ class ScaleTool(QgsMapTool):
             dists.append(d)
         ref = sum(dists) / len(dists) if dists else 0.0
         if ref < 1e-10:
-            # Base point is on/near all centroids — fall back to bbox diagonal
             bb = self._sel_features[0][2].boundingBox() if self._sel_features else None
             if bb and not bb.isEmpty():
                 ref = math.hypot(bb.width(), bb.height()) / 2.0
@@ -402,22 +421,23 @@ class ScaleTool(QgsMapTool):
                 layer, fid = items
                 feat = layer.getFeature(fid)
                 if feat.isValid() and not feat.geometry().isEmpty():
-                    self._enter_base(layer, fid, QgsGeometry(feat.geometry()))
+                    self._add_to_selection(layer, fid, QgsGeometry(feat.geometry()))
+                    if self._sel_features:
+                        self._enter_base()
             if self._sel_features:
                 return
 
         self._log(
-            "\nSCALE  ──  click a feature, then scale origin, then set factor"
-            "\n  Click to scale visually  |  type factor + Enter for precision"
+            "\nSCALE  ──  click features to select  (Shift+click to deselect)"
+            "\n  Enter / Space / RMB → confirm selection, then click scale origin, then set factor"
             "\n  1.0 = no change,  2.0 = double size,  0.5 = half size"
-            "\n  Esc / RMB → cancel\n"
+            "\n  Esc → cancel\n"
         )
 
     def deactivate(self):
         self._dinput.destroy()
         self.terminal_dock.clear_input_handler()
-        self._clear_bands()
-        self._sel_features = []
+        self._clear_selection()
         self._snap_ind = None
         rm_cc_marker(self.canvas, self._cc_cross)
         self._cc_cross = None
@@ -443,14 +463,18 @@ class ScaleTool(QgsMapTool):
 
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
+        shift  = bool(event.modifiers() & Qt.ShiftModifier)
 
         if event.button() == Qt.RightButton:
-            if self._state != _ST_SELECT:
+            if self._state == _ST_SELECT:
+                if self._sel_features:
+                    self._enter_base()
+                else:
+                    self._hint.hide()
+                    self.deactivate()
+            else:
                 self._reset()
                 self._log("\nScale cancelled")
-            else:
-                self._hint.hide()
-                self.deactivate()
             return
 
         if event.button() != Qt.LeftButton:
@@ -459,7 +483,24 @@ class ScaleTool(QgsMapTool):
         if self._state == _ST_SELECT:
             result = self._find_feature_near(map_pt)
             if result:
-                self._enter_base(*result)
+                layer, fid, geom = result
+                if shift:
+                    if self._remove_from_selection(layer, fid):
+                        self._log(f"\nDeselected  ({len(self._sel_features)} selected)")
+                    else:
+                        self._log("\nNot in selection")
+                else:
+                    if self._add_to_selection(layer, fid, geom):
+                        self._log(
+                            f"\nSelected '{layer.name()}' fid {fid}"
+                            f"  ({len(self._sel_features)} selected)"
+                        )
+                    else:
+                        self._log(
+                            f"\nAlready selected"
+                            f"  ({len(self._sel_features)} selected)"
+                            "  — Shift+click to deselect"
+                        )
             else:
                 self._log("\nNo feature found near click")
 
@@ -470,7 +511,10 @@ class ScaleTool(QgsMapTool):
         elif self._state == _ST_SCALE:
             self._commit(event.pos())
 
-        self.terminal_dock.command.setFocus()
+        if self._state == _ST_SELECT:
+            self.canvas.setFocus()
+        else:
+            self.terminal_dock.command.setFocus()
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -482,8 +526,21 @@ class ScaleTool(QgsMapTool):
                 self._hint.hide()
                 self.deactivate()
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-            self._hint.hide()
-            self.deactivate()
+            if self._state == _ST_SELECT:
+                if self._sel_features:
+                    self._enter_base()
+                else:
+                    self._hint.hide()
+                    self.deactivate()
+            elif self._state == _ST_BASE:
+                if self._snap_pt:
+                    self._enter_scale(self._snap_pt)
+            elif self._state == _ST_SCALE:
+                if self._snap_pt:
+                    factor = self._cursor_factor(self._snap_pt)
+                    self._dinput.hide()
+                    self.terminal_dock.clear_input_handler()
+                    self._apply_scale(factor)
 
     def mouseDoubleClickEvent(self, event):
         self.terminal_dock.command.setFocus()

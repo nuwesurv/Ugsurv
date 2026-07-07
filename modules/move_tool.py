@@ -462,7 +462,10 @@ class MoveTool(QgsMapTool):
         elif self._state == _ST_PLACE:
             self._commit(event.pos())
 
-        self.terminal_dock.command.setFocus()
+        if self._state == _ST_SELECT:
+            self.canvas.setFocus()
+        else:
+            self.terminal_dock.command.setFocus()
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -480,6 +483,9 @@ class MoveTool(QgsMapTool):
                 else:
                     self._hint.hide()
                     self.deactivate()
+            elif self._state == _ST_BASE:
+                if self._snap_pt:
+                    self._enter_place(self._snap_pt)
 
     def mouseDoubleClickEvent(self, event):
         self.terminal_dock.command.setFocus()
