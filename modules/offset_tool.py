@@ -192,10 +192,36 @@ class OffsetTool(QgsMapTool):
         t = ((b1.x()-a1.x())*d2y - (b1.y()-a1.y())*d2x) / denom
         return QgsPointXY(a1.x()+t*d1x, a1.y()+t*d1y)
 
+    @staticmethod
+    def _is_closed_ring(pts):
+        return (len(pts) >= 4
+                and abs(pts[0].x() - pts[-1].x()) < 1e-9
+                and abs(pts[0].y() - pts[-1].y()) < 1e-9)
+
     def _offset_polyline(self, pts, dist):
         n = len(pts)
         if n < 2:
             return None
+
+        if self._is_closed_ring(pts):
+            # Work on the unique vertices (drop the repeated closing point)
+            ring = pts[:-1]
+            m = len(ring)
+            if m < 3:
+                return None
+            # Offset every segment, wrapping last→first
+            segs = [self._offset_seg(ring[i], ring[(i + 1) % m], dist)
+                    for i in range(m)]
+            # Each junction is the intersection of adjacent offset segments
+            result = [
+                self._line_isect(segs[i][0], segs[i][1],
+                                 segs[(i + 1) % m][0], segs[(i + 1) % m][1])
+                for i in range(m)
+            ]
+            result.append(result[0])   # close the ring
+            return result
+
+        # Open polyline — original logic
         segs = [self._offset_seg(pts[i], pts[i+1], dist) for i in range(n-1)]
         result = [segs[0][0]]
         for i in range(len(segs)-1):
