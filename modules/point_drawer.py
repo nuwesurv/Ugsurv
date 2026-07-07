@@ -76,8 +76,9 @@ class PointDrawer(QgsMapTool):
     def _ensure_fields(self, lyr):
         existing = {f.name() for f in lyr.fields()}
         to_add = []
-        if "x" not in existing: to_add.append(QgsField("x", QVariant.Double))
-        if "y" not in existing: to_add.append(QgsField("y", QVariant.Double))
+        if "x"     not in existing: to_add.append(QgsField("x",     QVariant.Double))
+        if "y"     not in existing: to_add.append(QgsField("y",     QVariant.Double))
+        if "color" not in existing: to_add.append(QgsField("color", QVariant.String))
         if to_add:
             lyr.dataProvider().addAttributes(to_add)
             lyr.updateFields()
@@ -111,8 +112,9 @@ class PointDrawer(QgsMapTool):
         crs = QgsProject.instance().crs().authid()
         mem = QgsVectorLayer(f"Point?crs={crs}", _LAYER_NAME, "memory")
         mem.dataProvider().addAttributes([
-            QgsField("x", QVariant.Double),
-            QgsField("y", QVariant.Double),
+            QgsField("x",     QVariant.Double),
+            QgsField("y",     QVariant.Double),
+            QgsField("color", QVariant.String),
         ])
         mem.updateFields()
         lyr = create_layer_in_gpkg(mem)
@@ -146,6 +148,13 @@ class PointDrawer(QgsMapTool):
         feat.setGeometry(QgsGeometry.fromPointXY(pt))
         feat.setAttribute("x", round(pt.x(), 4))
         feat.setAttribute("y", round(pt.y(), 4))
+        try:
+            color_hex = self._layer.renderer().symbol().color().name()
+        except Exception:
+            color_hex = "#008cdc"
+        color_idx = self._layer.fields().indexOf("color")
+        if color_idx >= 0:
+            feat.setAttribute(color_idx, color_hex)
         self._layer.addFeature(feat)
         self._layer.triggerRepaint()
         self._log(f"\nPoint: {pt.x():.4f}, {pt.y():.4f}")

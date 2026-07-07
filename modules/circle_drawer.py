@@ -140,6 +140,7 @@ class CircleDrawer(QgsMapTool):
         if "circumference" not in existing: to_add.append(QgsField("circumference", QVariant.Double))
         if "area_sqm"      not in existing: to_add.append(QgsField("area_sqm",      QVariant.Double))
         if "area_acres"    not in existing: to_add.append(QgsField("area_acres",    QVariant.Double))
+        if "color"         not in existing: to_add.append(QgsField("color",         QVariant.String))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -185,6 +186,7 @@ class CircleDrawer(QgsMapTool):
             QgsField("circumference", QVariant.Double),
             QgsField("area_sqm",      QVariant.Double),
             QgsField("area_acres",    QVariant.Double),
+            QgsField("color",         QVariant.String),
         ])
         mem.updateFields()
 
@@ -224,6 +226,13 @@ class CircleDrawer(QgsMapTool):
             idx = self.circle_layer.fields().indexOf(fname)
             if idx >= 0:
                 feature.setAttribute(idx, val)
+        try:
+            color_hex = self.circle_layer.renderer().symbol().color().name()
+        except Exception:
+            color_hex = LAYER_COLOR_OUTLINE
+        color_idx = self.circle_layer.fields().indexOf("color")
+        if color_idx >= 0:
+            feature.setAttribute(color_idx, color_hex)
 
         self.circle_layer.addFeature(feature)
         self.circle_layer.updateExtents()

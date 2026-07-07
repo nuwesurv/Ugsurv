@@ -326,8 +326,20 @@ class PropertiesDock(QDockWidget):
         except Exception:
             return QColor(0, 0, 255)
 
+    def _get_current_color(self):
+        """Read color from the feature's 'color' attribute if set, else from layer renderer."""
+        if self._layer is not None and self._fid is not None:
+            color_idx = self._layer.fields().indexOf("color")
+            if color_idx >= 0:
+                val = self._layer.getFeature(self._fid).attribute(color_idx)
+                if val:
+                    c = QColor(str(val))
+                    if c.isValid():
+                        return c
+        return self._get_layer_color()
+
     def _make_color_button(self):
-        color = self._get_layer_color()
+        color = self._get_current_color()
         btn   = QPushButton()
         btn.setStyleSheet(
             f"background-color: rgb({color.red()},{color.green()},{color.blue()});"
@@ -335,13 +347,18 @@ class PropertiesDock(QDockWidget):
         )
 
         def on_clicked():
-            chosen = QColorDialog.getColor(self._get_layer_color(), None, "Polyline Color")
+            chosen = QColorDialog.getColor(self._get_current_color(), None, "Color")
             if chosen.isValid():
                 try:
                     self._layer.renderer().symbol().setColor(chosen)
                     self._layer.triggerRepaint()
                 except Exception:
                     pass
+                color_idx = self._layer.fields().indexOf("color")
+                if color_idx >= 0 and self._fid is not None:
+                    if not self._layer.isEditable():
+                        self._layer.startEditing()
+                    self._layer.changeAttributeValue(self._fid, color_idx, chosen.name())
                 self._deferred_refresh()
 
         btn.clicked.connect(on_clicked)
