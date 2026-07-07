@@ -79,6 +79,7 @@ class PointDrawer(QgsMapTool):
         if "color"       not in existing: to_add.append(QgsField("color",       QVariant.String))
         if "symbol"      not in existing: to_add.append(QgsField("symbol",      QVariant.String))
         if "symbol_size" not in existing: to_add.append(QgsField("symbol_size", QVariant.Double))
+        if "symbol_svg"  not in existing: to_add.append(QgsField("symbol_svg",  QVariant.String))
         if to_add:
             lyr.dataProvider().addAttributes(to_add)
             lyr.updateFields()
@@ -113,6 +114,7 @@ class PointDrawer(QgsMapTool):
             QgsField("color",       QVariant.String),
             QgsField("symbol",      QVariant.String),
             QgsField("symbol_size", QVariant.Double),
+            QgsField("symbol_svg",  QVariant.String),
         ])
         mem.updateFields()
         lyr = create_layer_in_gpkg(mem)

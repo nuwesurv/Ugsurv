@@ -1,14 +1,21 @@
 import math
+import os
 
-from PyQt5.QtCore import Qt, QTimer, QVariant, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, QRectF, QSize, QTimer, QVariant, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
-    QColorDialog, QComboBox, QDockWidget, QFormLayout, QFrame,
-    QLabel, QCheckBox, QLineEdit, QPushButton,
+    QColorDialog, QComboBox, QDockWidget, QFileDialog, QFormLayout, QFrame,
+    QGridLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit, QPushButton,
     QScrollArea, QWidget, QVBoxLayout,
 )
 from qgis.core import (
-    QgsCircularString, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
+    QgsApplication, QgsCircularString, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
+)
+
+_PLUGIN_ICONS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "map_icons", "point_icons",
 )
 from .layer_utils import circle_attrs, apply_circle_color_renderer, apply_polyline_color_renderer, apply_point_color_renderer
 
@@ -424,6 +431,130 @@ class PropertiesDock(QDockWidget):
 
         size_edit.editingFinished.connect(on_size_edited)
         self._form.addRow("Size:", size_edit)
+
+        # ── SVG pin / custom marker ───────────────────────────────────
+        svg_idx     = self._layer.fields().indexOf("symbol_svg")
+        current_svg = self._attr(feat, svg_idx) or ""
+
+        self._form.addRow(self._sep())
+
+        svg_name_lbl = self._ro(os.path.basename(current_svg) if current_svg else "None")
+        self._form.addRow("SVG:", svg_name_lbl)
+
+        def _svg_paths():
+            try:
+                paths = QgsApplication.svgPaths()
+                return paths[0] if paths else ""
+            except Exception:
+                return ""
+
+        def browse_svg():
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select SVG pin", _svg_paths(), "SVG files (*.svg)"
+            )
+            if not path:
+                return
+            if svg_idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, svg_idx, path)
+                apply_point_color_renderer(self._layer)
+                self._layer.triggerRepaint()
+            self._deferred_refresh()
+
+        def clear_svg():
+            if svg_idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, svg_idx, None)
+                apply_point_color_renderer(self._layer)
+                self._layer.triggerRepaint()
+            self._deferred_refresh()
+
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(browse_svg)
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(clear_svg)
+        clear_btn.setEnabled(bool(current_svg))
+
+        btn_row = QWidget()
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.addWidget(browse_btn)
+        btn_layout.addWidget(clear_btn)
+        self._form.addRow(btn_row)
+
+        picker = self._make_icon_picker(current_svg, svg_idx)
+        if picker is not None:
+            self._form.addRow("Icons:", picker)
+
+    # ------------------------------------------------------------------
+    # SVG icon picker
+    # ------------------------------------------------------------------
+
+    def _make_icon_picker(self, current_svg, svg_idx):
+        """Scrollable grid of plugin-bundled SVG icons the user can click to select."""
+        if not os.path.isdir(_PLUGIN_ICONS_DIR):
+            return None
+
+        svgs = sorted(
+            f for f in os.listdir(_PLUGIN_ICONS_DIR) if f.lower().endswith(".svg")
+        )
+        if not svgs:
+            return None
+
+        ICON_PX = 44
+        COLS    = 4
+
+        container = QWidget()
+        grid      = QGridLayout(container)
+        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setSpacing(4)
+
+        for i, fname in enumerate(svgs):
+            path = os.path.join(_PLUGIN_ICONS_DIR, fname)
+
+            pix = QPixmap(ICON_PX, ICON_PX)
+            pix.fill(Qt.transparent)
+            renderer = QSvgRenderer(path)
+            if renderer.isValid():
+                painter = QPainter(pix)
+                painter.setRenderHint(QPainter.Antialiasing)
+                renderer.render(painter, QRectF(0, 0, ICON_PX, ICON_PX))
+                painter.end()
+
+            btn = QPushButton()
+            btn.setIcon(QIcon(pix))
+            btn.setIconSize(QSize(ICON_PX - 4, ICON_PX - 4))
+            btn.setFixedSize(ICON_PX + 6, ICON_PX + 6)
+            btn.setToolTip(os.path.splitext(fname)[0])
+            btn.setFlat(True)
+
+            selected = bool(current_svg and os.path.abspath(path) == os.path.abspath(current_svg))
+            btn.setStyleSheet(
+                "border: 2px solid #0078d4; background: #e3f2fd; border-radius: 4px;"
+                if selected else
+                "border: 1px solid #bbb; border-radius: 4px;"
+            )
+
+            def on_pick(checked=False, p=path, _idx=svg_idx):
+                if _idx >= 0 and self._fid is not None:
+                    if not self._layer.isEditable():
+                        self._layer.startEditing()
+                    self._layer.changeAttributeValue(self._fid, _idx, p)
+                    apply_point_color_renderer(self._layer)
+                    self._layer.triggerRepaint()
+                self._deferred_refresh()
+
+            btn.clicked.connect(on_pick)
+            grid.addWidget(btn, i // COLS, i % COLS)
+
+        scroll = QScrollArea()
+        scroll.setWidget(container)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(min(len(svgs), 3) * (ICON_PX + 10) + 8)
+        scroll.setFrameShape(QFrame.StyledPanel)
+        return scroll
 
     def _write_circle_attrs(self, cx, cy, radius):
         attrs = circle_attrs(cx, cy, radius)

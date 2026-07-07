@@ -11,6 +11,8 @@ from qgis.core import (
     QgsLineSymbol,
     QgsMarkerSymbol,
     QgsSingleSymbolRenderer,
+    QgsRuleBasedRenderer,
+    QgsSvgMarkerSymbolLayer,
     QgsProperty,
     QgsSymbolLayer,
 )
@@ -142,13 +144,38 @@ def apply_polyline_color_renderer(layer):
 
 
 def apply_point_color_renderer(layer):
-    sym = QgsMarkerSymbol.createSimple({"color": "#008cdc", "outline_style": "no", "size": "2", "name": "circle"})
-    sl = sym.symbolLayer(0)
+    _COLOR_EXPR = 'if("color" IS NOT NULL AND "color" != \'\', "color", \'#008cdc\')'
+    _SIZE_EXPR  = 'if("symbol_size" IS NOT NULL AND "symbol_size" > 0, "symbol_size", 2.0)'
+
+    # ── SVG rule — active when symbol_svg field contains a path ──────
+    svg_sym = QgsMarkerSymbol()
+    svg_sym.deleteSymbolLayer(0)
+    svg_sl = QgsSvgMarkerSymbolLayer("")
+    svg_sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyName,
+        QgsProperty.fromExpression('"symbol_svg"'),
+    )
+    svg_sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertySize,
+        QgsProperty.fromExpression(_SIZE_EXPR),
+    )
+    svg_sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyFillColor,
+        QgsProperty.fromExpression(_COLOR_EXPR),
+    )
+    svg_sym.appendSymbolLayer(svg_sl)
+
+    svg_rule = QgsRuleBasedRenderer.Rule(svg_sym)
+    svg_rule.setFilterExpression('"symbol_svg" IS NOT NULL AND "symbol_svg" != \'\'')
+
+    # ── Simple marker rule — everything else ─────────────────────────
+    simple_sym = QgsMarkerSymbol.createSimple(
+        {"color": "#008cdc", "outline_style": "no", "size": "2", "name": "circle"}
+    )
+    sl = simple_sym.symbolLayer(0)
     sl.setDataDefinedProperty(
         QgsSymbolLayer.PropertyFillColor,
-        QgsProperty.fromExpression(
-            'if("color" IS NOT NULL AND "color" != \'\', "color", \'#008cdc\')'
-        ),
+        QgsProperty.fromExpression(_COLOR_EXPR),
     )
     sl.setDataDefinedProperty(
         QgsSymbolLayer.PropertyName,
@@ -158,11 +185,15 @@ def apply_point_color_renderer(layer):
     )
     sl.setDataDefinedProperty(
         QgsSymbolLayer.PropertySize,
-        QgsProperty.fromExpression(
-            'if("symbol_size" IS NOT NULL AND "symbol_size" > 0, "symbol_size", 2.0)'
-        ),
+        QgsProperty.fromExpression(_SIZE_EXPR),
     )
-    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    simple_rule = QgsRuleBasedRenderer.Rule(simple_sym, elseRule=True)
+
+    root = QgsRuleBasedRenderer.Rule(None)
+    root.appendChild(svg_rule)
+    root.appendChild(simple_rule)
+
+    layer.setRenderer(QgsRuleBasedRenderer(root))
     layer.setLegend(None)
 
 
