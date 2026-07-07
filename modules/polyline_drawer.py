@@ -12,8 +12,6 @@ from qgis.core import (
     QgsLineSymbol,
     QgsSingleSymbolRenderer,
     QgsCoordinateReferenceSystem,
-    QgsProperty,
-    QgsSymbolLayer,
 )
 from qgis.PyQt.QtWidgets import QGraphicsTextItem
 from PyQt5.QtCore import QVariant, QPoint
@@ -172,10 +170,6 @@ class PolylineDrawer(QgsMapTool):
             "width": "0.4",
             "line_style": "solid",
         })
-        symbol.symbolLayer(0).setDataDefinedProperty(
-            QgsSymbolLayer.PropertyColor,
-            QgsProperty.fromExpression(f'coalesce("color", \'{LAYER_COLOR}\')'),
-        )
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
     def _create_polyline_layer(self):
