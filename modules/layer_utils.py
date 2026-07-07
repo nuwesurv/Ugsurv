@@ -1,6 +1,7 @@
 import os
 import math
 from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QColor
 from qgis.core import (
     QgsProject,
     QgsVectorFileWriter,
@@ -8,6 +9,9 @@ from qgis.core import (
     QgsCoordinateTransformContext,
     QgsGeometry,
     QgsPointXY,
+    QgsRuleBasedRenderer,
+    QgsLineSymbol,
+    QgsMarkerSymbol,
 )
 
 def polyline_attrs(geom):
@@ -98,6 +102,50 @@ def connect_polyline_recalc(layer):
     layer.geometryChanged.connect(_on_geom_changed)
     layer.beforeCommitChanges.connect(_before_commit)
     _recalc_connected.add(layer.id())
+
+
+def _color_rule_renderer(layer, make_symbol, default_color):
+    """Build a QgsRuleBasedRenderer with one rule per unique color value in the layer."""
+    color_idx = layer.fields().indexOf("color")
+    colors = set()
+    if color_idx >= 0:
+        for feat in layer.getFeatures():
+            val = feat.attribute(color_idx)
+            if val:
+                c = QColor(str(val))
+                if c.isValid():
+                    colors.add(str(val))
+    if not colors:
+        colors = {default_color}
+
+    root = QgsRuleBasedRenderer.Rule(None)
+    for color in sorted(colors):
+        rule = QgsRuleBasedRenderer.Rule(make_symbol(color))
+        rule.setFilterExpression(f'"color" = \'{color}\'')
+        root.appendChild(rule)
+
+    else_rule = QgsRuleBasedRenderer.Rule(make_symbol(default_color), elseRule=True)
+    root.appendChild(else_rule)
+
+    return QgsRuleBasedRenderer(root)
+
+
+def apply_circle_color_renderer(layer):
+    def sym(color):
+        return QgsLineSymbol.createSimple({"color": color, "width": "0.4"})
+    layer.setRenderer(_color_rule_renderer(layer, sym, "#E05C00"))
+
+
+def apply_polyline_color_renderer(layer):
+    def sym(color):
+        return QgsLineSymbol.createSimple({"color": color, "width": "0.4", "line_style": "solid"})
+    layer.setRenderer(_color_rule_renderer(layer, sym, "#E05C00"))
+
+
+def apply_point_color_renderer(layer):
+    def sym(color):
+        return QgsMarkerSymbol.createSimple({"color": color, "outline_style": "no", "size": "2"})
+    layer.setRenderer(_color_rule_renderer(layer, sym, "#008cdc"))
 
 
 _DATA_DIR  = r"C:\UgSurv"

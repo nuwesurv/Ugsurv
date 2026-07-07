@@ -8,11 +8,9 @@ from qgis.core import (
     QgsPointXY,
     QgsField,
     QgsWkbTypes,
-    QgsLineSymbol,
     QgsPalLayerSettings,
     QgsTextFormat,
     QgsVectorLayerSimpleLabeling,
-    QgsSingleSymbolRenderer,
     QgsCircularString,
     QgsPoint,
     QgsCoordinateReferenceSystem,
@@ -24,7 +22,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from . import snap_utils
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, circle_attrs
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, circle_attrs, apply_circle_color_renderer
 import math
 from . import crs_utils
 
@@ -153,6 +151,7 @@ class CircleDrawer(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             self._ensure_fields(layer)
+            self._apply_circle_style(layer)
             return layer
         layer = open_layer_from_gpkg(LAYER_NAME)
         if layer:
@@ -164,11 +163,7 @@ class CircleDrawer(QgsMapTool):
         return self._create_circle_layer()
 
     def _apply_circle_style(self, layer):
-        symbol = QgsLineSymbol.createSimple({
-            "color": LAYER_COLOR_OUTLINE,
-            "width": "0.4",
-        })
-        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        apply_circle_color_renderer(layer)
         layer.setLabelsEnabled(False)
 
     def _create_circle_layer(self):
@@ -226,10 +221,7 @@ class CircleDrawer(QgsMapTool):
             idx = self.circle_layer.fields().indexOf(fname)
             if idx >= 0:
                 feature.setAttribute(idx, val)
-        try:
-            color_hex = self.circle_layer.renderer().symbol().color().name()
-        except Exception:
-            color_hex = LAYER_COLOR_OUTLINE
+        color_hex = LAYER_COLOR_OUTLINE
         color_idx = self.circle_layer.fields().indexOf("color")
         if color_idx >= 0:
             feature.setAttribute(color_idx, color_hex)

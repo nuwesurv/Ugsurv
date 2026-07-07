@@ -9,8 +9,6 @@ from qgis.core import (
     QgsField,
     QgsFields,
     QgsWkbTypes,
-    QgsLineSymbol,
-    QgsSingleSymbolRenderer,
     QgsCoordinateReferenceSystem,
 )
 from qgis.PyQt.QtWidgets import QGraphicsTextItem
@@ -20,7 +18,7 @@ from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, polyline_attrs, connect_polyline_recalc
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, polyline_attrs, connect_polyline_recalc, apply_polyline_color_renderer
 from . import snap_utils
 import math
 from . import crs_utils
@@ -140,6 +138,7 @@ class PolylineDrawer(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             self._ensure_fields(layer)
+            self._apply_polyline_style(layer)
             return layer
         layer = open_layer_from_gpkg(LAYER_NAME)
         if layer:
@@ -166,12 +165,7 @@ class PolylineDrawer(QgsMapTool):
         connect_polyline_recalc(layer)
 
     def _apply_polyline_style(self, layer):
-        symbol = QgsLineSymbol.createSimple({
-            "color": LAYER_COLOR,
-            "width": "0.4",
-            "line_style": "solid",
-        })
-        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        apply_polyline_color_renderer(layer)
 
     def _create_polyline_layer(self):
         mem = QgsVectorLayer(

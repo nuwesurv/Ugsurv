@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
 from qgis.core import (
     QgsCircularString, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
 )
-from .layer_utils import circle_attrs
+from .layer_utils import circle_attrs, apply_circle_color_renderer, apply_polyline_color_renderer, apply_point_color_renderer
 
 
 class PropertiesDock(QDockWidget):
@@ -349,16 +349,19 @@ class PropertiesDock(QDockWidget):
         def on_clicked():
             chosen = QColorDialog.getColor(self._get_current_color(), None, "Color")
             if chosen.isValid():
-                try:
-                    self._layer.renderer().symbol().setColor(chosen)
-                    self._layer.triggerRepaint()
-                except Exception:
-                    pass
                 color_idx = self._layer.fields().indexOf("color")
                 if color_idx >= 0 and self._fid is not None:
                     if not self._layer.isEditable():
                         self._layer.startEditing()
                     self._layer.changeAttributeValue(self._fid, color_idx, chosen.name())
+                lyr_name = self._layer.name()
+                if lyr_name == "_circles":
+                    apply_circle_color_renderer(self._layer)
+                elif lyr_name == "_polylines":
+                    apply_polyline_color_renderer(self._layer)
+                elif lyr_name == "_points":
+                    apply_point_color_renderer(self._layer)
+                self._layer.triggerRepaint()
                 self._deferred_refresh()
 
         btn.clicked.connect(on_clicked)

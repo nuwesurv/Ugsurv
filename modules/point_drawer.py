@@ -22,13 +22,11 @@ from qgis.core import (
     QgsPointXY,
     QgsProject,
     QgsVectorLayer,
-    QgsMarkerSymbol,
-    QgsSingleSymbolRenderer,
 )
 from PyQt5.QtCore import QVariant
 from .dynamic_input import DynamicInput
 from . import snap_utils
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_point_color_renderer
 
 
 _LAYER_NAME = "_points"
@@ -90,6 +88,7 @@ class PointDrawer(QgsMapTool):
             if not lyr.isEditable():
                 lyr.startEditing()
             self._ensure_fields(lyr)
+            self._apply_point_style(lyr)
             return lyr
         lyr = open_layer_from_gpkg(_LAYER_NAME)
         if lyr:
@@ -101,12 +100,7 @@ class PointDrawer(QgsMapTool):
         return self._create_layer()
 
     def _apply_point_style(self, lyr):
-        symbol = QgsMarkerSymbol.createSimple({
-            "color": "0,140,220,255",
-            "outline_style": "no",
-            "size": "2",
-        })
-        lyr.setRenderer(QgsSingleSymbolRenderer(symbol))
+        apply_point_color_renderer(lyr)
 
     def _create_layer(self):
         crs = QgsProject.instance().crs().authid()
@@ -148,10 +142,7 @@ class PointDrawer(QgsMapTool):
         feat.setGeometry(QgsGeometry.fromPointXY(pt))
         feat.setAttribute("x", round(pt.x(), 4))
         feat.setAttribute("y", round(pt.y(), 4))
-        try:
-            color_hex = self._layer.renderer().symbol().color().name()
-        except Exception:
-            color_hex = "#008cdc"
+        color_hex = "#008cdc"
         color_idx = self._layer.fields().indexOf("color")
         if color_idx >= 0:
             feat.setAttribute(color_idx, color_hex)
