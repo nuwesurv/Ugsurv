@@ -36,6 +36,7 @@ from qgis.PyQt.QtGui import QColor
 _C_PREVIEW  = QColor(255, 140,  0, 200)
 _C_HOVER    = QColor(255, 200,  0, 160)
 _C_SELECTED = QColor( 50, 210,  80, 220)
+_C_PERP     = QColor(180, 220, 255, 200)
 
 _HIT_PX = 10
 
@@ -80,6 +81,8 @@ class OffsetTool(QgsMapTool):
         self._sel_band.setVisible(False)
         self._preview_band = self._make_band(_C_PREVIEW,  width=2, dashed=True)
         self._preview_band.setVisible(False)
+        self._perp_band    = self._make_band(_C_PERP,     width=1, dashed=True)
+        self._perp_band.setVisible(False)
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -243,17 +246,30 @@ class OffsetTool(QgsMapTool):
             else:
                 self._hover_band.setVisible(False)
             self._preview_band.setVisible(False)
+            self._perp_band.setVisible(False)
 
         elif self._state == _ST_PICK_DIST and self._sel_geom is not None:
             self._hover_band.setVisible(False)
             dist = self._dist_to_sel(map_pt)
             if dist > 1e-10:
+                # Perpendicular indicator: closest point on feature → cursor
+                closest = self._sel_geom.nearestPoint(QgsGeometry.fromPointXY(map_pt))
+                if not closest.isEmpty():
+                    perp_line = QgsGeometry.fromPolylineXY(
+                        [closest.asPoint(), map_pt]
+                    )
+                    self._perp_band.setToGeometry(perp_line, None)
+                    self._perp_band.setVisible(True)
+                else:
+                    self._perp_band.setVisible(False)
+
                 off_geom = self._build_offset_geom(self._sel_geom, dist, map_pt)
                 if off_geom:
                     self._preview_band.setToGeometry(off_geom, self._sel_layer)
                     self._preview_band.setVisible(True)
                     return
             self._preview_band.setVisible(False)
+            self._perp_band.setVisible(False)
 
     # ------------------------------------------------------------------
     # Selection
@@ -284,6 +300,7 @@ class OffsetTool(QgsMapTool):
         self._sel_geom  = None
         self._sel_band.setVisible(False)
         self._preview_band.setVisible(False)
+        self._perp_band.setVisible(False)
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self._state = _ST_SELECT
@@ -402,6 +419,7 @@ class OffsetTool(QgsMapTool):
         self._rm(self._preview_band)
         self._rm(self._hover_band)
         self._rm(self._sel_band)
+        self._rm(self._perp_band)
         self._hint.hide()
         self._state = _ST_SELECT
         if self._maptool:
