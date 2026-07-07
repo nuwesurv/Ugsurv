@@ -1,10 +1,86 @@
 import os
+from PyQt5.QtCore import QTimer
 from qgis.core import (
     QgsProject,
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsCoordinateTransformContext,
+    QgsGeometry,
+    QgsPointXY,
 )
+
+def polyline_attrs(geom):
+    """Return computed attribute dict for any polyline geometry.
+
+    Safe to call on any LineString; fields that don't exist on a layer are
+    simply skipped by the caller.  Always computes enclosed area — closing
+    the ring virtually when the polyline is open.
+    """
+    length = geom.length()
+    pts = geom.asPolyline()
+    if len(pts) >= 2:
+        p0, pn = pts[0], pts[-1]
+        is_closed = (len(pts) >= 4
+                     and abs(p0.x() - pn.x()) < 1e-9
+                     and abs(p0.y() - pn.y()) < 1e-9)
+        ring = list(pts)
+        if abs(ring[0].x() - ring[-1].x()) > 1e-9 or abs(ring[0].y() - ring[-1].y()) > 1e-9:
+            ring.append(QgsPointXY(ring[0].x(), ring[0].y()))
+        area_sqm = QgsGeometry.fromPolygonXY([ring]).area()
+    else:
+        is_closed = False
+        area_sqm  = 0.0
+    area_acres = area_sqm * 0.000247105
+    return {
+        "length":     round(length, 3),
+        "closed":     is_closed,
+        "area_sqm":   round(area_sqm, 3),
+        "area_acres": round(area_acres, 6),
+    }
+
+
+_recalc_connected = set()  # layer IDs that already have the recalc signal wired up
+
+
+def connect_polyline_recalc(layer):
+    """Keep computed fields in sync with geometry for any tool that edits this layer.
+
+    Two hooks:
+    - geometryChanged  — updates attributes live in the edit buffer as each
+                         geometry change is applied (vertex edit, move, offset, etc.).
+    - beforeCommitChanges — guaranteed pass over every changed geometry right
+                            before save, so attributes are always correct on disk.
+
+    Safe to call multiple times — only wires up once per layer ID.
+    """
+    if layer.id() in _recalc_connected:
+        return
+
+    def _write_attrs(fid, geom):
+        attrs = polyline_attrs(geom)
+        for fname, val in attrs.items():
+            idx = layer.fields().indexOf(fname)
+            if idx >= 0:
+                layer.changeAttributeValue(fid, idx, val)
+
+    def _on_geom_changed(fid, geom):
+        if not geom.isNull() and not geom.isEmpty():
+            # Defer to the next event loop tick so the edit buffer has fully
+            # settled before we write attributes (avoids silent reentrancy failures).
+            QTimer.singleShot(0, lambda fid=fid, geom=geom: _write_attrs(fid, geom))
+
+    def _before_commit():
+        buf = layer.editBuffer()
+        if buf is None:
+            return
+        for fid, geom in buf.changedGeometries().items():
+            if not geom.isNull() and not geom.isEmpty():
+                _write_attrs(fid, geom)
+
+    layer.geometryChanged.connect(_on_geom_changed)
+    layer.beforeCommitChanges.connect(_before_commit)
+    _recalc_connected.add(layer.id())
+
 
 _DATA_DIR  = r"C:\UgSurv"
 _GPKG_PATH = os.path.join(_DATA_DIR, "ugsurv_layers.gpkg")

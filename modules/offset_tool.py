@@ -16,6 +16,7 @@ type +/– signs.  Distance is always treated as a positive magnitude.
 
 import math
 
+from .layer_utils import polyline_attrs
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtWidgets import QLabel
@@ -290,6 +291,10 @@ class OffsetTool(QgsMapTool):
         new_feat = QgsFeature(lyr.fields())
         new_feat.setAttributes(src_feat.attributes())
         new_feat.setGeometry(off_geom)
+        for fname, val in polyline_attrs(off_geom).items():
+            idx = lyr.fields().indexOf(fname)
+            if idx >= 0:
+                new_feat.setAttribute(idx, val)
 
         if not lyr.isEditable():
             lyr.startEditing()

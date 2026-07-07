@@ -7,10 +7,13 @@ from qgis.core import (
     QgsGeometry,
     QgsPointXY,
     QgsField,
+    QgsFields,
     QgsWkbTypes,
     QgsLineSymbol,
     QgsSingleSymbolRenderer,
     QgsCoordinateReferenceSystem,
+    QgsProperty,
+    QgsSymbolLayer,
 )
 from qgis.PyQt.QtWidgets import QGraphicsTextItem
 from PyQt5.QtCore import QVariant, QPoint
@@ -19,7 +22,7 @@ from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, polyline_attrs, connect_polyline_recalc
 from . import snap_utils
 import math
 from . import crs_utils
@@ -153,12 +156,15 @@ class PolylineDrawer(QgsMapTool):
         """Add any fields that are missing from an existing layer."""
         existing = {f.name() for f in layer.fields()}
         to_add = []
+        if "length"     not in existing: to_add.append(QgsField("length",     QVariant.Double))
         if "closed"     not in existing: to_add.append(QgsField("closed",     QVariant.Bool))
         if "area_sqm"   not in existing: to_add.append(QgsField("area_sqm",   QVariant.Double))
         if "area_acres" not in existing: to_add.append(QgsField("area_acres", QVariant.Double))
+        if "color"      not in existing: to_add.append(QgsField("color",      QVariant.String))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
+        connect_polyline_recalc(layer)
 
     def _apply_polyline_style(self, layer):
         symbol = QgsLineSymbol.createSimple({
@@ -166,6 +172,10 @@ class PolylineDrawer(QgsMapTool):
             "width": "0.4",
             "line_style": "solid",
         })
+        symbol.symbolLayer(0).setDataDefinedProperty(
+            QgsSymbolLayer.PropertyColor,
+            QgsProperty.fromExpression(f'coalesce("color", \'{LAYER_COLOR}\')'),
+        )
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
     def _create_polyline_layer(self):
@@ -179,10 +189,12 @@ class PolylineDrawer(QgsMapTool):
             QgsField("closed",     QVariant.Bool),
             QgsField("area_sqm",   QVariant.Double),
             QgsField("area_acres", QVariant.Double),
+            QgsField("color",      QVariant.String),
         ])
         mem.updateFields()
 
         layer = create_layer_in_gpkg(mem)
+        connect_polyline_recalc(layer)
         self._apply_polyline_style(layer)
         add_to_plugin_group(layer)
         layer.startEditing()
@@ -197,37 +209,25 @@ class PolylineDrawer(QgsMapTool):
             self._log("\nNeed at least 2 points — polyline not saved")
             return
         geometry = QgsGeometry.fromPolylineXY(self.points)
-        length = geometry.length()
-
-        p0, pn = self.points[0], self.points[-1]
-        is_closed = (len(self.points) >= 4 and
-                     abs(p0.x() - pn.x()) < 1e-9 and
-                     abs(p0.y() - pn.y()) < 1e-9)
-        if is_closed:
-            poly_geom  = QgsGeometry.fromPolygonXY([self.points])
-            area_sqm   = poly_geom.area()
-            area_acres = area_sqm * 0.000247105
-        else:
-            area_sqm = area_acres = 0.0
+        attrs = polyline_attrs(geometry)
 
         feature = QgsFeature(self.polyline_layer.fields())
         feature.setGeometry(geometry)
-        feature.setAttribute("length",     round(length, 3))
-        feature.setAttribute("closed",     is_closed)
-        feature.setAttribute("area_sqm",   round(area_sqm, 3))
-        feature.setAttribute("area_acres", round(area_acres, 6))
+        feature.setAttribute("length",     attrs["length"])
+        feature.setAttribute("closed",     attrs["closed"])
+        feature.setAttribute("area_sqm",   attrs["area_sqm"])
+        feature.setAttribute("area_acres", attrs["area_acres"])
+        feature.setAttribute("color",      LAYER_COLOR)
 
         self.polyline_layer.addFeature(feature)
         self.polyline_layer.updateExtents()
         self.polyline_layer.triggerRepaint()
 
-        if is_closed:
-            self._log(
-                f"\nPolyline saved — {len(self.points)} vertices, length: {length:.3f}"
-                f", area: {area_sqm:.3f} sqm ({area_acres:.4f} acres)"
-            )
-        else:
-            self._log(f"\nPolyline saved — {len(self.points)} vertices, length: {length:.3f}")
+        self._log(
+            f"\nPolyline saved — {len(self.points)} vertices, length: {attrs['length']:.3f}"
+            f", area: {attrs['area_sqm']:.3f} sqm ({attrs['area_acres']:.4f} acres)"
+            + (" [closed]" if attrs["closed"] else "")
+        )
 
     # -------------------------------------------------------------------------
     # Polar helpers

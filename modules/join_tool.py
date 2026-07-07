@@ -20,6 +20,8 @@ Chaining uses backtracking over all orderings and per-segment reversals
 
 from itertools import permutations
 
+from .layer_utils import polyline_attrs
+
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtWidgets import QLabel
@@ -284,18 +286,7 @@ class JoinTool(QgsMapTool):
             return   # leave selection intact so user can adjust
 
         new_geom = QgsGeometry.fromPolylineXY(chained)
-        length   = new_geom.length()
-
-        p0, pn    = chained[0], chained[-1]
-        is_closed = (len(chained) >= 4
-                     and abs(p0.x() - pn.x()) < 1e-9
-                     and abs(p0.y() - pn.y()) < 1e-9)
-        if is_closed:
-            poly_geom  = QgsGeometry.fromPolygonXY([chained])
-            area_sqm   = poly_geom.area()
-            area_acres = area_sqm * 0.000247105
-        else:
-            area_sqm = area_acres = 0.0
+        attrs    = polyline_attrs(new_geom)
 
         # Write result to the first selected feature's layer
         target = segments[0][0]
@@ -304,12 +295,7 @@ class JoinTool(QgsMapTool):
 
         new_feat = QgsFeature(target.fields())
         new_feat.setGeometry(new_geom)
-        for fname, val in [
-            ("length",     round(length, 3)),
-            ("closed",     is_closed),
-            ("area_sqm",   round(area_sqm, 3)),
-            ("area_acres", round(area_acres, 6)),
-        ]:
+        for fname, val in attrs.items():
             idx = target.fields().indexOf(fname)
             if idx >= 0:
                 new_feat.setAttribute(idx, val)
