@@ -179,6 +179,49 @@ class VertexSelector(QgsMapTool):
         self._dinput = DynamicInput(canvas, terminal_dock, [{"key": "radius", "label": "New radius"}])
         self._dinput.on_cancel = self._cancel_move
 
+        # Reset to IDLE before any selected/gripped layer is removed so we never
+        # hold a dangling C++ pointer.
+        QgsProject.instance().layersWillBeRemoved.connect(self._on_layers_will_be_removed)
+
+    # ------------------------------------------------------------------
+    # Layer validity guard
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _layer_ok(layer):
+        """Return False if the layer reference is None or the C++ object has been deleted."""
+        if layer is None:
+            return False
+        try:
+            layer.id()
+            return True
+        except RuntimeError:
+            return False
+
+    def _on_layers_will_be_removed(self, layer_ids):
+        """Called before layers are removed; reset state if our active layer is going away."""
+        active = None
+        if self._state == _S_FEATURE:
+            active = self._sel_layer
+        elif self._state in (_S_GRIPPED, _S_MOVING):
+            if self._gripped:
+                active = self._gripped.layer
+        if active is not None:
+            try:
+                if active.id() in layer_ids:
+                    self._enter_idle()
+                    return
+            except RuntimeError:
+                self._enter_idle()
+                return
+        # Prune any extra-selected features on the removed layers
+        for lyr, fid in list(self._sel_extra_items):
+            try:
+                if lyr.id() in layer_ids:
+                    self._remove_from_extra(lyr, fid)
+            except RuntimeError:
+                self._remove_from_extra(lyr, fid)
+
     # ------------------------------------------------------------------
     # Marker / rubber-band factories
     # ------------------------------------------------------------------
@@ -849,7 +892,7 @@ class VertexSelector(QgsMapTool):
     def _gripped_is_endpoint(self):
         """True when the gripped vertex is the first or last vertex of a polyline."""
         sv = self._gripped
-        if sv is None:
+        if sv is None or not self._layer_ok(sv.layer):
             return False
         feat = sv.layer.getFeature(sv.fid)
         geom = feat.geometry()
@@ -867,11 +910,15 @@ class VertexSelector(QgsMapTool):
         if not self._gripped_is_endpoint():
             return False
         sv = self._gripped
+        if not self._layer_ok(sv.layer):
+            return False
         feat = sv.layer.getFeature(sv.fid)
         return not self._is_closed_polyline(feat.geometry())
 
     def _is_unclosed_endpoint(self, sv):
         """True if sv is the first or last vertex of an open (non-closed) polyline."""
+        if not self._layer_ok(sv.layer):
+            return False
         feat = sv.layer.getFeature(sv.fid)
         geom = feat.geometry()
         if geom.isEmpty():
@@ -958,6 +1005,8 @@ class VertexSelector(QgsMapTool):
         return result
 
     def _feature_verts(self, layer, fid):
+        if not self._layer_ok(layer):
+            return []
         feat = layer.getFeature(fid)
         if not feat.isValid() or feat.geometry().isEmpty():
             return []
@@ -1378,7 +1427,10 @@ class VertexSelector(QgsMapTool):
         if self._state == _S_MOVING:
             map_pt = self._snap_point(event.pos(), raw_pt)
             # Update live rubber-band: replace gripped vertex with cursor
-            sv   = self._gripped
+            sv = self._gripped
+            if sv is None or not self._layer_ok(sv.layer):
+                self._enter_idle()
+                return
             feat = sv.layer.getFeature(sv.fid)
             if not feat.geometry().isEmpty():
                 if sv.layer.name() == "_circles" and self._moving_center:
