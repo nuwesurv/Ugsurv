@@ -70,6 +70,7 @@ from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
 from .modules.vertex_selector import VertexSelector
+from .modules.properties_panel import PropertiesDock
 from .modules.maptool import UgsurvMaptool
 from .modules.trim_tool import TrimTool
 from .modules.extend_tool import ExtendTool
@@ -432,6 +433,26 @@ class Ugsurv:
         vertex_selector = VertexSelector(self.canvas, self.terminal_dock)
         self.global_map_tool.set_default_tool(vertex_selector)
 
+        # Properties panel — shows/edits properties of the selected feature
+        if hasattr(self, 'properties_dock') and self.properties_dock:
+            self.iface.removeDockWidget(self.properties_dock)
+            self.properties_dock.deleteLater()
+        self.properties_dock = PropertiesDock(self.iface.mainWindow())
+        self.iface.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
+
+        # Tabify with the first existing right-side dock so the properties panel
+        # shares the same tab bar instead of splitting the right panel area.
+        main_win = self.iface.mainWindow()
+        from PyQt5.QtWidgets import QDockWidget as _QDW
+        for _existing in main_win.findChildren(_QDW):
+            if (_existing is not self.properties_dock
+                    and main_win.dockWidgetArea(_existing) == Qt.RightDockWidgetArea):
+                main_win.tabifyDockWidget(_existing, self.properties_dock)
+                break
+
+        vertex_selector.feature_selected.connect(self.properties_dock.update_feature)
+        vertex_selector.selection_cleared.connect(self.properties_dock.clear_selection)
+
         from .package_installer import solve_dependency_issues
         
         # Running this function so as to install all the dependecies required.
@@ -742,6 +763,13 @@ class Ugsurv:
         except:
             pass
         
+        # Remove the properties panel
+        try:
+            self.iface.removeDockWidget(self.properties_dock)
+            self.properties_dock.deleteLater()
+        except:
+            pass
+
         # Remove the terminal
         try:
             self.iface.removeDockWidget(self.terminal_dock)

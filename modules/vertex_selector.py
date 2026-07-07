@@ -39,7 +39,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from .dynamic_input import DynamicInput
@@ -92,6 +92,14 @@ _HINT = {
 
 class VertexSelector(QgsMapTool):
     """Always-on vertex grip editor — the permanent default map tool."""
+
+    # Emitted when a feature becomes active (FEATURE or GRIPPED state).
+    # Args: layer (QgsVectorLayer), fid (int)
+    feature_selected = pyqtSignal(object, int)
+    # Emitted when no feature is selected (IDLE state).
+    selection_cleared = pyqtSignal()
+    # Emitted after any geometry edit so the properties panel can refresh.
+    feature_refreshed = pyqtSignal(object, int)
 
     def __init__(self, canvas, terminal_dock):
         super().__init__(canvas)
@@ -345,6 +353,7 @@ class VertexSelector(QgsMapTool):
         self._vtx_dragging  = False
         if self._hover_marker is not None:
             self._hover_marker.setVisible(False)
+        self.selection_cleared.emit()
 
     def _enter_feature(self, layer, fid):
         """Highlight the feature whose edge was clicked.
@@ -425,6 +434,7 @@ class VertexSelector(QgsMapTool):
             f"\nFeature {fid} of '{layer.name()}' selected{extra_msg}"
             f"  →  click '+' at endpoint to extend  |  click a vertex to grip  |  Shift+click to deselect"
         )
+        self.feature_selected.emit(layer, fid)
 
     def _enter_gripped(self, sv):
         """Grip the given vertex: show all feature vertices + geometry outline."""
@@ -474,6 +484,7 @@ class VertexSelector(QgsMapTool):
             f" of '{sv.layer.name()}' feature {sv.fid}"
             f"  →  click grip again to move, Del to delete"
         )
+        self.feature_selected.emit(sv.layer, sv.fid)
 
     def _shared_vertices(self, orig_pt, tol=1e-9):
         """Return [(layer, fid, vidx)] for vertices on extra-selected features
