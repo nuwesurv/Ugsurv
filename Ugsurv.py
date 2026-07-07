@@ -23,8 +23,8 @@
 """
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon, QFont, QColor, QPixmap, QPainter, QPen
-from qgis.PyQt.QtWidgets import QAction, QApplication
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtWidgets import QAction, QApplication, QToolButton, QMenu
+from qgis.PyQt.QtCore import Qt, QRect
 from qgis.core import (
     QgsVectorLayer,
     QgsProject,
@@ -83,6 +83,7 @@ from .modules.break_tool import BreakTool
 from .modules.chamfer_tool import ChamferTool
 from .modules.explode_tool import ExplodeTool
 from .modules.point_drawer import PointDrawer
+from .modules import snap_manager
 import ast
 
 
@@ -254,6 +255,74 @@ class Ugsurv:
                 new_tool is self.global_map_tool
             )
 
+    # ------------------------------------------------------------------ snap
+    @staticmethod
+    def _make_snap_icon(active=True):
+        """Draw a U-magnet icon; grey when all snap modes are off."""
+        size = 24
+        px = QPixmap(size, size)
+        px.fill(Qt.transparent)
+        p = QPainter(px)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        arm_col = QColor(240, 165, 0) if active else QColor(130, 130, 130)
+        p.setPen(QPen(arm_col, 3, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(7, 4, 7, 14)
+        p.drawLine(17, 4, 17, 14)
+        p.drawArc(QRect(7, 9, 10, 10), 0, -180 * 16)
+
+        lc = QColor(210, 50, 50)  if active else QColor(130, 130, 130)
+        rc = QColor(50, 80, 210)  if active else QColor(130, 130, 130)
+        p.setPen(QPen(lc, 3, Qt.SolidLine, Qt.SquareCap))
+        p.drawLine(4, 4, 10, 4)
+        p.setPen(QPen(rc, 3, Qt.SolidLine, Qt.SquareCap))
+        p.drawLine(14, 4, 20, 4)
+        p.end()
+        return QIcon(px)
+
+    def _create_snap_button(self):
+        menu = QMenu()
+        self._snap_actions = {}
+        # Items listed in snap priority order (highest first)
+        for key, label in [
+            (snap_manager.ENDPOINT,     'Endpoint'),
+            (snap_manager.CENTER,       'Center'),
+            (snap_manager.MIDPOINT,     'Midpoint'),
+            (snap_manager.INTERSECTION, 'Intersection'),
+            (snap_manager.NEAREST,      'Nearest'),
+        ]:
+            act = QAction(label, menu)
+            act.setCheckable(True)
+            act.setChecked(snap_manager.is_enabled(key))
+            act.toggled.connect(lambda checked, k=key: self._on_snap_toggle(k, checked))
+            menu.addAction(act)
+            self._snap_actions[key] = act
+
+        menu.addSeparator()
+        all_on  = QAction('Select All', menu)
+        all_off = QAction('Clear All',  menu)
+        all_on.triggered.connect(lambda: self._set_all_snaps(True))
+        all_off.triggered.connect(lambda: self._set_all_snaps(False))
+        menu.addAction(all_on)
+        menu.addAction(all_off)
+
+        btn = QToolButton()
+        btn.setIcon(self._make_snap_icon(True))
+        btn.setToolTip('Object snap options (Endpoint, Midpoint, Center, Intersection, Nearest)')
+        btn.setMenu(menu)
+        btn.setPopupMode(QToolButton.MenuButtonPopup)
+        btn.clicked.connect(btn.showMenu)
+        return btn
+
+    def _on_snap_toggle(self, key, checked):
+        snap_manager.set_enabled(key, checked)
+        any_on = any(a.isChecked() for a in self._snap_actions.values())
+        self._snap_btn.setIcon(self._make_snap_icon(any_on))
+
+    def _set_all_snaps(self, state):
+        for act in self._snap_actions.values():
+            act.setChecked(state)   # triggers _on_snap_toggle via toggled signal
+
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
@@ -277,19 +346,28 @@ class Ugsurv:
         self.iface.addToolBarIcon(self._maptool_action)
         self.actions.append(self._maptool_action)
 
+        # Snap options dropdown (magnet button)
+        self._snap_btn = self._create_snap_button()
+        self.iface.pluginToolBar().addWidget(self._snap_btn)
+
         # will be set False in run()
         self.first_start = True
 
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
-        # Removes the plugin icon from the Tool bar.
         for action in self.actions:
             self.iface.removePluginMenu(
                 self.tr(u'&ParcelPro'),
                 action)
             self.iface.removeToolBarIcon(action)
-        
+
+        # Remove snap dropdown button
+        try:
+            self._snap_btn.deleteLater()
+        except Exception:
+            pass
+
         # Remove all tools
         self.destroyAllTools()
 

@@ -1,21 +1,35 @@
 """Shared circle-center snap helpers used by all manipulating tools."""
 
-from qgis.core import QgsPointXY, QgsProject, QgsVectorLayer
+from qgis.core import QgsPointXY, QgsProject, QgsVectorLayer, QgsPointLocator
 from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QColor
+from . import snap_manager
 
 _CC_COLOR   = QColor(66, 135, 245)
 _CC_SIZE    = 14
 _CC_PEN_W   = 2
 _CC_SNAP_PX = 20
 
+# Snap types that have higher priority than circle center
+_HIGH_PRI_TYPES = {QgsPointLocator.Vertex}
+_le = getattr(QgsPointLocator, 'LineEndpoint', None)
+if _le is not None:
+    _HIGH_PRI_TYPES.add(_le)
+
 
 def find_circle_center_snap(canvas, map_pt):
     """Return center QgsPointXY of the nearest _circles feature within 20 px, or None.
 
+    Returns None when center snap is disabled or when QGIS has a higher-priority
+    vertex/endpoint snap active at map_pt (endpoint always beats circle center).
     Iterates all features (no spatial filter) so edit-buffer features are included.
-    Uses bounding-box centre which is always correct for circular geometry types.
     """
+    if not snap_manager.is_enabled(snap_manager.CENTER):
+        return None
+    # Endpoint has higher priority — let QGIS vertex snap win
+    qgis_match = canvas.snappingUtils().snapToMap(map_pt)
+    if qgis_match.isValid() and qgis_match.type() in _HIGH_PRI_TYPES:
+        return None
     tol = _CC_SNAP_PX * canvas.mapUnitsPerPixel()
     best_center, best_dist = None, tol
     for lyr in QgsProject.instance().mapLayers().values():

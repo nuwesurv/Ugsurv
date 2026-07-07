@@ -255,12 +255,12 @@ class PolylineDrawer(QgsMapTool):
             self.snap_marker.setCenter(snap_result.point())
             self.snap_marker.setVisible(True)
             icon_map = {
-                QgsPointLocator.Vertex:          QgsVertexMarker.ICON_CIRCLE,
-                QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE,
+                QgsPointLocator.Vertex:          QgsVertexMarker.ICON_BOX,            # endpoint
+                QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE, # nearest
                 QgsPointLocator.Area:            QgsVertexMarker.ICON_RHOMBUS,
-                QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,
+                QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,        # midpoint
             }
-            self.snap_marker.setIconType(icon_map.get(snap_result.type(), QgsVertexMarker.ICON_X))
+            self.snap_marker.setIconType(icon_map.get(snap_result.type(), QgsVertexMarker.ICON_X))  # X for intersection
         else:
             self.snap_marker.setVisible(False)
 

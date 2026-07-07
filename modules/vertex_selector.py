@@ -850,6 +850,9 @@ class VertexSelector(QgsMapTool):
 
     def _find_circle_center_snap(self, map_pt):
         """Return the center of the nearest _circles feature if cursor is within 20 px of it."""
+        from .snap_manager import is_enabled, CENTER
+        if not is_enabled(CENTER):
+            return None
         center_tol = 20 * self.canvas.mapUnitsPerPixel()
         best_center, best_dist = None, center_tol
         for lyr in self._vector_layers():
@@ -882,10 +885,26 @@ class VertexSelector(QgsMapTool):
             self._center_marker.setVisible(False)
 
     def _snap_point(self, screen_pt, raw_pt):
-        """Return snapped point using QGIS native snapping, or raw_pt if no snap.
+        """Return snapped point: endpoint > circle-center > midpoint/intersection/nearest."""
+        match = self.canvas.snappingUtils().snapToMap(screen_pt)
 
-        Circle centers are checked first and take priority over normal snap.
-        """
+        icon_map = {
+            QgsPointLocator.Vertex:          QgsVertexMarker.ICON_BOX,            # endpoint
+            QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE, # nearest
+            QgsPointLocator.Area:            QgsVertexMarker.ICON_RHOMBUS,
+            QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,        # midpoint
+        }
+
+        # Priority 1: endpoint/vertex snap (highest)
+        if match.isValid() and match.type() == QgsPointLocator.Vertex:
+            snapped = match.point()
+            if self._snap_marker:
+                self._snap_marker.setCenter(snapped)
+                self._snap_marker.setIconType(QgsVertexMarker.ICON_BOX)
+                self._snap_marker.setVisible(True)
+            return snapped
+
+        # Priority 2: circle center (custom snap)
         center = self._find_circle_center_snap(raw_pt)
         if center and self._snap_marker:
             self._snap_marker.setCenter(center)
@@ -893,20 +912,17 @@ class VertexSelector(QgsMapTool):
             self._snap_marker.setVisible(True)
             return center
 
-        match = self.canvas.snappingUtils().snapToMap(screen_pt)
+        # Priority 3+: midpoint, intersection, nearest
         if match.isValid():
             snapped = match.point()
-            self._snap_marker.setCenter(snapped)
-            icon_map = {
-                QgsPointLocator.Vertex:          QgsVertexMarker.ICON_CIRCLE,
-                QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE,
-                QgsPointLocator.Area:            QgsVertexMarker.ICON_RHOMBUS,
-                QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,
-            }
-            self._snap_marker.setIconType(icon_map.get(match.type(), QgsVertexMarker.ICON_X))
-            self._snap_marker.setVisible(True)
+            if self._snap_marker:
+                self._snap_marker.setCenter(snapped)
+                self._snap_marker.setIconType(icon_map.get(match.type(), QgsVertexMarker.ICON_X))
+                self._snap_marker.setVisible(True)
             return snapped
-        self._snap_marker.setVisible(False)
+
+        if self._snap_marker:
+            self._snap_marker.setVisible(False)
         return raw_pt
 
     # ------------------------------------------------------------------
