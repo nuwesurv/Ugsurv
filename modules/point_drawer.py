@@ -17,6 +17,7 @@ from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature,
+    QgsField,
     QgsGeometry,
     QgsPointXY,
     QgsProject,
@@ -24,6 +25,7 @@ from qgis.core import (
     QgsMarkerSymbol,
     QgsSingleSymbolRenderer,
 )
+from PyQt5.QtCore import QVariant
 from .dynamic_input import DynamicInput
 from . import snap_utils
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
@@ -71,15 +73,26 @@ class PointDrawer(QgsMapTool):
     # Layer helpers
     # ------------------------------------------------------------------
 
+    def _ensure_fields(self, lyr):
+        existing = {f.name() for f in lyr.fields()}
+        to_add = []
+        if "x" not in existing: to_add.append(QgsField("x", QVariant.Double))
+        if "y" not in existing: to_add.append(QgsField("y", QVariant.Double))
+        if to_add:
+            lyr.dataProvider().addAttributes(to_add)
+            lyr.updateFields()
+
     def _get_or_create_layer(self):
         existing = QgsProject.instance().mapLayersByName(_LAYER_NAME)
         if existing:
             lyr = existing[0]
             if not lyr.isEditable():
                 lyr.startEditing()
+            self._ensure_fields(lyr)
             return lyr
         lyr = open_layer_from_gpkg(_LAYER_NAME)
         if lyr:
+            self._ensure_fields(lyr)
             self._apply_point_style(lyr)
             add_to_plugin_group(lyr)
             lyr.startEditing()
@@ -97,6 +110,11 @@ class PointDrawer(QgsMapTool):
     def _create_layer(self):
         crs = QgsProject.instance().crs().authid()
         mem = QgsVectorLayer(f"Point?crs={crs}", _LAYER_NAME, "memory")
+        mem.dataProvider().addAttributes([
+            QgsField("x", QVariant.Double),
+            QgsField("y", QVariant.Double),
+        ])
+        mem.updateFields()
         lyr = create_layer_in_gpkg(mem)
         self._apply_point_style(lyr)
         add_to_plugin_group(lyr)
@@ -126,6 +144,8 @@ class PointDrawer(QgsMapTool):
         self._layer = self._get_or_create_layer()
         feat = QgsFeature(self._layer.fields())
         feat.setGeometry(QgsGeometry.fromPointXY(pt))
+        feat.setAttribute("x", round(pt.x(), 4))
+        feat.setAttribute("y", round(pt.y(), 4))
         self._layer.addFeature(feat)
         self._layer.triggerRepaint()
         self._log(f"\nPoint: {pt.x():.4f}, {pt.y():.4f}")

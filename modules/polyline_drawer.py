@@ -155,6 +155,7 @@ class PolylineDrawer(QgsMapTool):
         existing = {f.name() for f in layer.fields()}
         to_add = []
         if "length"     not in existing: to_add.append(QgsField("length",     QVariant.Double))
+        if "vertices"   not in existing: to_add.append(QgsField("vertices",   QVariant.Int))
         if "closed"     not in existing: to_add.append(QgsField("closed",     QVariant.Bool))
         if "area_sqm"   not in existing: to_add.append(QgsField("area_sqm",   QVariant.Double))
         if "area_acres" not in existing: to_add.append(QgsField("area_acres", QVariant.Double))
@@ -180,6 +181,7 @@ class PolylineDrawer(QgsMapTool):
         )
         mem.dataProvider().addAttributes([
             QgsField("length",     QVariant.Double),
+            QgsField("vertices",   QVariant.Int),
             QgsField("closed",     QVariant.Bool),
             QgsField("area_sqm",   QVariant.Double),
             QgsField("area_acres", QVariant.Double),
@@ -208,6 +210,7 @@ class PolylineDrawer(QgsMapTool):
         feature = QgsFeature(self.polyline_layer.fields())
         feature.setGeometry(geometry)
         feature.setAttribute("length",     attrs["length"])
+        feature.setAttribute("vertices",   attrs["vertices"])
         feature.setAttribute("closed",     attrs["closed"])
         feature.setAttribute("area_sqm",   attrs["area_sqm"])
         feature.setAttribute("area_acres", attrs["area_acres"])

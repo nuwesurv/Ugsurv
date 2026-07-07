@@ -24,7 +24,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from . import snap_utils
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, circle_attrs
 import math
 from . import crs_utils
 
@@ -130,6 +130,20 @@ class CircleDrawer(QgsMapTool):
     # Layer management
     # -------------------------------------------------------------------------
 
+    def _ensure_fields(self, layer):
+        existing = {f.name() for f in layer.fields()}
+        to_add = []
+        if "center_x"      not in existing: to_add.append(QgsField("center_x",      QVariant.Double))
+        if "center_y"      not in existing: to_add.append(QgsField("center_y",      QVariant.Double))
+        if "radius"        not in existing: to_add.append(QgsField("radius",        QVariant.Double))
+        if "diameter"      not in existing: to_add.append(QgsField("diameter",      QVariant.Double))
+        if "circumference" not in existing: to_add.append(QgsField("circumference", QVariant.Double))
+        if "area_sqm"      not in existing: to_add.append(QgsField("area_sqm",      QVariant.Double))
+        if "area_acres"    not in existing: to_add.append(QgsField("area_acres",    QVariant.Double))
+        if to_add:
+            layer.dataProvider().addAttributes(to_add)
+            layer.updateFields()
+
     def _get_or_create_circle_layer(self):
         """Return the existing circles layer or create a fresh one."""
         existing = QgsProject.instance().mapLayersByName(LAYER_NAME)
@@ -137,9 +151,11 @@ class CircleDrawer(QgsMapTool):
             layer = existing[0]
             if not layer.isEditable():
                 layer.startEditing()
+            self._ensure_fields(layer)
             return layer
         layer = open_layer_from_gpkg(LAYER_NAME)
         if layer:
+            self._ensure_fields(layer)
             self._apply_circle_style(layer)
             add_to_plugin_group(layer)
             layer.startEditing()
@@ -161,7 +177,15 @@ class CircleDrawer(QgsMapTool):
             LAYER_NAME,
             "memory"
         )
-        mem.dataProvider().addAttributes([QgsField("radius", QVariant.Double)])
+        mem.dataProvider().addAttributes([
+            QgsField("center_x",      QVariant.Double),
+            QgsField("center_y",      QVariant.Double),
+            QgsField("radius",        QVariant.Double),
+            QgsField("diameter",      QVariant.Double),
+            QgsField("circumference", QVariant.Double),
+            QgsField("area_sqm",      QVariant.Double),
+            QgsField("area_acres",    QVariant.Double),
+        ])
         mem.updateFields()
 
         layer = create_layer_in_gpkg(mem)
@@ -193,9 +217,13 @@ class CircleDrawer(QgsMapTool):
         radius = center.distance(radius_point)
         geometry = self._build_circle_geometry(center, radius)
 
+        attrs = circle_attrs(center.x(), center.y(), radius)
         feature = QgsFeature(self.circle_layer.fields())
         feature.setGeometry(geometry)
-        feature.setAttribute("radius", round(radius, 3))
+        for fname, val in attrs.items():
+            idx = self.circle_layer.fields().indexOf(fname)
+            if idx >= 0:
+                feature.setAttribute(idx, val)
 
         self.circle_layer.addFeature(feature)
         self.circle_layer.updateExtents()

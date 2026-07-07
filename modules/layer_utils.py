@@ -1,4 +1,5 @@
 import os
+import math
 from PyQt5.QtCore import QTimer
 from qgis.core import (
     QgsProject,
@@ -33,9 +34,26 @@ def polyline_attrs(geom):
     area_acres = area_sqm * 0.000247105
     return {
         "length":     round(length, 3),
+        "vertices":   len(pts),
         "closed":     is_closed,
         "area_sqm":   round(area_sqm, 3),
         "area_acres": round(area_acres, 6),
+    }
+
+
+def circle_attrs(cx, cy, radius):
+    diameter      = radius * 2
+    circumference = 2 * math.pi * radius
+    area_sqm      = math.pi * radius ** 2
+    area_acres    = area_sqm * 0.000247105
+    return {
+        "center_x":     round(cx, 3),
+        "center_y":     round(cy, 3),
+        "radius":        round(radius, 3),
+        "diameter":      round(diameter, 3),
+        "circumference": round(circumference, 3),
+        "area_sqm":      round(area_sqm, 3),
+        "area_acres":    round(area_acres, 6),
     }
 
 

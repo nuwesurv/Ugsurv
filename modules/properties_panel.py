@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 from qgis.core import (
     QgsCircularString, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
 )
+from .layer_utils import circle_attrs
 
 
 class PropertiesDock(QDockWidget):
@@ -206,6 +207,7 @@ class PropertiesDock(QDockWidget):
             if not self._layer.isEditable():
                 self._layer.startEditing()
             self._layer.changeGeometry(self._fid, self._build_circle_geom(cx, cy, r))
+            self._write_circle_attrs(cx, cy, r)
             self._layer.triggerRepaint()
             self._deferred_refresh()
 
@@ -227,8 +229,7 @@ class PropertiesDock(QDockWidget):
             if not self._layer.isEditable():
                 self._layer.startEditing()
             self._layer.changeGeometry(self._fid, self._build_circle_geom(c.x(), c.y(), r))
-            if radius_idx >= 0:
-                self._layer.changeAttributeValue(self._fid, radius_idx, round(r, 3))
+            self._write_circle_attrs(c.x(), c.y(), r)
             self._layer.triggerRepaint()
             self._deferred_refresh()
 
@@ -289,6 +290,10 @@ class PropertiesDock(QDockWidget):
             if not self._layer.isEditable():
                 self._layer.startEditing()
             self._layer.changeGeometry(self._fid, QgsGeometry.fromPointXY(QgsPointXY(x, y)))
+            for fname, val in (("x", round(x, 4)), ("y", round(y, 4))):
+                idx = self._layer.fields().indexOf(fname)
+                if idx >= 0:
+                    self._layer.changeAttributeValue(self._fid, idx, val)
             self._layer.triggerRepaint()
             self._deferred_refresh()
 
@@ -297,6 +302,13 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("X:", x_edit)
         self._form.addRow("Y:", y_edit)
         self._form.addRow("Color:", self._make_color_button())
+
+    def _write_circle_attrs(self, cx, cy, radius):
+        attrs = circle_attrs(cx, cy, radius)
+        for fname, val in attrs.items():
+            idx = self._layer.fields().indexOf(fname)
+            if idx >= 0:
+                self._layer.changeAttributeValue(self._fid, idx, val)
 
     # ------------------------------------------------------------------
     # Color picker (polyline)

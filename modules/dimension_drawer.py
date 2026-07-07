@@ -224,21 +224,44 @@ class DimensionDrawer(QgsMapTool):
         layer.setLabelsEnabled(True)
         layer.triggerRepaint()
 
+    def _ensure_dim_fields(self, layer):
+        existing = {f.name() for f in layer.fields()}
+        to_add = []
+        if "distance" not in existing: to_add.append(QgsField("distance", QVariant.Double))
+        if "start_x"  not in existing: to_add.append(QgsField("start_x",  QVariant.Double))
+        if "start_y"  not in existing: to_add.append(QgsField("start_y",  QVariant.Double))
+        if "end_x"    not in existing: to_add.append(QgsField("end_x",    QVariant.Double))
+        if "end_y"    not in existing: to_add.append(QgsField("end_y",    QVariant.Double))
+        if "bearing"  not in existing: to_add.append(QgsField("bearing",  QVariant.Double))
+        if to_add:
+            layer.dataProvider().addAttributes(to_add)
+            layer.updateFields()
+
     def getDimensionLayer(self):
         layer_name = "_dimension_layer"
         layers = QgsProject.instance().mapLayersByName(layer_name)
         if layers:
-            return layers[0]
+            layer = layers[0]
+            self._ensure_dim_fields(layer)
+            return layer
 
         layer = open_layer_from_gpkg(layer_name)
         if layer:
+            self._ensure_dim_fields(layer)
             self._apply_dim_style(layer)
             add_to_plugin_group(layer)
             layer.startEditing()
             return layer
 
         mem = QgsVectorLayer(f"LineString?crs=EPSG:{self.appropriate_crs}", layer_name, "memory")
-        mem.dataProvider().addAttributes([QgsField("distance", QVariant.Double)])
+        mem.dataProvider().addAttributes([
+            QgsField("distance", QVariant.Double),
+            QgsField("start_x",  QVariant.Double),
+            QgsField("start_y",  QVariant.Double),
+            QgsField("end_x",    QVariant.Double),
+            QgsField("end_y",    QVariant.Double),
+            QgsField("bearing",  QVariant.Double),
+        ])
         mem.updateFields()
 
         layer = create_layer_in_gpkg(mem)
@@ -480,13 +503,19 @@ class DimensionDrawer(QgsMapTool):
                 print("Dimension already exists. Skipping.")
                 return  # 🚫 Stop — duplicate found
         
-        dim_dist = self.dim_points[0].distance(self.dim_points[1])
-        # --- Add feature ---
-        self.feature = QgsFeature(self.dim_layer.fields())  # Important: initialize feature with layer fields
+        p1, p2 = self.dim_points[0], self.dim_points[1]
+        dim_dist = p1.distance(p2)
+        bearing  = self._bearing(p1, p2)
+
+        self.feature = QgsFeature(self.dim_layer.fields())
         self.feature.setGeometry(QgsGeometry.fromPolylineXY(self.dim_points))
-        # feature.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
-        self.feature.setAttribute("distance", round(dim_dist, 3))  # Use field name instead of index
-        self.dim_layer.addFeature(self.feature)  # simplified; no need to go through provider directly
+        self.feature.setAttribute("distance", round(dim_dist, 3))
+        self.feature.setAttribute("start_x",  round(p1.x(), 3))
+        self.feature.setAttribute("start_y",  round(p1.y(), 3))
+        self.feature.setAttribute("end_x",    round(p2.x(), 3))
+        self.feature.setAttribute("end_y",    round(p2.y(), 3))
+        self.feature.setAttribute("bearing",  round(bearing, 2))
+        self.dim_layer.addFeature(self.feature)
         self.dim_layer.triggerRepaint()
         
         
