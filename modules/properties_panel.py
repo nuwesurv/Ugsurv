@@ -50,11 +50,19 @@ class PropertiesDock(QDockWidget):
         scroll.setFrameShape(QFrame.NoFrame)
 
         self._content = QWidget()
-        self._form = QFormLayout(self._content)
+        _outer_vbox = QVBoxLayout(self._content)
+        _outer_vbox.setContentsMargins(0, 0, 0, 0)
+        _outer_vbox.setSpacing(0)
+
+        _form_holder = QWidget()
+        self._form = QFormLayout(_form_holder)
         self._form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._form.setSpacing(5)
         self._form.setContentsMargins(0, 4, 0, 4)
+
+        _outer_vbox.addWidget(_form_holder)
+        _outer_vbox.addStretch(1)
 
         scroll.setWidget(self._content)
         outer_vbox.addWidget(scroll)
