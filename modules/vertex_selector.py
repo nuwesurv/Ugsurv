@@ -25,6 +25,7 @@ State machine
     └──[click vertex]───────┘                    [click elsewhere]                 [Esc / RMB]
                                                       IDLE ◄──[commit click]────────────┘
 """
+import math
 from collections import namedtuple
 
 from qgis.core import (
@@ -135,6 +136,9 @@ class VertexSelector(QgsMapTool):
         self._feature_vtx_markers = []
         self._mid_markers = []   # "+" cross markers at segment midpoints
         self._mid_points  = []   # QgsPointXY for each midpoint (parallel to _mid_markers)
+        self._end_markers     = []   # blue "+" markers (visual) at open endpoints
+        self._end_marker_pts  = []   # QgsPointXY of each marker (for hit testing)
+        self._end_marker_svs  = []   # _SelVtx of the actual vertex to grip on click
 
         # Multi-selection: secondary selected features (not the current active one)
         self._sel_extra_bands = []   # QgsRubberBand per secondary feature
@@ -283,6 +287,11 @@ class VertexSelector(QgsMapTool):
             self._rm(m)
         self._mid_markers = []
         self._mid_points  = []
+        for m in self._end_markers:
+            self._rm(m)
+        self._end_markers    = []
+        self._end_marker_pts = []
+        self._end_marker_svs = []
         self._rm(self._feature_band)
         self._feature_band = None
         self._sel_layer = None
@@ -372,7 +381,7 @@ class VertexSelector(QgsMapTool):
             for i in range(len(verts) - 1):
                 pt1, pt2 = verts[i][1], verts[i + 1][1]
                 mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
-                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
+                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 8)
                 m.setCenter(mid)
                 m.setPenWidth(2)
                 self._mid_markers.append(m)
@@ -385,12 +394,36 @@ class VertexSelector(QgsMapTool):
             self._feature_band = self._make_band(gt, _C_FEATURE, _C_FEAT_FILL, width=2)
             self._feature_band.setToGeometry(geom, layer)
 
+        # Blue '+' placed just beyond each open endpoint, pointing outward along the line
+        if (not geom.isEmpty()
+                and QgsWkbTypes.geometryType(geom.wkbType()) == QgsWkbTypes.LineGeometry
+                and not self._is_closed_polyline(geom)
+                and len(verts) >= 2):
+            px_offset = 14 * self.canvas.mapUnitsPerPixel()
+            for (ep_idx, ep_pt), (_, nb_pt) in [
+                (verts[0],  verts[1]),
+                (verts[-1], verts[-2]),
+            ]:
+                dx = ep_pt.x() - nb_pt.x()
+                dy = ep_pt.y() - nb_pt.y()
+                ln = math.sqrt(dx * dx + dy * dy)
+                if ln > 1e-10:
+                    marker_pt = QgsPointXY(ep_pt.x() + dx / ln * px_offset,
+                                           ep_pt.y() + dy / ln * px_offset)
+                else:
+                    marker_pt = QgsPointXY(ep_pt.x(), ep_pt.y())
+                m = self._make_marker(QColor(210, 40, 40), QgsVertexMarker.ICON_CROSS, 10)
+                m.setCenter(marker_pt)
+                m.setPenWidth(2)
+                self._end_markers.append(m)
+                self._end_marker_pts.append(marker_pt)
+                self._end_marker_svs.append(_SelVtx(layer, fid, ep_idx, ep_pt))
+
         n_total = 1 + len(self._sel_extra_items)
         extra_msg = f"  ({n_total} selected total)" if n_total > 1 else ""
         self._log(
             f"\nFeature {fid} of '{layer.name()}' selected{extra_msg}"
-            f"  →  click a vertex to grip it  |  click '+' to insert"
-            f"  |  Shift+click to deselect"
+            f"  →  click '+' at endpoint to extend  |  click a vertex to grip  |  Shift+click to deselect"
         )
 
     def _enter_gripped(self, sv):
@@ -430,7 +463,7 @@ class VertexSelector(QgsMapTool):
             for i in range(len(verts) - 1):
                 pt1, pt2 = verts[i][1], verts[i + 1][1]
                 mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
-                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 10)
+                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 8)
                 m.setCenter(mid)
                 m.setPenWidth(2)
                 self._mid_markers.append(m)
@@ -558,7 +591,12 @@ class VertexSelector(QgsMapTool):
             + (f"  [{len(self._move_extra_data)} shared]" if self._move_extra_data else "")
         )
         new_sv = _SelVtx(sv.layer, sv.fid, sv.vidx, map_pt)
-        self._enter_gripped(new_sv)
+        # If the moved vertex is an open endpoint, drop back to feature state so
+        # the user must click the red '+' to extend — prevents accidental extension.
+        if self._is_unclosed_endpoint(new_sv):
+            self._enter_feature(sv.layer, sv.fid)
+        else:
+            self._enter_gripped(new_sv)
 
     def _circle_center_from_geom(self, geom):
         """Return the center QgsPointXY of a circle geometry."""
@@ -821,6 +859,21 @@ class VertexSelector(QgsMapTool):
         feat = sv.layer.getFeature(sv.fid)
         return not self._is_closed_polyline(feat.geometry())
 
+    def _is_unclosed_endpoint(self, sv):
+        """True if sv is the first or last vertex of an open (non-closed) polyline."""
+        feat = sv.layer.getFeature(sv.fid)
+        geom = feat.geometry()
+        if geom.isEmpty():
+            return False
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+            return False
+        if self._is_closed_polyline(geom):
+            return False
+        verts = self._geom_verts(geom)
+        if len(verts) < 2:
+            return False
+        return sv.vidx == verts[0][0] or sv.vidx == verts[-1][0]
+
     def _extend_line(self, map_pt):
         """Append a new vertex at map_pt from the gripped endpoint, then stay gripped there."""
         sv = self._gripped
@@ -1003,6 +1056,14 @@ class VertexSelector(QgsMapTool):
         for mpt in self._mid_points:
             if map_pt.distance(mpt) <= tol:
                 return mpt
+        return None
+
+    def _find_end_marker_near(self, map_pt):
+        """Return the _SelVtx of the endpoint to grip if map_pt is near a blue '+' end marker."""
+        tol = self._hit_tol()
+        for marker_pt, sv in zip(self._end_marker_pts, self._end_marker_svs):
+            if map_pt.distance(marker_pt) <= tol:
+                return sv
         return None
 
     def _same_grip(self, sv):
@@ -1445,8 +1506,14 @@ class VertexSelector(QgsMapTool):
         if self._state == _S_FEATURE:
             shift = bool(event.modifiers() & Qt.ShiftModifier)
 
-            # 1. Vertex of active feature — highest priority.
-            #    Checked before '+' so stacked/close vertices are always grippable.
+            # 1. Blue '+' end marker — clicking beyond an open endpoint starts extension.
+            end_sv = self._find_end_marker_near(map_pt)
+            if end_sv is not None and not shift:
+                self._enter_gripped(end_sv)
+                # Don't enter move mode — _gripped_can_extend() takes over for extension
+                return
+
+            # 2. Vertex of active feature.
             if sv and id(sv.layer) == id(self._sel_layer) and sv.fid == self._sel_fid:
                 if shift:
                     self._enter_idle()
@@ -1456,13 +1523,13 @@ class VertexSelector(QgsMapTool):
                     self._vtx_press_pos = event.pos()  # also support press-drag
                 return
 
-            # 2. '+' midpoint marker — only reachable when no active-feature vertex was hit.
+            # 3. '+' midpoint marker — only reachable when no active-feature vertex was hit.
             mpt = self._find_midpoint_near(map_pt)
             if mpt is not None:
                 self._insert_vertex_on_segment(mpt)
                 return
 
-            # 3. Edge of active feature, another feature, or empty space.
+            # 4. Edge of active feature, another feature, or empty space.
             sel_feat = self._sel_layer.getFeature(self._sel_fid)
             sel_geom = sel_feat.geometry()
             tol      = self._hit_tol()
