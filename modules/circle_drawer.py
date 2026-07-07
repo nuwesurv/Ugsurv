@@ -12,7 +12,6 @@ from qgis.core import (
     QgsPalLayerSettings,
     QgsTextFormat,
     QgsVectorLayerSimpleLabeling,
-    QgsPointLocator,
     QgsSingleSymbolRenderer,
     QgsCircularString,
     QgsPoint,
@@ -24,6 +23,7 @@ from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from .snap_config import snapSettingConfig
+from . import snap_utils
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
 import math
@@ -208,20 +208,6 @@ class CircleDrawer(QgsMapTool):
     # Preview helpers
     # -------------------------------------------------------------------------
 
-    def _update_snap_marker(self, point: QgsPointXY, snap_result):
-        if snap_result.isValid():
-            self.snap_marker.setCenter(snap_result.point())
-            self.snap_marker.setVisible(True)
-            icon_map = {
-                QgsPointLocator.Vertex:          QgsVertexMarker.ICON_BOX,            # endpoint
-                QgsPointLocator.Edge:            QgsVertexMarker.ICON_DOUBLE_TRIANGLE, # nearest
-                QgsPointLocator.Area:            QgsVertexMarker.ICON_RHOMBUS,
-                QgsPointLocator.MiddleOfSegment: QgsVertexMarker.ICON_TRIANGLE,        # midpoint
-            }
-            self.snap_marker.setIconType(icon_map.get(snap_result.type(), QgsVertexMarker.ICON_X))  # X for intersection
-        else:
-            self.snap_marker.setVisible(False)
-
     def _draw_circle_preview(self, center: QgsPointXY, cursor: QgsPointXY):
         """Render rubber-band circle preview and radius line."""
         radius = center.distance(cursor)
@@ -278,29 +264,6 @@ class CircleDrawer(QgsMapTool):
         self._hint.move(pos)
         self._hint.show()
         self._hint.raise_()
-
-    def _find_circle_center_snap(self, screen_pos) -> QgsPointXY | None:
-        """Return the center of the nearest circle if cursor is within 12 px of it."""
-        from .snap_manager import is_enabled, CENTER
-        if not is_enabled(CENTER):
-            return None
-        threshold_sq = 12 ** 2
-        ct = self.canvas.getCoordinateTransform()
-        for feat in self.circle_layer.getFeatures():
-            geom = feat.geometry()
-            if geom.isNull():
-                continue
-            bbox = geom.boundingBox()
-            if bbox.isEmpty():
-                continue
-            # Bounding-box centre == circle centre for any circular geometry type
-            center_map = QgsPointXY(bbox.center())
-            sc = ct.transform(center_map)
-            dx = screen_pos.x() - sc.x()
-            dy = screen_pos.y() - sc.y()
-            if dx * dx + dy * dy <= threshold_sq:
-                return center_map
-        return None
 
     def _clear_preview(self):
         self.preview_circle_band.reset(QgsWkbTypes.LineGeometry)
@@ -410,19 +373,13 @@ class CircleDrawer(QgsMapTool):
 
     def canvasMoveEvent(self, event):
         raw_point = self.toMapCoordinates(event.pos())
-        snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
-        cursor = snap_result.point() if snap_result.isValid() else raw_point
-
-        # Endpoint takes priority over circle-center snap
-        is_vertex = snap_result.isValid() and snap_result.type() == QgsPointLocator.Vertex
-        center_snap = None if is_vertex else self._find_circle_center_snap(event.pos())
-        if center_snap:
-            cursor = center_snap
-            self.snap_marker.setCenter(center_snap)
-            self.snap_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+        cursor, icon = snap_utils.snap_point(self.canvas, raw_point)
+        if icon is not None:
+            self.snap_marker.setCenter(cursor)
+            self.snap_marker.setIconType(icon)
             self.snap_marker.setVisible(True)
         else:
-            self._update_snap_marker(cursor, snap_result)
+            self.snap_marker.setVisible(False)
 
         if not self.is_drawing:
             self._display(f"\nSelect center point: {cursor.x():.3f}, {cursor.y():.3f}\n")
@@ -445,13 +402,7 @@ class CircleDrawer(QgsMapTool):
             return
 
         raw_point = self.toMapCoordinates(event.pos())
-        snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
-        clicked_point = snap_result.point() if snap_result.isValid() else raw_point
-
-        is_vertex = snap_result.isValid() and snap_result.type() == QgsPointLocator.Vertex
-        center_snap = None if is_vertex else self._find_circle_center_snap(event.pos())
-        if center_snap:
-            clicked_point = center_snap
+        clicked_point, _ = snap_utils.snap_point(self.canvas, raw_point)
         self.snap_marker.setVisible(False)
 
         self.circle_layer = self._get_or_create_circle_layer()

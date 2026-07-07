@@ -1,6 +1,6 @@
-"""Plugin-wide snap mode state. Keeps QGIS snapping config in sync."""
+"""Plugin-wide snap mode state."""
 
-from qgis.core import QgsProject, QgsSnappingConfig
+from qgis.core import QgsProject
 
 ENDPOINT     = 'endpoint'
 MIDPOINT     = 'midpoint'
@@ -27,31 +27,10 @@ def set_enabled(key, value):
 
 
 def _apply_to_qgis():
-    """Push current snap state into the QGIS project snapping config."""
+    """Disable QGIS native snapping — all snapping is handled by snap_utils."""
     project = QgsProject.instance()
     if project is None:
         return
     cfg = project.snappingConfig()
-
-    # Collect active QGIS snap types as actual enum values (not Python ints),
-    # so that ORing them produces a valid QFlags for setType().
-    active_types = []
-    if _state[ENDPOINT]:
-        active_types.append(QgsSnappingConfig.Vertex)
-    if _state[NEAREST]:
-        active_types.append(QgsSnappingConfig.Segment)
-    mid_flag = getattr(QgsSnappingConfig, 'MiddleOfSegments', None)
-    if mid_flag is not None and _state[MIDPOINT]:
-        active_types.append(mid_flag)
-
-    if active_types:
-        cfg.setEnabled(True)
-        combined = active_types[0]
-        for t in active_types[1:]:
-            combined = combined | t
-        cfg.setType(combined)
-    else:
-        cfg.setEnabled(False)
-
-    cfg.setIntersectionSnapping(_state[INTERSECTION])
+    cfg.setEnabled(False)
     project.setSnappingConfig(cfg)
