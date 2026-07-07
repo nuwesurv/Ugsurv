@@ -63,6 +63,7 @@ from .modules.topology_solver import TopologySolver
 from .modules.fix_geometry import FixGeometry
 from .module_wz_dialogs.parcel_plotter import ParcelPlotterDialog
 from .module_wz_dialogs.layout_importer import ImportPrintDialog
+from .module_wz_dialogs.file_importer import FileImportDialog
 from .module_wz_dialogs.append_geometry import GeometryAppenderDock
 from .module_wz_dialogs.crs_adjust import CrsAdjustDock
 from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
@@ -407,7 +408,7 @@ class Ugsurv:
             'BREAK', 'CHAMFER', 'EXPLODE',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
-            'SPIKY', 'PTOVERLAP', 'IMPORT', 'GAME',
+            'SPIKY', 'PTOVERLAP', 'IMPORT', 'PRINT', 'GAME',
             # Terminal
             'HELP', 'CLEAR',
         ])
@@ -582,7 +583,8 @@ class Ugsurv:
                 "\n  CRS            Adjust CRS of selected features"
                 "\n  SPIKY   [SPK]  Detect spiky vertices"
                 "\n  PTOVERLAP[PTO] Detect overlapping boundary points"
-                "\n  IMPORT  [IMP]  Import & georeference cadastral print"
+                "\n  IMPORT  [IMP]  Import CSV, XLSX, DWG/DXF or PDF as a layer"
+                "\n  PRINT   [PR ]  Import & georeference a cadastral print"
                 "\n  GAME    [GM]   Total-station laser game"
                 "\n── Terminal ──────────────────────────"
                 "\n  CLEAR   [CLS]  Clear terminal"
@@ -701,7 +703,11 @@ class Ugsurv:
             self.overlap_detect_dock = OverlapPointsDock(self.canvas, self.iface.mainWindow())
             self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.overlap_detect_dock)
 
-        elif cmd in ('import', 'imp', 'print'):
+        elif cmd in ('import', 'imp'):
+            self.dlg = FileImportDialog(parent=self.iface.mainWindow())
+            self.dlg.show()
+
+        elif cmd in ('print', 'pr'):
             self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
             self.dlg.show()
 

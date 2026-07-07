@@ -285,8 +285,12 @@ class JoinTool(QgsMapTool):
             self._log(f"\nJOIN: {err}")
             return   # leave selection intact so user can adjust
 
-        new_geom = QgsGeometry.fromPolylineXY(chained)
-        attrs    = polyline_attrs(new_geom)
+        new_geom   = QgsGeometry.fromPolylineXY(chained)
+        attrs      = polyline_attrs(new_geom)
+        length     = attrs["length"]
+        is_closed  = attrs["closed"]
+        area_sqm   = attrs["area_sqm"]
+        area_acres = attrs["area_acres"]
 
         # Write result to the first selected feature's layer
         target = segments[0][0]
