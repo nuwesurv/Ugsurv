@@ -431,6 +431,7 @@ class Ugsurv:
 
         # Vertex editor is always active when no drawing tool is running.
         vertex_selector = VertexSelector(self.canvas, self.terminal_dock)
+        self.vertex_selector = vertex_selector
         self.global_map_tool.set_default_tool(vertex_selector)
 
         # Properties panel — shows/edits properties of the selected feature
@@ -452,6 +453,7 @@ class Ugsurv:
 
         vertex_selector.feature_selected.connect(self.properties_dock.update_feature)
         vertex_selector.selection_cleared.connect(self.properties_dock.clear_selection)
+        self.properties_dock.geometry_changed.connect(vertex_selector.refresh_rubber_band)
 
         from .package_installer import solve_dependency_issues
         

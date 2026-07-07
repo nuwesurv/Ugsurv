@@ -1228,6 +1228,20 @@ class VertexSelector(QgsMapTool):
 
     # ------------------------------------------------------------------
 
+    def refresh_rubber_band(self, layer, fid):
+        """Rebuild the active rubber band after an external geometry edit (e.g. from the properties panel)."""
+        if self._state == _S_FEATURE:
+            if id(layer) == id(self._sel_layer) and fid == self._sel_fid:
+                self._enter_feature(layer, fid)
+        elif self._state == _S_GRIPPED:
+            sv = self._gripped
+            if sv and id(layer) == id(sv.layer) and fid == sv.fid:
+                verts = self._feature_verts(layer, fid)
+                if verts:
+                    pt_map = {vidx: vpt for vidx, vpt in verts}
+                    new_pt = pt_map.get(sv.vidx, verts[0][1])
+                    self._enter_gripped(_SelVtx(sv.layer, sv.fid, sv.vidx, new_pt))
+
     def get_selected_feature(self):
         """Return (layer, fid) if a feature is currently highlighted or gripped, else None."""
         if self._state == _S_FEATURE:

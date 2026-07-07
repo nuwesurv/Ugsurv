@@ -1,6 +1,6 @@
 import math
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QColorDialog, QDockWidget, QFormLayout, QFrame,
@@ -15,6 +15,9 @@ from .layer_utils import circle_attrs
 
 class PropertiesDock(QDockWidget):
     """Right-side dock showing editable properties of the selected feature."""
+
+    # Emitted after any geometry edit so the vertex selector can refresh its rubber band.
+    geometry_changed = pyqtSignal(object, int)
 
     def __init__(self, parent=None):
         super().__init__("Properties", parent)
@@ -209,6 +212,7 @@ class PropertiesDock(QDockWidget):
             self._layer.changeGeometry(self._fid, self._build_circle_geom(cx, cy, r))
             self._write_circle_attrs(cx, cy, r)
             self._layer.triggerRepaint()
+            self.geometry_changed.emit(self._layer, self._fid)
             self._deferred_refresh()
 
         cx_edit.editingFinished.connect(apply_center)
@@ -231,6 +235,7 @@ class PropertiesDock(QDockWidget):
             self._layer.changeGeometry(self._fid, self._build_circle_geom(c.x(), c.y(), r))
             self._write_circle_attrs(c.x(), c.y(), r)
             self._layer.triggerRepaint()
+            self.geometry_changed.emit(self._layer, self._fid)
             self._deferred_refresh()
 
         def on_r_edited():
@@ -295,6 +300,7 @@ class PropertiesDock(QDockWidget):
                 if idx >= 0:
                     self._layer.changeAttributeValue(self._fid, idx, val)
             self._layer.triggerRepaint()
+            self.geometry_changed.emit(self._layer, self._fid)
             self._deferred_refresh()
 
         x_edit.editingFinished.connect(apply_coords)
@@ -396,6 +402,7 @@ class PropertiesDock(QDockWidget):
                 return
 
         self._layer.triggerRepaint()
+        self.geometry_changed.emit(self._layer, self._fid)
         self._deferred_refresh()
 
     def _write_attrs(self, is_closed, geom):
