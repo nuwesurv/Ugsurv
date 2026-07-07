@@ -9,12 +9,11 @@ from qgis.core import (
     QgsField,
     QgsWkbTypes,
     QgsLineSymbol,
-    QgsPalLayerSettings, 
-    QgsTextFormat, 
+    QgsPalLayerSettings,
+    QgsTextFormat,
     QgsVectorLayerSimpleLabeling,
-    QgsPointLocator,
-    QgsWkbTypes,
-    QgsCoordinateReferenceSystem
+    QgsCoordinateReferenceSystem,
+    QgsRectangle,
 )
 from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
@@ -22,7 +21,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
-from .snap_utils import find_circle_center_snap, init_snap
+from . import snap_utils
 from . import crs_utils
 import math
 
@@ -58,7 +57,7 @@ class DimensionDrawer(QgsMapTool):
         self.dim_points = []
         self.dim_layer = self.getDimensionLayer()
         self._maptool = None   # set by UgsurvMaptool.set_tool()
-        init_snap()
+        snap_utils.init_snap()
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -262,50 +261,59 @@ class DimensionDrawer(QgsMapTool):
 
 
 
+    def _find_feature_near(self, map_pt):
+        """Return (layer, feature) of the nearest non-point feature within snap tolerance, or (None, None)."""
+        tol = snap_utils._tol(self.canvas)
+        rect = QgsRectangle(map_pt.x() - tol, map_pt.y() - tol, map_pt.x() + tol, map_pt.y() + tol)
+        best_lyr, best_feat, best_dist = None, None, tol
+        pt_geom = QgsGeometry.fromPointXY(map_pt)
+        for lyr in snap_utils._non_point_layers():
+            for feat in lyr.getFeatures(rect):
+                geom = feat.geometry()
+                if geom.isNull() or geom.isEmpty():
+                    continue
+                d = geom.distance(pt_geom)
+                if d < best_dist:
+                    best_dist = d
+                    best_lyr = lyr
+                    best_feat = feat
+        return best_lyr, best_feat
+
+    def _nearest_segment(self, map_pt, geom):
+        """Return (a, b) QgsPointXY of the segment in geom closest to map_pt, or (None, None)."""
+        verts = list(geom.vertices())
+        best_a, best_b, best_d = None, None, float('inf')
+        pt_geom = QgsGeometry.fromPointXY(map_pt)
+        for i in range(len(verts) - 1):
+            a = QgsPointXY(verts[i].x(), verts[i].y())
+            b = QgsPointXY(verts[i + 1].x(), verts[i + 1].y())
+            seg = QgsGeometry.fromPolylineXY([a, b])
+            d = seg.distance(pt_geom)
+            if d < best_d:
+                best_d = d
+                best_a, best_b = a, b
+        return best_a, best_b
+
     def canvasMoveEvent(self, event):
         point = self.toMapCoordinates(event.pos())
 
-        # Use the canvas to snap
-        snap_result = self.canvas.snappingUtils().snapToMap(point)
-        cc = find_circle_center_snap(self.canvas, point)
-        if cc:
-            point = cc
-            self.snap_marker.setCenter(cc)
-            self.snap_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+        snapped, icon = snap_utils.snap_point(self.canvas, point)
+        if icon is not None:
+            point = snapped
+            self.snap_marker.setCenter(snapped)
+            self.snap_marker.setIconType(icon)
             self.snap_marker.setVisible(True)
-        elif snap_result.isValid():
-            point = snap_result.point()
-            self.snap_marker.setCenter(point)
-            self.snap_marker.setVisible(True)
-            if snap_result.type() == QgsPointLocator.Vertex:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
-            elif snap_result.type() == QgsPointLocator.Edge:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_DOUBLE_TRIANGLE)
-            elif snap_result.type() == QgsPointLocator.Area:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_RHOMBUS)
-            elif snap_result.type() == QgsPointLocator.MiddleOfSegment:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_TRIANGLE)
-            else:
-                self.snap_marker.setIconType(QgsVertexMarker.ICON_X)
         else:
             self.rubber_band.setWidth(2)
             self.rubber_band.reset(QgsWkbTypes.LineGeometry)
             self.snap_marker.setVisible(False)
-            
+
         if len(self.dim_points) == 0:
             self.terminal_dock.commandDisplay.setText(
                 self.terminal_dock.commandOutputText + f'\nSelect start point: {round(point.x(),3)}, {round(point.y(),3)}\n'
             )
-            if snap_result.type() == QgsPointLocator.Vertex:
-                self.rubber_band.setWidth(1)
-                self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-
-            if snap_result.type() == QgsPointLocator.Edge:
-                before_vertex, after_vertex = snap_result.edgePoints()
-                self.rubber_band.setWidth(2)
-                self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-                self.rubber_band.addPoint(before_vertex)
-                self.rubber_band.addPoint(after_vertex)
+            self.rubber_band.setWidth(1)
+            self.rubber_band.reset(QgsWkbTypes.LineGeometry)
             self._show_hint(event.pos(), "Click start point")
 
         elif len(self.dim_points) == 1:
@@ -351,17 +359,13 @@ class DimensionDrawer(QgsMapTool):
             point = self.toMapCoordinates(event.pos())
 
             self.snap_marker.setVisible(False)
-            snap_result = self.canvas.snappingUtils().snapToMap(point)
-            cc = find_circle_center_snap(self.canvas, point)
-            if cc:
-                point = cc
-            elif snap_result.isValid():
-                point = snap_result.point()
-                
-                # Dimension all segments of the clicked feature
-                if len(self.dim_points) == 0 and snap_result.type() == QgsPointLocator.Edge and self.operation_type == 'selected':
-                    layer = snap_result.layer()
-                    feature = layer.getFeature(snap_result.featureId())
+            snapped, icon = snap_utils.snap_point(self.canvas, point)
+            point = snapped
+            on_edge = (icon == snap_utils.SNAP_ICON['nearest'])
+
+            if len(self.dim_points) == 0 and on_edge and self.operation_type == 'selected':
+                _, feature = self._find_feature_near(snapped)
+                if feature is not None:
                     feature_geom = feature.geometry()
 
                     if feature_geom and feature_geom.isGeosValid():
@@ -391,17 +395,17 @@ class DimensionDrawer(QgsMapTool):
                         self.rubber_band.reset(QgsWkbTypes.LineGeometry)
                     return
                 
-                elif len(self.dim_points) == 0 and snap_result.type() == QgsPointLocator.Edge:
-                    before_vertex, after_vertex = snap_result.edgePoints()
-                    
-                    self.dim_points.append(before_vertex)
-                    self.dim_points.append(after_vertex)
-                    
-                    self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-                    self.createDimensionFeature()
-                    self.dim_points.clear()
-
-                    return
+            elif len(self.dim_points) == 0 and on_edge:
+                _, feat = self._find_feature_near(snapped)
+                if feat is not None:
+                    before_vertex, after_vertex = self._nearest_segment(snapped, feat.geometry())
+                    if before_vertex and after_vertex:
+                        self.dim_points.append(before_vertex)
+                        self.dim_points.append(after_vertex)
+                        self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+                        self.createDimensionFeature()
+                        self.dim_points.clear()
+                        return
                     
                     
                 

@@ -11,14 +11,13 @@ Workflow
 Points are added to a '_points' memory layer (created if absent).
 """
 
-from qgis.gui import QgsMapTool, QgsSnapIndicator
+from qgis.gui import QgsMapTool, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature,
     QgsGeometry,
-    QgsPointLocator,
     QgsPointXY,
     QgsProject,
     QgsVectorLayer,
@@ -52,7 +51,7 @@ class PointDrawer(QgsMapTool):
         self.canvas        = canvas
         self.terminal_dock = terminal_dock
         self._maptool      = None
-        self._snap_ind     = None
+        self._snap_marker  = None
 
         self._layer = self._get_or_create_layer()
         snap_utils.init_snap()
@@ -109,14 +108,15 @@ class PointDrawer(QgsMapTool):
     # ------------------------------------------------------------------
 
     def _snap(self, screen_pos):
-        match = self.canvas.snappingUtils().snapToMap(screen_pos)
-        if match.isValid():
-            if self._snap_ind:
-                self._snap_ind.setMatch(match)
-            return match.point()
-        if self._snap_ind:
-            self._snap_ind.setMatch(QgsPointLocator.Match())
-        return self.toMapCoordinates(screen_pos)
+        map_pt = self.toMapCoordinates(screen_pos)
+        pt, icon = snap_utils.snap_point(self.canvas, map_pt)
+        if icon is not None and self._snap_marker:
+            self._snap_marker.setCenter(pt)
+            self._snap_marker.setIconType(icon)
+            self._snap_marker.setVisible(True)
+        elif self._snap_marker:
+            self._snap_marker.setVisible(False)
+        return pt
 
     # ------------------------------------------------------------------
     # Placing a point
@@ -205,7 +205,11 @@ class PointDrawer(QgsMapTool):
     def activate(self):
         super().activate()
         self.terminal_dock.command.setFocus()
-        self._snap_ind = QgsSnapIndicator(self.canvas)
+        self._snap_marker = QgsVertexMarker(self.canvas)
+        self._snap_marker.setColor(QColor(66, 135, 245))
+        self._snap_marker.setIconSize(10)
+        self._snap_marker.setPenWidth(2)
+        self._snap_marker.setVisible(False)
         self._log(
             "\nPOINT  ──  click to place a point  |  type X,Y + Enter for precision"
             "\n  Empty Enter / Esc / RMB → finish\n"
@@ -215,7 +219,9 @@ class PointDrawer(QgsMapTool):
     def deactivate(self):
         self._dinput.destroy()
         self.terminal_dock.clear_input_handler()
-        self._snap_ind = None
+        if self._snap_marker:
+            self.canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
         self._hint.hide()
         if self._maptool:
             self._maptool.clear_tool()

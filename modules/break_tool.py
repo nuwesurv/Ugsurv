@@ -10,15 +10,14 @@ Workflow
    Enter / RMB / Esc  → exit.
 """
 
-from qgis.gui import QgsMapTool, QgsRubberBand, QgsSnapIndicator
-from .snap_utils import find_circle_center_snap, make_cc_marker, rm_cc_marker
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
+from . import snap_utils
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature,
     QgsGeometry,
-    QgsPointLocator,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
@@ -52,8 +51,7 @@ class BreakTool(QgsMapTool):
         self.canvas        = canvas
         self.terminal_dock = terminal_dock
         self._maptool      = None
-        self._snap_ind     = None
-        self._cc_cross     = None
+        self._snap_marker  = None
 
         self._hover_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
         self._hover_band.setColor(_C_HOVER)
@@ -123,24 +121,14 @@ class BreakTool(QgsMapTool):
 
     def _snap(self, screen_pos):
         map_pt = self.toMapCoordinates(screen_pos)
-        center = find_circle_center_snap(self.canvas, map_pt)
-        if center:
-            if self._snap_ind:
-                self._snap_ind.setMatch(QgsPointLocator.Match())
-            if self._cc_cross:
-                self._cc_cross.setCenter(center)
-                self._cc_cross.setVisible(True)
-            return center
-        if self._cc_cross:
-            self._cc_cross.setVisible(False)
-        match = self.canvas.snappingUtils().snapToMap(screen_pos)
-        if match.isValid():
-            if self._snap_ind:
-                self._snap_ind.setMatch(match)
-            return match.point()
-        if self._snap_ind:
-            self._snap_ind.setMatch(QgsPointLocator.Match())
-        return map_pt
+        pt, icon = snap_utils.snap_point(self.canvas, map_pt)
+        if icon is not None and self._snap_marker:
+            self._snap_marker.setCenter(pt)
+            self._snap_marker.setIconType(icon)
+            self._snap_marker.setVisible(True)
+        elif self._snap_marker:
+            self._snap_marker.setVisible(False)
+        return pt
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -221,8 +209,12 @@ class BreakTool(QgsMapTool):
     def activate(self):
         super().activate()
         self.canvas.setFocus()
-        self._snap_ind = QgsSnapIndicator(self.canvas)
-        self._cc_cross = make_cc_marker(self.canvas)
+        snap_utils.init_snap()
+        self._snap_marker = QgsVertexMarker(self.canvas)
+        self._snap_marker.setColor(QColor(66, 135, 245))
+        self._snap_marker.setIconSize(10)
+        self._snap_marker.setPenWidth(2)
+        self._snap_marker.setVisible(False)
         self._log(
             "\nBREAK  ──  click any line to split it at that point"
             "\n  Both halves are kept  |  Enter / RMB / Esc → exit\n"
@@ -231,9 +223,9 @@ class BreakTool(QgsMapTool):
     def deactivate(self):
         self._rm(self._hover_band)
         self._rm(self._pt_band)
-        self._snap_ind = None
-        rm_cc_marker(self.canvas, self._cc_cross)
-        self._cc_cross = None
+        if self._snap_marker:
+            self.canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
         self._hint.hide()
         if self._maptool:
             self._maptool.clear_tool()

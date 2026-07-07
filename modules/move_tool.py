@@ -20,13 +20,12 @@ this tool activates (typing 'm' while standing on a parcel), step 1 is
 skipped and the tool opens directly at step 2.
 """
 
-from qgis.gui import QgsMapTool, QgsRubberBand, QgsSnapIndicator, QgsVertexMarker
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsGeometry,
-    QgsPointLocator,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
@@ -34,7 +33,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from .dynamic_input import DynamicInput
-from .snap_utils import find_circle_center_snap, make_cc_marker, rm_cc_marker
+from . import snap_utils
 
 
 _C_HIGHLIGHT = QColor(0, 200, 80, 220)
@@ -82,8 +81,7 @@ class MoveTool(QgsMapTool):
         self._prev_bands   = []   # preview band per selected feature
         self._base_pt      = None
         self._snap_pt      = None
-        self._snap_ind     = None
-        self._cc_cross     = None   # circle-center snap icon: "+" marker
+        self._snap_marker  = None
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -148,24 +146,14 @@ class MoveTool(QgsMapTool):
 
     def _snap(self, screen_pos):
         map_pt = self.toMapCoordinates(screen_pos)
-        center = find_circle_center_snap(self.canvas, map_pt)
-        if center:
-            if self._snap_ind:
-                self._snap_ind.setMatch(QgsPointLocator.Match())
-            if self._cc_cross:
-                self._cc_cross.setCenter(center)
-                self._cc_cross.setVisible(True)
-            return center
-        if self._cc_cross:
-            self._cc_cross.setVisible(False)
-        match = self.canvas.snappingUtils().snapToMap(screen_pos)
-        if match.isValid():
-            if self._snap_ind:
-                self._snap_ind.setMatch(match)
-            return match.point()
-        if self._snap_ind:
-            self._snap_ind.setMatch(QgsPointLocator.Match())
-        return map_pt
+        pt, icon = snap_utils.snap_point(self.canvas, map_pt)
+        if icon is not None and self._snap_marker:
+            self._snap_marker.setCenter(pt)
+            self._snap_marker.setIconType(icon)
+            self._snap_marker.setVisible(True)
+        elif self._snap_marker:
+            self._snap_marker.setVisible(False)
+        return pt
 
     def _show_hint(self, screen_pos):
         text = _HINT.get(self._state, "")
@@ -263,8 +251,8 @@ class MoveTool(QgsMapTool):
         self.terminal_dock.clear_input_handler()
         for b in self._prev_bands:
             b.setVisible(False)
-        if self._snap_ind:
-            self._snap_ind.setMatch(QgsPointLocator.Match())
+        if self._snap_marker:
+            self._snap_marker.setVisible(False)
         self._state   = _ST_BASE
         self._base_pt = None
         self._snap_pt = None
@@ -332,8 +320,8 @@ class MoveTool(QgsMapTool):
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self._clear_selection()
-        if self._snap_ind:
-            self._snap_ind.setMatch(QgsPointLocator.Match())
+        if self._snap_marker:
+            self._snap_marker.setVisible(False)
         self._state   = _ST_SELECT
         self._base_pt = None
         self._snap_pt = None
@@ -342,18 +330,15 @@ class MoveTool(QgsMapTool):
     # QgsMapTool interface
     # ------------------------------------------------------------------
 
-    def _make_cc_markers(self):
-        self._cc_cross = make_cc_marker(self.canvas)
-
-    def _rm_cc_markers(self):
-        rm_cc_marker(self.canvas, self._cc_cross)
-        self._cc_cross = None
-
     def activate(self):
         super().activate()
         self.terminal_dock.command.setFocus()
-        self._snap_ind = QgsSnapIndicator(self.canvas)
-        self._make_cc_markers()
+        snap_utils.init_snap()
+        self._snap_marker = QgsVertexMarker(self.canvas)
+        self._snap_marker.setColor(QColor(66, 135, 245))
+        self._snap_marker.setIconSize(10)
+        self._snap_marker.setPenWidth(2)
+        self._snap_marker.setVisible(False)
 
         if self._preselect:
             items = self._preselect
@@ -383,8 +368,9 @@ class MoveTool(QgsMapTool):
         self._dinput.destroy()
         self.terminal_dock.clear_input_handler()
         self._clear_selection()
-        self._snap_ind = None
-        self._rm_cc_markers()
+        if self._snap_marker:
+            self.canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
         self._hint.hide()
         self._state   = _ST_SELECT
         self._base_pt = None
@@ -407,10 +393,8 @@ class MoveTool(QgsMapTool):
                     "dy": f"{dy:.3f}",
                 })
         else:
-            if self._snap_ind:
-                self._snap_ind.setMatch(QgsPointLocator.Match())
-            if self._cc_cross:
-                self._cc_cross.setVisible(False)
+            if self._snap_marker:
+                self._snap_marker.setVisible(False)
         self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):

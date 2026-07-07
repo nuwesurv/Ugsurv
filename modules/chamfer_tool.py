@@ -20,14 +20,13 @@ taken as the corner end.  Click on the half of the line closest to the join.
 
 import math
 
-from qgis.gui import QgsMapTool, QgsRubberBand, QgsSnapIndicator
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature,
     QgsGeometry,
-    QgsPointLocator,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
@@ -35,6 +34,8 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
+
+from . import snap_utils
 
 _C_LINE1  = QColor(  0, 210, 210, 220)
 _C_HOVER  = QColor(255, 200,   0, 160)
@@ -71,7 +72,7 @@ class ChamferTool(QgsMapTool):
         self.canvas        = canvas
         self.terminal_dock = terminal_dock
         self._maptool      = None
-        self._snap_ind     = None
+        self._snap_marker  = None
 
         self._state  = _ST_DIST
         self._dist1  = 0.0
@@ -320,7 +321,12 @@ class ChamferTool(QgsMapTool):
     def activate(self):
         super().activate()
         self.canvas.setFocus()
-        self._snap_ind = QgsSnapIndicator(self.canvas)
+        snap_utils.init_snap()
+        self._snap_marker = QgsVertexMarker(self.canvas)
+        self._snap_marker.setColor(QColor(66, 135, 245))
+        self._snap_marker.setIconSize(10)
+        self._snap_marker.setPenWidth(2)
+        self._snap_marker.setVisible(False)
         self._log(
             "\nCHAMFER  ──  type distances, then click two lines at their corner ends"
             "\n  d1=d2=0 → sharp corner (trim to intersection)  |  Esc → exit\n"
@@ -331,7 +337,9 @@ class ChamferTool(QgsMapTool):
         self.terminal_dock.clear_input_handler()
         self._rm(self._line1_band)
         self._rm(self._hover_band)
-        self._snap_ind = None
+        if self._snap_marker:
+            self.canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
         self._hint.hide()
         self._state = _ST_DIST
         self._line1_layer = None
@@ -344,6 +352,13 @@ class ChamferTool(QgsMapTool):
 
     def canvasMoveEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
+        snapped, icon = snap_utils.snap_point(self.canvas, map_pt)
+        if icon is not None and self._snap_marker:
+            self._snap_marker.setCenter(snapped)
+            self._snap_marker.setIconType(icon)
+            self._snap_marker.setVisible(True)
+        elif self._snap_marker:
+            self._snap_marker.setVisible(False)
         if self._state in (_ST_LINE1, _ST_LINE2):
             lyr, feat = self._find_line_near(map_pt)
             if feat:
