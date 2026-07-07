@@ -36,9 +36,10 @@ from qgis.core import (
 
 
 from . import snap_utils
+from .layer_utils import polyline_attrs
 
 _C_LINE1  = QColor(  0, 210, 210, 220)
-_C_HOVER  = QColor(255, 200,   0, 160)
+_C_HOVER  = QColor(66, 135, 245)
 
 _HIT_PX = 10
 
@@ -153,6 +154,12 @@ class ChamferTool(QgsMapTool):
                     best_d, best_layer, best_feat = d, lyr, feat
         return (best_layer, best_feat) if best_d <= tol else (None, None)
 
+    def _nearest_segment_geom(self, feat, map_pt):
+        """Return a 2-point line geometry for the single segment of feat nearest to map_pt."""
+        pts = feat.geometry().asPolyline()
+        i = self._nearest_segment(pts, map_pt)
+        return QgsGeometry.fromPolylineXY([pts[i], pts[i + 1]])
+
     # ------------------------------------------------------------------
     # Geometry
 
@@ -216,6 +223,146 @@ class ChamferTool(QgsMapTool):
         kept = self._sub_line(geom, keep_from, keep_to)
         return kept, chamfer_pt
 
+    def _nearest_segment(self, pts, click_pt):
+        """Return the index of the polyline segment whose closest point is nearest to click_pt."""
+        best_i, best_d = 0, float('inf')
+        for i in range(len(pts) - 1):
+            p1, p2 = pts[i], pts[i + 1]
+            dx, dy = p2.x() - p1.x(), p2.y() - p1.y()
+            seg_sq = dx * dx + dy * dy
+            if seg_sq < 1e-14:
+                cx, cy = p1.x(), p1.y()
+            else:
+                t  = max(0.0, min(1.0, ((click_pt.x()-p1.x())*dx + (click_pt.y()-p1.y())*dy) / seg_sq))
+                cx = p1.x() + t * dx
+                cy = p1.y() + t * dy
+            d = math.hypot(click_pt.x() - cx, click_pt.y() - cy)
+            if d < best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _update_polyline_attrs(self, lyr, fid, geom):
+        """Write computed polyline attributes (length, vertices, area …) after a geometry change."""
+        attrs = polyline_attrs(geom)
+        for fname, val in attrs.items():
+            idx = lyr.fields().indexOf(fname)
+            if idx >= 0:
+                lyr.changeAttributeValue(fid, idx, val)
+
+    def _apply_chamfer_same_line(self, lyr, feat, click1, click2):
+        """Chamfer a corner between two segments on the SAME polyline feature."""
+        geom = feat.geometry()
+        pts  = geom.asPolyline()
+        n    = len(pts)
+
+        if n < 3:
+            self._log("\nNeed at least 3 vertices to chamfer a corner on the same polyline")
+            self._reset_to_line1()
+            return
+
+        is_closed = (n >= 4
+                     and abs(pts[0].x() - pts[-1].x()) < 1e-9
+                     and abs(pts[0].y() - pts[-1].y()) < 1e-9)
+
+        seg1 = self._nearest_segment(pts, click1)
+        seg2 = self._nearest_segment(pts, click2)
+
+        # Which vertex of each segment is nearest to the click (the corner-end)?
+        def _corner_end(seg_i, click):
+            d0 = math.hypot(pts[seg_i].x()   - click.x(), pts[seg_i].y()   - click.y())
+            d1 = math.hypot(pts[seg_i+1].x() - click.x(), pts[seg_i+1].y() - click.y())
+            return seg_i if d0 <= d1 else seg_i + 1
+
+        c1 = _corner_end(seg1, click1)
+        c2 = _corner_end(seg2, click2)
+
+        # Identify the shared corner vertex index
+        if c1 == c2:
+            corner_idx = c1
+        elif abs(seg1 - seg2) == 1:
+            corner_idx = max(seg1, seg2)           # vertex shared by adjacent segments
+        elif is_closed and {seg1, seg2} == {0, n - 2}:
+            corner_idx = 0                          # closing vertex of a closed polyline
+        else:
+            self._log("\nSegments are not adjacent — click segments that share the corner")
+            self._reset_to_line1()
+            return
+
+        # Normalise: in a closed polyline the last index duplicates index 0
+        if is_closed and corner_idx == n - 1:
+            corner_idx = 0
+
+        # Guard: can't chamfer endpoint of open polyline
+        if not is_closed and corner_idx in (0, n - 1):
+            self._log("\nCannot chamfer the endpoint of an open polyline")
+            self._reset_to_line1()
+            return
+
+        # Neighbours of the corner
+        vcorner = pts[corner_idx]
+        if is_closed:
+            unique_n = n - 1
+            vprev = pts[(corner_idx - 1) % unique_n]
+            vnext = pts[(corner_idx + 1) % unique_n]
+        else:
+            vprev = pts[corner_idx - 1]
+            vnext = pts[corner_idx + 1]
+
+        # Assign d1/d2 based on which segment was clicked first:
+        # seg_out = the segment that LEAVES the corner (index == corner_idx).
+        # If the first click was on the outgoing segment, swap so d1 still
+        # applies to the first-clicked segment (AutoCAD convention).
+        seg_out = corner_idx
+        if seg1 == seg_out:
+            dist_in, dist_out = self._dist2, self._dist1
+        else:
+            dist_in, dist_out = self._dist1, self._dist2
+
+        len_in  = math.hypot(vcorner.x() - vprev.x(), vcorner.y() - vprev.y())
+        len_out = math.hypot(vnext.x()   - vcorner.x(), vnext.y() - vcorner.y())
+
+        if len_in < 1e-10 or len_out < 1e-10:
+            self._log("\nDegenerate segment at corner — cannot chamfer")
+            self._reset_to_line1()
+            return
+        if dist_in >= len_in:
+            self._log(f"\nd1={dist_in:.3f} exceeds incoming segment length {len_in:.3f}")
+            self._reset_to_line1()
+            return
+        if dist_out >= len_out:
+            self._log(f"\nd2={dist_out:.3f} exceeds outgoing segment length {len_out:.3f}")
+            self._reset_to_line1()
+            return
+
+        # Chamfer points
+        t_in  = 1.0 - dist_in  / len_in
+        t_out = dist_out / len_out
+        p1 = QgsPointXY(vprev.x()   + t_in  * (vcorner.x() - vprev.x()),
+                        vprev.y()   + t_in  * (vcorner.y() - vprev.y()))
+        p2 = QgsPointXY(vcorner.x() + t_out * (vnext.x()   - vcorner.x()),
+                        vcorner.y() + t_out * (vnext.y()   - vcorner.y()))
+
+        # Build new point list — replace the corner vertex with [p1, p2]
+        new_pts = list(pts)
+        if is_closed and corner_idx == 0:
+            # Closing vertex appears at both index 0 and index n-1; update both ends
+            inner   = new_pts[1:-1]
+            new_pts = [p1, p2] + inner + [p1]
+        else:
+            new_pts[corner_idx:corner_idx + 1] = [p1, p2]
+
+        new_geom = QgsGeometry.fromPolylineXY(new_pts)
+        if not lyr.isEditable():
+            lyr.startEditing()
+        lyr.changeGeometry(feat.id(), new_geom)
+        self._update_polyline_attrs(lyr, feat.id(), new_geom)
+        lyr.triggerRepaint()
+        self._log(
+            f"\nChamfered corner at vertex {corner_idx} on '{lyr.name()}' fid {feat.id()}"
+            f"  d1={dist_in:.3f}  d2={dist_out:.3f}"
+        )
+        self._reset_to_line1()
+
     # ------------------------------------------------------------------
     # Distance input
 
@@ -264,7 +411,16 @@ class ChamferTool(QgsMapTool):
     # Apply
 
     def _apply_chamfer(self, lyr2, feat2, click2):
-        g1 = self._line1_feat.geometry()
+        lyr1  = self._line1_layer
+        feat1 = self._line1_feat
+
+        # ── Same-feature: chamfer a corner on one polyline ────────────
+        if lyr1 is lyr2 and feat1.id() == feat2.id():
+            self._apply_chamfer_same_line(lyr1, feat1, self._line1_click, click2)
+            return
+
+        # ── Two-feature chamfer ───────────────────────────────────────
+        g1 = feat1.geometry()
         g2 = feat2.geometry()
 
         if g1.isMultipart() or g2.isMultipart():
@@ -273,15 +429,12 @@ class ChamferTool(QgsMapTool):
             return
 
         kept1, e1 = self._split_at_chamfer(g1, self._line1_click, self._dist1)
-        kept2, e2 = self._split_at_chamfer(g2, click2, self._dist2)
+        kept2, e2 = self._split_at_chamfer(g2, click2,             self._dist2)
 
         if kept1 is None or kept2 is None:
             self._log("\nChamfer distance too large for one of the lines — try a smaller value")
             self._reset_to_line1()
             return
-
-        lyr1 = self._line1_layer
-        feat1 = self._line1_feat
 
         if not lyr1.isEditable():
             lyr1.startEditing()
@@ -290,6 +443,8 @@ class ChamferTool(QgsMapTool):
 
         lyr1.changeGeometry(feat1.id(), kept1)
         lyr2.changeGeometry(feat2.id(), kept2)
+        self._update_polyline_attrs(lyr1, feat1.id(), kept1)
+        self._update_polyline_attrs(lyr2, feat2.id(), kept2)
 
         # Add chamfer segment when at least one distance is non-zero
         if self._dist1 > 1e-10 or self._dist2 > 1e-10:
@@ -297,6 +452,13 @@ class ChamferTool(QgsMapTool):
             nf = QgsFeature(lyr1.fields())
             nf.setGeometry(chamfer_geom)
             nf.setAttributes(feat1.attributes())
+            # Set computed attrs on the feature object before adding so the
+            # correct values land in the edit buffer regardless of fid timing.
+            ch_attrs = polyline_attrs(chamfer_geom)
+            for fname, val in ch_attrs.items():
+                idx = lyr1.fields().indexOf(fname)
+                if idx >= 0:
+                    nf.setAttribute(idx, val)
             lyr1.addFeature(nf)
 
         lyr1.triggerRepaint()
@@ -362,7 +524,7 @@ class ChamferTool(QgsMapTool):
         if self._state in (_ST_LINE1, _ST_LINE2):
             lyr, feat = self._find_line_near(map_pt)
             if feat:
-                self._hover_band.setToGeometry(feat.geometry(), lyr)
+                self._hover_band.setToGeometry(self._nearest_segment_geom(feat, map_pt), lyr)
                 self._hover_band.setVisible(True)
             else:
                 self._hover_band.setVisible(False)
@@ -393,7 +555,7 @@ class ChamferTool(QgsMapTool):
             self._line1_layer = lyr
             self._line1_feat  = feat
             self._line1_click = map_pt
-            self._line1_band.setToGeometry(feat.geometry(), lyr)
+            self._line1_band.setToGeometry(self._nearest_segment_geom(feat, map_pt), lyr)
             self._line1_band.setVisible(True)
             self._state = _ST_LINE2
             self._log(f"\nFirst line: '{lyr.name()}' fid {feat.id()}  →  click second line")
