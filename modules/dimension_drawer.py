@@ -20,10 +20,9 @@ from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
-from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
-from .snap_utils import find_circle_center_snap
+from .snap_utils import find_circle_center_snap, init_snap
 from . import crs_utils
 import math
 
@@ -59,7 +58,7 @@ class DimensionDrawer(QgsMapTool):
         self.dim_points = []
         self.dim_layer = self.getDimensionLayer()
         self._maptool = None   # set by UgsurvMaptool.set_tool()
-        snapSettingConfig()
+        init_snap()
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)

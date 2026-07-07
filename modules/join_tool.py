@@ -33,7 +33,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from qgis.PyQt.QtGui import QColor
-from .snap_config import snapSettingConfig
+from . import snap_utils
 
 _C_SEL   = QColor(  0, 200,  80, 220)   # green  – selected feature
 _C_HOVER = QColor(255, 200,   0, 200)   # yellow – hovered, not yet selected
@@ -69,7 +69,7 @@ class JoinTool(QgsMapTool):
         self._hover_band = None
         self._hover_key  = None
 
-        snapSettingConfig()
+        snap_utils.init_snap()
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)

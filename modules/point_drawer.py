@@ -26,7 +26,7 @@ from qgis.core import (
     QgsSingleSymbolRenderer,
 )
 from .dynamic_input import DynamicInput
-from .snap_config import snapSettingConfig
+from . import snap_utils
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
 
 
@@ -55,7 +55,7 @@ class PointDrawer(QgsMapTool):
         self._snap_ind     = None
 
         self._layer = self._get_or_create_layer()
-        snapSettingConfig()
+        snap_utils.init_snap()
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)

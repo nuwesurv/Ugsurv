@@ -42,7 +42,6 @@ from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from .dynamic_input import DynamicInput
-from .snap_config import snapSettingConfig
 from . import snap_utils
 
 
@@ -103,7 +102,7 @@ class VertexSelector(QgsMapTool):
         self._gripped        = None   # _SelVtx – the hot grip
         self._moving_center  = False  # True when _S_MOVING translates a whole circle
 
-        snapSettingConfig()
+        snap_utils.init_snap()
 
         # IDLE: yellow hover circle near cursor
         self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 9)

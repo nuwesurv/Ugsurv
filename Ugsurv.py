@@ -58,7 +58,7 @@ from .modules.key_filter import KeyPressFilter
 import math
 from .modules.dimension_drawer import DimensionDrawer
 from .modules.laser_game import Game1
-from .modules.snap_config import snapSettingConfig
+from .modules.snap_utils import init_snap
 from .modules.topology_solver import TopologySolver
 from .modules.fix_geometry import FixGeometry
 from .module_wz_dialogs.parcel_plotter import ParcelPlotterDialog
@@ -414,7 +414,7 @@ class Ugsurv:
         self.esc_shortcut.activated.connect(self._on_escape)
 
         # This will help to setup the required snap settings.
-        snapSettingConfig()
+        init_snap()
 
         # Install the single permanent map tool — stays on canvas for the whole session.
         # All drawing tools connect to it as delegates instead of owning the canvas.

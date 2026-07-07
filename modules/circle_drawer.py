@@ -22,7 +22,6 @@ from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
-from .snap_config import snapSettingConfig
 from . import snap_utils
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
@@ -77,7 +76,7 @@ class CircleDrawer(QgsMapTool):
         self.circle_layer = self._get_or_create_circle_layer()
 
         # Snap settings
-        snapSettingConfig()
+        snap_utils.init_snap()
 
         # UI elements
         self.snap_marker = self._create_snap_marker()

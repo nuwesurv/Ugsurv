@@ -195,6 +195,11 @@ def snap_point(canvas, map_pt):
     return map_pt, None
 
 
+def init_snap():
+    """Call once at tool startup to disable QGIS native snapping."""
+    snap_manager._apply_to_qgis()
+
+
 def make_cc_marker(canvas):
     """Create and return a circle-center snap marker (blue cross, hidden by default)."""
     m = QgsVertexMarker(canvas)
