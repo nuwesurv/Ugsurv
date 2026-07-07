@@ -80,13 +80,11 @@ class DimensionDrawer(QgsMapTool):
         self.snap_marker.setVisible(False)  # start hidden
         
         
-        # Create rubber band
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
-
-        # Style the rubberband
-        self.rubber_band.setColor(QColor(255, 0, 0))  # Red
-        self.rubber_band.setWidth(1)
+        self.rubber_band.setColor(QColor(255, 140, 0))
+        self.rubber_band.setWidth(2)
         self.rubber_band.setLineStyle(Qt.DashLine)
+        self.rubber_band.setVisible(False)
         
         
         
@@ -182,8 +180,8 @@ class DimensionDrawer(QgsMapTool):
             self.terminal_dock.command.setFocus()
         self.dim_layer.updateExtents()
 
-        # Hide snap marker and clear state
         self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+        self.rubber_band.setVisible(False)
         self.snap_marker.setVisible(False)
         self._hint.hide()
         self.dim_points.clear()
@@ -295,32 +293,48 @@ class DimensionDrawer(QgsMapTool):
         return best_a, best_b
 
     def canvasMoveEvent(self, event):
-        point = self.toMapCoordinates(event.pos())
-
-        snapped, icon = snap_utils.snap_point(self.canvas, point)
+        raw_pt = self.toMapCoordinates(event.pos())
+        snapped, icon = snap_utils.snap_point(self.canvas, raw_pt)
         if icon is not None:
             point = snapped
             self.snap_marker.setCenter(snapped)
             self.snap_marker.setIconType(icon)
             self.snap_marker.setVisible(True)
         else:
-            self.rubber_band.setWidth(2)
-            self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+            point = raw_pt
             self.snap_marker.setVisible(False)
 
         if len(self.dim_points) == 0:
+            on_edge = (icon == snap_utils.SNAP_ICON['nearest'])
+            if on_edge:
+                _, feature = self._find_feature_near(snapped)
+                if feature is not None:
+                    if self.operation_type == 'selected':
+                        preview_geom = feature.geometry()
+                    else:
+                        a, b = self._nearest_segment(snapped, feature.geometry())
+                        preview_geom = QgsGeometry.fromPolylineXY([a, b]) if (a and b) else None
+                    if preview_geom:
+                        self.rubber_band.setToGeometry(preview_geom)
+                        self.rubber_band.setVisible(True)
+                    else:
+                        self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+                        self.rubber_band.setVisible(False)
+                else:
+                    self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+                    self.rubber_band.setVisible(False)
+            else:
+                self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+                self.rubber_band.setVisible(False)
             self.terminal_dock.commandDisplay.setText(
                 self.terminal_dock.commandOutputText + f'\nSelect start point: {round(point.x(),3)}, {round(point.y(),3)}\n'
             )
-            self.rubber_band.setWidth(1)
-            self.rubber_band.reset(QgsWkbTypes.LineGeometry)
             self._show_hint(event.pos(), "Click start point")
 
         elif len(self.dim_points) == 1:
-            # Clear it
             self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-            # Add points
-            self.rubber_band.addPoint(self.dim_points[0])
+            self.rubber_band.setVisible(True)
+            self.rubber_band.addPoint(self.dim_points[0], False)
             self.rubber_band.addPoint(point)
             dim_dist = self.dim_points[0].distance(point)
             bearing  = self._bearing(self.dim_points[0], point)
