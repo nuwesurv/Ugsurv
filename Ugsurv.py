@@ -85,6 +85,7 @@ from .modules.chamfer_tool import ChamferTool
 from .modules.explode_tool import ExplodeTool
 from .modules.point_drawer import PointDrawer
 from .modules import snap_manager
+from .modules.layer_utils import restore_no_legend_layers
 import ast
 
 
@@ -354,6 +355,8 @@ class Ugsurv:
         # will be set False in run()
         self.first_start = True
 
+        QgsProject.instance().readProject.connect(restore_no_legend_layers)
+
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
@@ -366,6 +369,11 @@ class Ugsurv:
         # Remove snap dropdown button
         try:
             self._snap_btn.deleteLater()
+        except Exception:
+            pass
+
+        try:
+            QgsProject.instance().readProject.disconnect(restore_no_legend_layers)
         except Exception:
             pass
 

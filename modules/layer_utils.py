@@ -134,18 +134,21 @@ def apply_circle_color_renderer(layer):
     def sym(color):
         return QgsLineSymbol.createSimple({"color": color, "width": "0.4"})
     layer.setRenderer(_color_rule_renderer(layer, sym, "#E05C00"))
+    layer.setLegend(None)
 
 
 def apply_polyline_color_renderer(layer):
     def sym(color):
         return QgsLineSymbol.createSimple({"color": color, "width": "0.4", "line_style": "solid"})
     layer.setRenderer(_color_rule_renderer(layer, sym, "#E05C00"))
+    layer.setLegend(None)
 
 
 def apply_point_color_renderer(layer):
     def sym(color):
         return QgsMarkerSymbol.createSimple({"color": color, "outline_style": "no", "size": "2"})
     layer.setRenderer(_color_rule_renderer(layer, sym, "#008cdc"))
+    layer.setLegend(None)
 
 
 _DATA_DIR  = r"C:\UgSurv"
@@ -165,6 +168,18 @@ def add_to_plugin_group(layer):
         group = root.insertGroup(0, _GROUP_NAME)
     QgsProject.instance().addMapLayer(layer, False)
     group.addLayer(layer)
+
+
+def restore_no_legend_layers(*_):
+    """Re-apply setLegend(None) to all UgSurv group layers after project load."""
+    root = QgsProject.instance().layerTreeRoot()
+    group = root.findGroup(_GROUP_NAME)
+    if group is None:
+        return
+    for layer_node in group.findLayers():
+        layer = layer_node.layer()
+        if layer:
+            layer.setLegend(None)
 
 
 def open_layer_from_gpkg(layer_name):
