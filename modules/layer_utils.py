@@ -1,7 +1,6 @@
 import os
 import math
 from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QColor
 from qgis.core import (
     QgsProject,
     QgsVectorFileWriter,
@@ -9,9 +8,11 @@ from qgis.core import (
     QgsCoordinateTransformContext,
     QgsGeometry,
     QgsPointXY,
-    QgsRuleBasedRenderer,
     QgsLineSymbol,
     QgsMarkerSymbol,
+    QgsSingleSymbolRenderer,
+    QgsProperty,
+    QgsSymbolLayer,
 )
 
 def polyline_attrs(geom):
@@ -104,50 +105,64 @@ def connect_polyline_recalc(layer):
     _recalc_connected.add(layer.id())
 
 
-def _color_rule_renderer(layer, make_symbol, default_color):
-    """Build a QgsRuleBasedRenderer with one rule per unique color value in the layer."""
-    color_idx = layer.fields().indexOf("color")
-    colors = set()
-    if color_idx >= 0:
-        for feat in layer.getFeatures():
-            val = feat.attribute(color_idx)
-            if val:
-                c = QColor(str(val))
-                if c.isValid():
-                    colors.add(str(val))
-    if not colors:
-        colors = {default_color}
 
-    root = QgsRuleBasedRenderer.Rule(None)
-    for color in sorted(colors):
-        rule = QgsRuleBasedRenderer.Rule(make_symbol(color))
-        rule.setFilterExpression(f'"color" = \'{color}\'')
-        root.appendChild(rule)
-
-    else_rule = QgsRuleBasedRenderer.Rule(make_symbol(default_color), elseRule=True)
-    root.appendChild(else_rule)
-
-    return QgsRuleBasedRenderer(root)
+def _line_style_renderer(layer, default_color):
+    """Single-symbol line renderer with data-defined color, thickness, and line type."""
+    sym = QgsLineSymbol.createSimple({"color": default_color, "width": "0.4", "line_style": "solid"})
+    sl = sym.symbolLayer(0)
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyStrokeColor,
+        QgsProperty.fromExpression(
+            f'if("color" IS NOT NULL AND "color" != \'\', "color", \'{default_color}\')'
+        ),
+    )
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyStrokeWidth,
+        QgsProperty.fromExpression(
+            'if("line_thickness" IS NOT NULL AND "line_thickness" > 0, "line_thickness", 0.4)'
+        ),
+    )
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyStrokeStyle,
+        QgsProperty.fromExpression(
+            'if("line_type" IS NOT NULL AND "line_type" != \'\', "line_type", \'solid\')'
+        ),
+    )
+    renderer = QgsSingleSymbolRenderer(sym)
+    layer.setRenderer(renderer)
+    layer.setLegend(None)
 
 
 def apply_circle_color_renderer(layer):
-    def sym(color):
-        return QgsLineSymbol.createSimple({"color": color, "width": "0.4"})
-    layer.setRenderer(_color_rule_renderer(layer, sym, "#E05C00"))
-    layer.setLegend(None)
+    _line_style_renderer(layer, "#E05C00")
 
 
 def apply_polyline_color_renderer(layer):
-    def sym(color):
-        return QgsLineSymbol.createSimple({"color": color, "width": "0.4", "line_style": "solid"})
-    layer.setRenderer(_color_rule_renderer(layer, sym, "#E05C00"))
-    layer.setLegend(None)
+    _line_style_renderer(layer, "#E05C00")
 
 
 def apply_point_color_renderer(layer):
-    def sym(color):
-        return QgsMarkerSymbol.createSimple({"color": color, "outline_style": "no", "size": "2"})
-    layer.setRenderer(_color_rule_renderer(layer, sym, "#008cdc"))
+    sym = QgsMarkerSymbol.createSimple({"color": "#008cdc", "outline_style": "no", "size": "2", "name": "circle"})
+    sl = sym.symbolLayer(0)
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyFillColor,
+        QgsProperty.fromExpression(
+            'if("color" IS NOT NULL AND "color" != \'\', "color", \'#008cdc\')'
+        ),
+    )
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyName,
+        QgsProperty.fromExpression(
+            'if("symbol" IS NOT NULL AND "symbol" != \'\', "symbol", \'circle\')'
+        ),
+    )
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertySize,
+        QgsProperty.fromExpression(
+            'if("symbol_size" IS NOT NULL AND "symbol_size" > 0, "symbol_size", 2.0)'
+        ),
+    )
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
     layer.setLegend(None)
 
 

@@ -158,7 +158,9 @@ class PolylineDrawer(QgsMapTool):
         if "closed"     not in existing: to_add.append(QgsField("closed",     QVariant.Bool))
         if "area_sqm"   not in existing: to_add.append(QgsField("area_sqm",   QVariant.Double))
         if "area_acres" not in existing: to_add.append(QgsField("area_acres", QVariant.Double))
-        if "color"      not in existing: to_add.append(QgsField("color",      QVariant.String))
+        if "color"          not in existing: to_add.append(QgsField("color",          QVariant.String))
+        if "line_type"      not in existing: to_add.append(QgsField("line_type",      QVariant.String))
+        if "line_thickness" not in existing: to_add.append(QgsField("line_thickness", QVariant.Double))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -174,12 +176,14 @@ class PolylineDrawer(QgsMapTool):
             "memory"
         )
         mem.dataProvider().addAttributes([
-            QgsField("length",     QVariant.Double),
-            QgsField("vertices",   QVariant.Int),
-            QgsField("closed",     QVariant.Bool),
-            QgsField("area_sqm",   QVariant.Double),
-            QgsField("area_acres", QVariant.Double),
-            QgsField("color",      QVariant.String),
+            QgsField("length",         QVariant.Double),
+            QgsField("vertices",       QVariant.Int),
+            QgsField("closed",         QVariant.Bool),
+            QgsField("area_sqm",       QVariant.Double),
+            QgsField("area_acres",     QVariant.Double),
+            QgsField("color",          QVariant.String),
+            QgsField("line_type",      QVariant.String),
+            QgsField("line_thickness", QVariant.Double),
         ])
         mem.updateFields()
 
@@ -208,7 +212,9 @@ class PolylineDrawer(QgsMapTool):
         feature.setAttribute("closed",     attrs["closed"])
         feature.setAttribute("area_sqm",   attrs["area_sqm"])
         feature.setAttribute("area_acres", attrs["area_acres"])
-        feature.setAttribute("color",      LAYER_COLOR)
+        feature.setAttribute("color",          LAYER_COLOR)
+        feature.setAttribute("line_type",      "solid")
+        feature.setAttribute("line_thickness", 0.4)
 
         self.polyline_layer.addFeature(feature)
         self.polyline_layer.updateExtents()

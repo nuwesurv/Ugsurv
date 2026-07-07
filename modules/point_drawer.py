@@ -76,7 +76,9 @@ class PointDrawer(QgsMapTool):
         to_add = []
         if "x"     not in existing: to_add.append(QgsField("x",     QVariant.Double))
         if "y"     not in existing: to_add.append(QgsField("y",     QVariant.Double))
-        if "color" not in existing: to_add.append(QgsField("color", QVariant.String))
+        if "color"       not in existing: to_add.append(QgsField("color",       QVariant.String))
+        if "symbol"      not in existing: to_add.append(QgsField("symbol",      QVariant.String))
+        if "symbol_size" not in existing: to_add.append(QgsField("symbol_size", QVariant.Double))
         if to_add:
             lyr.dataProvider().addAttributes(to_add)
             lyr.updateFields()
@@ -106,9 +108,11 @@ class PointDrawer(QgsMapTool):
         crs = QgsProject.instance().crs().authid()
         mem = QgsVectorLayer(f"Point?crs={crs}", _LAYER_NAME, "memory")
         mem.dataProvider().addAttributes([
-            QgsField("x",     QVariant.Double),
-            QgsField("y",     QVariant.Double),
-            QgsField("color", QVariant.String),
+            QgsField("x",           QVariant.Double),
+            QgsField("y",           QVariant.Double),
+            QgsField("color",       QVariant.String),
+            QgsField("symbol",      QVariant.String),
+            QgsField("symbol_size", QVariant.Double),
         ])
         mem.updateFields()
         lyr = create_layer_in_gpkg(mem)
@@ -146,6 +150,12 @@ class PointDrawer(QgsMapTool):
         color_idx = self._layer.fields().indexOf("color")
         if color_idx >= 0:
             feat.setAttribute(color_idx, color_hex)
+        sym_idx  = self._layer.fields().indexOf("symbol")
+        size_idx = self._layer.fields().indexOf("symbol_size")
+        if sym_idx >= 0:
+            feat.setAttribute(sym_idx, "circle")
+        if size_idx >= 0:
+            feat.setAttribute(size_idx, 2.0)
         self._layer.addFeature(feat)
         self._layer.triggerRepaint()
         self._log(f"\nPoint: {pt.x():.4f}, {pt.y():.4f}")

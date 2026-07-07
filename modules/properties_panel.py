@@ -1,9 +1,9 @@
 import math
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QVariant, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
-    QColorDialog, QDockWidget, QFormLayout, QFrame,
+    QColorDialog, QComboBox, QDockWidget, QFormLayout, QFrame,
     QLabel, QCheckBox, QLineEdit, QPushButton,
     QScrollArea, QWidget, QVBoxLayout,
 )
@@ -108,6 +108,14 @@ class PropertiesDock(QDockWidget):
         f.setFrameShadow(QFrame.Sunken)
         return f
 
+    @staticmethod
+    def _attr(feat, idx):
+        """Feature attribute as Python value; None for NULL, QVariant, or missing index."""
+        if idx < 0:
+            return None
+        val = feat.attribute(idx)
+        return None if isinstance(val, QVariant) else val
+
     # ------------------------------------------------------------------
     # Circle geometry helpers
     # ------------------------------------------------------------------
@@ -157,11 +165,11 @@ class PropertiesDock(QDockWidget):
         self._form.addRow(self._sep())
 
         if lyr_name == "_polylines" and not geom.isEmpty():
-            self._build_polyline_rows(geom)
+            self._build_polyline_rows(feat, geom)
         elif lyr_name == "_circles" and not geom.isEmpty():
             self._build_circle_rows(feat, geom)
         elif lyr_name == "_points" and not geom.isEmpty():
-            self._build_point_rows(geom)
+            self._build_point_rows(feat, geom)
         elif not geom.isEmpty():
             self._form.addRow("Type:", self._ro(QgsWkbTypes.displayString(geom.wkbType())))
 
@@ -169,7 +177,7 @@ class PropertiesDock(QDockWidget):
     # Per-type row builders
     # ------------------------------------------------------------------
 
-    def _build_polyline_rows(self, geom):
+    def _build_polyline_rows(self, feat, geom):
         pts       = geom.asPolyline()
         is_closed = self._is_closed(pts)
         area_sqm  = QgsGeometry.fromPolygonXY([list(pts)]).area() if is_closed else 0.0
@@ -178,18 +186,52 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("Length:",   self._ro(f"{geom.length():.3f} m"))
         self._form.addRow("Vertices:", self._ro(str(len(pts))))
 
-        # Fresh checkbox each refresh (safe to delete via _clear_form later)
         closed_check = QCheckBox()
         closed_check.setChecked(is_closed)
         closed_check.stateChanged.connect(self._on_closed_toggled)
         self._form.addRow("Closed:", closed_check)
 
-        # Area always shown — 0 when open
         self._form.addRow("Area (m²):", self._ro(f"{area_sqm:.3f}"))
         self._form.addRow("Area (ac):", self._ro(f"{area_ac:.6f}"))
-
-        # Color picker — changes the layer's symbol colour
+        self._form.addRow(self._sep())
         self._form.addRow("Color:", self._make_color_button())
+
+        # ── Line style ────────────────────────────────────────────────
+        lt_idx = self._layer.fields().indexOf("line_type")
+        lw_idx = self._layer.fields().indexOf("line_thickness")
+
+        lt_combo = QComboBox()
+        for name in ["solid", "dash", "dot", "dash dot", "dash dot dot"]:
+            lt_combo.addItem(name)
+        current_lt = self._attr(feat, lt_idx)
+        lt_combo.setCurrentText(current_lt if current_lt else "solid")
+
+        def on_lt_changed(text, _idx=lt_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+                self._layer.triggerRepaint()
+
+        lt_combo.currentTextChanged.connect(on_lt_changed)
+        self._form.addRow("Line Type:", lt_combo)
+
+        current_lw = self._attr(feat, lw_idx)
+        lw_edit = self._edit(f"{float(current_lw):.2f}" if current_lw is not None else "0.40", "mm")
+
+        def on_lw_edited(_idx=lw_idx):
+            try:
+                w = float(lw_edit.text())
+            except ValueError:
+                return
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(w, 3))
+                self._layer.triggerRepaint()
+
+        lw_edit.editingFinished.connect(on_lw_edited)
+        self._form.addRow("Thickness:", lw_edit)
 
     def _build_circle_rows(self, feat, geom):
         radius_idx = self._layer.fields().indexOf("radius")
@@ -280,7 +322,44 @@ class PropertiesDock(QDockWidget):
 
         self._form.addRow("Color:", self._make_color_button())
 
-    def _build_point_rows(self, geom):
+        # ── Line style ────────────────────────────────────────────────
+        lt_idx = self._layer.fields().indexOf("line_type")
+        lw_idx = self._layer.fields().indexOf("line_thickness")
+
+        lt_combo = QComboBox()
+        for name in ["solid", "dash", "dot", "dash dot", "dash dot dot"]:
+            lt_combo.addItem(name)
+        current_lt = self._attr(feat, lt_idx)
+        lt_combo.setCurrentText(current_lt if current_lt else "solid")
+
+        def on_lt_changed(text, _idx=lt_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+                self._layer.triggerRepaint()
+
+        lt_combo.currentTextChanged.connect(on_lt_changed)
+        self._form.addRow("Line Type:", lt_combo)
+
+        current_lw = self._attr(feat, lw_idx)
+        lw_edit = self._edit(f"{float(current_lw):.2f}" if current_lw is not None else "0.40", "mm")
+
+        def on_lw_edited(_idx=lw_idx):
+            try:
+                w = float(lw_edit.text())
+            except ValueError:
+                return
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(w, 3))
+                self._layer.triggerRepaint()
+
+        lw_edit.editingFinished.connect(on_lw_edited)
+        self._form.addRow("Thickness:", lw_edit)
+
+    def _build_point_rows(self, feat, geom):
         pt = geom.asPoint()
 
         x_edit = self._edit(f"{pt.x():.3f}", "x")
@@ -307,7 +386,44 @@ class PropertiesDock(QDockWidget):
         y_edit.editingFinished.connect(apply_coords)
         self._form.addRow("X:", x_edit)
         self._form.addRow("Y:", y_edit)
+        self._form.addRow(self._sep())
         self._form.addRow("Color:", self._make_color_button())
+
+        # ── Symbol shape ──────────────────────────────────────────────
+        sym_idx = self._layer.fields().indexOf("symbol")
+        sym_combo = QComboBox()
+        for name in ["circle", "square", "triangle", "star", "cross", "x", "diamond"]:
+            sym_combo.addItem(name)
+        current_sym = self._attr(feat, sym_idx)
+        sym_combo.setCurrentText(current_sym if current_sym else "circle")
+
+        def on_sym_changed(text, _idx=sym_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+                self._layer.triggerRepaint()
+
+        sym_combo.currentTextChanged.connect(on_sym_changed)
+        self._form.addRow("Symbol:", sym_combo)
+
+        size_idx = self._layer.fields().indexOf("symbol_size")
+        current_size = self._attr(feat, size_idx)
+        size_edit = self._edit(f"{float(current_size):.2f}" if current_size is not None else "2.00", "px")
+
+        def on_size_edited(_idx=size_idx):
+            try:
+                s = float(size_edit.text())
+            except ValueError:
+                return
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(s, 3))
+                self._layer.triggerRepaint()
+
+        size_edit.editingFinished.connect(on_size_edited)
+        self._form.addRow("Size:", size_edit)
 
     def _write_circle_attrs(self, cx, cy, radius):
         attrs = circle_attrs(cx, cy, radius)

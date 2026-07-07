@@ -139,6 +139,8 @@ class CircleDrawer(QgsMapTool):
         if "area_sqm"      not in existing: to_add.append(QgsField("area_sqm",      QVariant.Double))
         if "area_acres"    not in existing: to_add.append(QgsField("area_acres",    QVariant.Double))
         if "color"         not in existing: to_add.append(QgsField("color",         QVariant.String))
+        if "line_type"      not in existing: to_add.append(QgsField("line_type",      QVariant.String))
+        if "line_thickness" not in existing: to_add.append(QgsField("line_thickness", QVariant.Double))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -182,6 +184,8 @@ class CircleDrawer(QgsMapTool):
             QgsField("area_sqm",      QVariant.Double),
             QgsField("area_acres",    QVariant.Double),
             QgsField("color",         QVariant.String),
+            QgsField("line_type",      QVariant.String),
+            QgsField("line_thickness", QVariant.Double),
         ])
         mem.updateFields()
 
@@ -225,6 +229,12 @@ class CircleDrawer(QgsMapTool):
         color_idx = self.circle_layer.fields().indexOf("color")
         if color_idx >= 0:
             feature.setAttribute(color_idx, color_hex)
+        lt_idx = self.circle_layer.fields().indexOf("line_type")
+        lw_idx = self.circle_layer.fields().indexOf("line_thickness")
+        if lt_idx >= 0:
+            feature.setAttribute(lt_idx, "solid")
+        if lw_idx >= 0:
+            feature.setAttribute(lw_idx, 0.4)
 
         self.circle_layer.addFeature(feature)
         self.circle_layer.updateExtents()
