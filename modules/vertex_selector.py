@@ -562,12 +562,14 @@ class VertexSelector(QgsMapTool):
         self._enter_gripped(new_sv)
 
     def _circle_center_from_geom(self, geom):
-        """Return the center QgsPointXY of a 5-point circle geometry (E/S/W/N/E)."""
-        verts = self._geom_verts(geom)
-        if len(verts) < 3:
+        """Return the center QgsPointXY of a circle geometry."""
+        if geom is None or geom.isNull() or geom.isEmpty():
             return None
-        v0, v2 = verts[0][1], verts[2][1]   # East and West are equidistant from center
-        return QgsPointXY((v0.x() + v2.x()) / 2, (v0.y() + v2.y()) / 2)
+        bbox = geom.boundingBox()
+        if bbox.isEmpty():
+            return None
+        c = bbox.center()
+        return QgsPointXY(c.x(), c.y())
 
     def _build_circle_geom(self, center, radius):
         """Rebuild a 5-point closed QgsCircularString (polyline) from center + radius."""
@@ -847,23 +849,23 @@ class VertexSelector(QgsMapTool):
     # ------------------------------------------------------------------
 
     def _find_circle_center_snap(self, map_pt):
-        """Return QgsPointXY of the nearest _circles center within snap tolerance, or None."""
-        tol = self._hit_tol()
-        rect = QgsRectangle(
-            map_pt.x() - tol, map_pt.y() - tol,
-            map_pt.x() + tol, map_pt.y() + tol,
-        )
-        best_center, best_dist = None, tol
+        """Return the center of the nearest _circles feature if cursor is within 20 px of it."""
+        center_tol = 20 * self.canvas.mapUnitsPerPixel()
+        best_center, best_dist = None, center_tol
         for lyr in self._vector_layers():
             if lyr.name() != "_circles":
                 continue
-            for feat in lyr.getFeatures(rect):
-                center = self._circle_center_from_geom(feat.geometry())
-                if center:
-                    dist = map_pt.distance(center)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_center = center
+            for feat in lyr.getFeatures():   # no spatial filter — avoids edit-buffer index gaps
+                geom = feat.geometry()
+                if geom.isNull() or geom.isEmpty():
+                    continue
+                center = self._circle_center_from_geom(geom)
+                if center is None:
+                    continue
+                dist = map_pt.distance(center)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_center = center
         return best_center
 
     def _update_center_marker(self, map_pt):

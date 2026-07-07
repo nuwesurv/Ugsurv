@@ -23,6 +23,7 @@ from qgis.PyQt.QtGui import QIcon, QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
+from .snap_utils import find_circle_center_snap
 from . import crs_utils
 import math
 
@@ -264,15 +265,19 @@ class DimensionDrawer(QgsMapTool):
 
     def canvasMoveEvent(self, event):
         point = self.toMapCoordinates(event.pos())
-        
+
         # Use the canvas to snap
         snap_result = self.canvas.snappingUtils().snapToMap(point)
-        if snap_result.isValid():
+        cc = find_circle_center_snap(self.canvas, point)
+        if cc:
+            point = cc
+            self.snap_marker.setCenter(cc)
+            self.snap_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+            self.snap_marker.setVisible(True)
+        elif snap_result.isValid():
             point = snap_result.point()
             self.snap_marker.setCenter(point)
             self.snap_marker.setVisible(True)
-            
-            # print("Layer:", snap_result.layer().name() if snap_result.layer() else None)
             if snap_result.type() == QgsPointLocator.Vertex:
                 self.snap_marker.setIconType(QgsVertexMarker.ICON_CIRCLE)
             elif snap_result.type() == QgsPointLocator.Edge:
@@ -348,7 +353,10 @@ class DimensionDrawer(QgsMapTool):
 
             self.snap_marker.setVisible(False)
             snap_result = self.canvas.snappingUtils().snapToMap(point)
-            if snap_result.isValid():
+            cc = find_circle_center_snap(self.canvas, point)
+            if cc:
+                point = cc
+            elif snap_result.isValid():
                 point = snap_result.point()
                 
                 # Dimension all segments of the clicked feature

@@ -21,6 +21,7 @@ from qgis.PyQt.QtGui import QFont, QColor
 from .snap_config import snapSettingConfig
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
+from .snap_utils import find_circle_center_snap
 import math
 from . import crs_utils
 
@@ -476,7 +477,14 @@ class PolylineDrawer(QgsMapTool):
         snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
         cursor = snap_result.point() if snap_result.isValid() else raw_point
 
-        self._update_snap_marker(cursor, snap_result)
+        cc = find_circle_center_snap(self.canvas, raw_point)
+        if cc:
+            cursor = cc
+            self.snap_marker.setCenter(cc)
+            self.snap_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+            self.snap_marker.setVisible(True)
+        else:
+            self._update_snap_marker(cursor, snap_result)
 
         if not self.is_drawing:
             self._display(f"\nFirst point: {cursor.x():.3f}, {cursor.y():.3f}\n")
@@ -503,6 +511,9 @@ class PolylineDrawer(QgsMapTool):
         raw_point = self.toMapCoordinates(event.pos())
         snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
         clicked_point = snap_result.point() if snap_result.isValid() else raw_point
+        cc = find_circle_center_snap(self.canvas, raw_point)
+        if cc:
+            clicked_point = cc
         self.snap_marker.setVisible(False)
 
         self.polyline_layer = self._get_or_create_polyline_layer()

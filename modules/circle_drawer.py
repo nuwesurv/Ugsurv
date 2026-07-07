@@ -279,6 +279,26 @@ class CircleDrawer(QgsMapTool):
         self._hint.show()
         self._hint.raise_()
 
+    def _find_circle_center_snap(self, screen_pos) -> QgsPointXY | None:
+        """Return the center of the nearest circle if cursor is within 12 px of it."""
+        threshold_sq = 12 ** 2
+        ct = self.canvas.getCoordinateTransform()
+        for feat in self.circle_layer.getFeatures():
+            geom = feat.geometry()
+            if geom.isNull():
+                continue
+            bbox = geom.boundingBox()
+            if bbox.isEmpty():
+                continue
+            # Bounding-box centre == circle centre for any circular geometry type
+            center_map = QgsPointXY(bbox.center())
+            sc = ct.transform(center_map)
+            dx = screen_pos.x() - sc.x()
+            dy = screen_pos.y() - sc.y()
+            if dx * dx + dy * dy <= threshold_sq:
+                return center_map
+        return None
+
     def _clear_preview(self):
         self.preview_circle_band.reset(QgsWkbTypes.LineGeometry)
         self.radius_line_band.reset(QgsWkbTypes.LineGeometry)
@@ -390,7 +410,14 @@ class CircleDrawer(QgsMapTool):
         snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
         cursor = snap_result.point() if snap_result.isValid() else raw_point
 
-        self._update_snap_marker(cursor, snap_result)
+        center_snap = self._find_circle_center_snap(event.pos())
+        if center_snap:
+            cursor = center_snap
+            self.snap_marker.setCenter(center_snap)
+            self.snap_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+            self.snap_marker.setVisible(True)
+        else:
+            self._update_snap_marker(cursor, snap_result)
 
         if not self.is_drawing:
             self._display(f"\nSelect center point: {cursor.x():.3f}, {cursor.y():.3f}\n")
@@ -415,6 +442,10 @@ class CircleDrawer(QgsMapTool):
         raw_point = self.toMapCoordinates(event.pos())
         snap_result = self.canvas.snappingUtils().snapToMap(raw_point)
         clicked_point = snap_result.point() if snap_result.isValid() else raw_point
+
+        center_snap = self._find_circle_center_snap(event.pos())
+        if center_snap:
+            clicked_point = center_snap
         self.snap_marker.setVisible(False)
 
         self.circle_layer = self._get_or_create_circle_layer()

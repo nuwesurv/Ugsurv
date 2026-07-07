@@ -34,6 +34,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from .dynamic_input import DynamicInput
+from .snap_utils import find_circle_center_snap, make_cc_marker, rm_cc_marker
 
 
 _C_HIGHLIGHT = QColor(0, 200, 80, 220)
@@ -145,51 +146,16 @@ class MoveTool(QgsMapTool):
                     best = (lyr, feat.id(), QgsGeometry(geom))
         return best
 
-    def _circle_center_from_geom(self, geom):
-        """Return center QgsPointXY of a 5-point circle geometry, or None."""
-        pts, it = [], geom.vertices()
-        while it.hasNext() and len(pts) < 3:
-            p = it.next()
-            pts.append(QgsPointXY(p.x(), p.y()))
-        if len(pts) < 3:
-            return None
-        return QgsPointXY((pts[0].x() + pts[2].x()) / 2, (pts[0].y() + pts[2].y()) / 2)
-
-    def _find_circle_center_near(self, map_pt):
-        """Return (layer, fid, center_pt) of the nearest _circles center within tolerance."""
-        tol  = self._hit_tol()
-        rect = QgsRectangle(
-            map_pt.x() - tol, map_pt.y() - tol,
-            map_pt.x() + tol, map_pt.y() + tol,
-        )
-        best_lyr, best_fid, best_center, best_dist = None, None, None, tol
-        for lyr in self._vector_layers():
-            if lyr.name() != "_circles":
-                continue
-            for feat in lyr.getFeatures(rect):
-                center = self._circle_center_from_geom(feat.geometry())
-                if center is None:
-                    continue
-                dist = map_pt.distance(center)
-                if dist < best_dist:
-                    best_dist, best_lyr, best_fid, best_center = dist, lyr, feat.id(), center
-        if best_lyr is None:
-            return None
-        return (best_lyr, best_fid, best_center)
-
     def _snap(self, screen_pos):
         map_pt = self.toMapCoordinates(screen_pos)
-        # Circle centers are not real vertices — check them before native snap
-        center_hit = self._find_circle_center_near(map_pt)
-        if center_hit:
-            _, _, center = center_hit
+        center = find_circle_center_snap(self.canvas, map_pt)
+        if center:
             if self._snap_ind:
-                self._snap_ind.setMatch(QgsPointLocator.Match())  # hide native indicator
+                self._snap_ind.setMatch(QgsPointLocator.Match())
             if self._cc_cross:
                 self._cc_cross.setCenter(center)
                 self._cc_cross.setVisible(True)
             return center
-        # No circle center — hide custom marker, use native snap
         if self._cc_cross:
             self._cc_cross.setVisible(False)
         match = self.canvas.snappingUtils().snapToMap(screen_pos)
@@ -377,20 +343,10 @@ class MoveTool(QgsMapTool):
     # ------------------------------------------------------------------
 
     def _make_cc_markers(self):
-        m = QgsVertexMarker(self.canvas)
-        m.setColor(QColor(66, 135, 245))
-        m.setIconType(QgsVertexMarker.ICON_CROSS)
-        m.setIconSize(14)
-        m.setPenWidth(2)
-        m.setVisible(False)
-        self._cc_cross = m
+        self._cc_cross = make_cc_marker(self.canvas)
 
     def _rm_cc_markers(self):
-        if self._cc_cross is not None:
-            try:
-                self.canvas.scene().removeItem(self._cc_cross)
-            except Exception:
-                pass
+        rm_cc_marker(self.canvas, self._cc_cross)
         self._cc_cross = None
 
     def activate(self):

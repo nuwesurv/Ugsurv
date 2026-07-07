@@ -31,6 +31,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 from .dynamic_input import DynamicInput
+from .snap_utils import find_circle_center_snap, make_cc_marker, rm_cc_marker
 
 
 _C_HIGHLIGHT = QColor(0, 200, 80, 220)
@@ -124,6 +125,7 @@ class ScaleTool(QgsMapTool):
         self._ref_dist     = 1.0
         self._snap_pt      = None
         self._snap_ind     = None
+        self._cc_cross     = None
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -186,6 +188,17 @@ class ScaleTool(QgsMapTool):
         return best
 
     def _snap(self, screen_pos):
+        map_pt = self.toMapCoordinates(screen_pos)
+        center = find_circle_center_snap(self.canvas, map_pt)
+        if center:
+            if self._snap_ind:
+                self._snap_ind.setMatch(QgsPointLocator.Match())
+            if self._cc_cross:
+                self._cc_cross.setCenter(center)
+                self._cc_cross.setVisible(True)
+            return center
+        if self._cc_cross:
+            self._cc_cross.setVisible(False)
         match = self.canvas.snappingUtils().snapToMap(screen_pos)
         if match.isValid():
             if self._snap_ind:
@@ -193,7 +206,7 @@ class ScaleTool(QgsMapTool):
             return match.point()
         if self._snap_ind:
             self._snap_ind.setMatch(QgsPointLocator.Match())
-        return self.toMapCoordinates(screen_pos)
+        return map_pt
 
     def _show_hint(self, screen_pos):
         text = _HINT.get(self._state, "")
@@ -378,6 +391,7 @@ class ScaleTool(QgsMapTool):
         super().activate()
         self.terminal_dock.command.setFocus()
         self._snap_ind = QgsSnapIndicator(self.canvas)
+        self._cc_cross = make_cc_marker(self.canvas)
 
         if self._preselect:
             items = self._preselect
@@ -405,6 +419,8 @@ class ScaleTool(QgsMapTool):
         self._clear_bands()
         self._sel_features = []
         self._snap_ind = None
+        rm_cc_marker(self.canvas, self._cc_cross)
+        self._cc_cross = None
         self._hint.hide()
         self._state = _ST_SELECT
         if self._maptool:
