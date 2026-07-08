@@ -83,14 +83,20 @@ class ChamferTool(QgsMapTool):
         self._line1_feat  = None
         self._line1_click = None
 
+        self._hover_lyr_id = None
+        self._hover_fid    = None
+        self._hover_seg    = None
+
         self._line1_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
         self._line1_band.setColor(_C_LINE1)
         self._line1_band.setWidth(3)
+        self._line1_band.setIcon(QgsRubberBand.ICON_NONE)
         self._line1_band.setVisible(False)
 
         self._hover_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
         self._hover_band.setColor(_C_HOVER)
         self._hover_band.setWidth(2)
+        self._hover_band.setIcon(QgsRubberBand.ICON_NONE)
         self._hover_band.setVisible(False)
 
         self._hint = QLabel(canvas)
@@ -157,6 +163,8 @@ class ChamferTool(QgsMapTool):
     def _nearest_segment_geom(self, feat, map_pt):
         """Return a 2-point line geometry for the single segment of feat nearest to map_pt."""
         pts = feat.geometry().asPolyline()
+        if len(pts) < 2:
+            return feat.geometry()
         i = self._nearest_segment(pts, map_pt)
         return QgsGeometry.fromPolylineXY([pts[i], pts[i + 1]])
 
@@ -507,6 +515,9 @@ class ChamferTool(QgsMapTool):
         self._line1_layer = None
         self._line1_feat  = None
         self._line1_click = None
+        self._hover_lyr_id = None
+        self._hover_fid    = None
+        self._hover_seg    = None
         if self._maptool:
             self._maptool.clear_tool()
         self._log("\n........\n")
@@ -524,9 +535,22 @@ class ChamferTool(QgsMapTool):
         if self._state in (_ST_LINE1, _ST_LINE2):
             lyr, feat = self._find_line_near(map_pt)
             if feat:
-                self._hover_band.setToGeometry(self._nearest_segment_geom(feat, map_pt), lyr)
+                pts   = feat.geometry().asPolyline()
+                seg_i = self._nearest_segment(pts, map_pt) if len(pts) >= 2 else 0
+                lyr_id = lyr.id() if lyr else None
+                if (lyr_id != self._hover_lyr_id
+                        or feat.id() != self._hover_fid
+                        or seg_i != self._hover_seg):
+                    self._hover_lyr_id = lyr_id
+                    self._hover_fid    = feat.id()
+                    self._hover_seg    = seg_i
+                    seg_geom = QgsGeometry.fromPolylineXY([pts[seg_i], pts[seg_i + 1]])
+                    self._hover_band.setToGeometry(seg_geom, lyr)
                 self._hover_band.setVisible(True)
             else:
+                self._hover_lyr_id = None
+                self._hover_fid    = None
+                self._hover_seg    = None
                 self._hover_band.setVisible(False)
         self._show_hint(event.pos())
 
