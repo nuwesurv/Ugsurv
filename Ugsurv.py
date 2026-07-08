@@ -84,6 +84,7 @@ from .modules.join_tool import JoinTool
 from .modules.break_tool import BreakTool
 from .modules.chamfer_tool import ChamferTool
 from .modules.explode_tool import ExplodeTool
+from .modules.hatch_tool import HatchTool
 from .modules.point_drawer import PointDrawer
 from .modules import snap_manager
 from .modules.layer_utils import restore_no_legend_layers
@@ -405,7 +406,7 @@ class Ugsurv:
             'CIRCLE', 'POINT', 'PLINE', 'DIM', 'ADIM',
             'MOVE', 'COPY', 'ROTATE', 'SCALE', 'OFFSET',
             'TRIM', 'EXTEND', 'JOIN',
-            'BREAK', 'CHAMFER', 'EXPLODE',
+            'BREAK', 'CHAMFER', 'EXPLODE', 'HATCH',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
             'SPIKY', 'PTOVERLAP', 'IMPORT', 'PRINT', 'GAME',
@@ -652,6 +653,9 @@ class Ugsurv:
 
         elif cmd in ('explode', 'x'):
             self.global_map_tool.set_tool(ExplodeTool(self.canvas, self.terminal_dock))
+
+        elif cmd in ('hatch', 'ha'):
+            self.global_map_tool.set_tool(HatchTool(self.canvas, self.terminal_dock))
 
         elif cmd in ('scale', 'sc'):
             preselect = None

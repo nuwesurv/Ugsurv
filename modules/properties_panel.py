@@ -17,7 +17,13 @@ _PLUGIN_ICONS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "map_icons", "point_icons",
 )
-from .layer_utils import circle_attrs, apply_circle_color_renderer, apply_polyline_color_renderer, apply_point_color_renderer
+from .layer_utils import (
+    circle_attrs,
+    apply_circle_color_renderer,
+    apply_hatch_renderer,
+    apply_polyline_color_renderer,
+    apply_point_color_renderer,
+)
 
 
 class PropertiesDock(QDockWidget):
@@ -129,7 +135,11 @@ class PropertiesDock(QDockWidget):
         if idx < 0:
             return None
         val = feat.attribute(idx)
-        return None if isinstance(val, QVariant) else val
+        if val is None:
+            return None
+        if isinstance(val, QVariant):
+            return None if val.isNull() else val.value() if hasattr(val, "value") else None
+        return val
 
     # ------------------------------------------------------------------
     # Circle geometry helpers
@@ -185,6 +195,8 @@ class PropertiesDock(QDockWidget):
             self._build_circle_rows(feat, geom)
         elif lyr_name == "_points" and not geom.isEmpty():
             self._build_point_rows(feat, geom)
+        elif lyr_name == "_hatches" and not geom.isEmpty():
+            self._build_hatch_rows(feat)
         elif not geom.isEmpty():
             self._form.addRow("Type:", self._ro(QgsWkbTypes.displayString(geom.wkbType())))
 
@@ -496,6 +508,98 @@ class PropertiesDock(QDockWidget):
         if picker is not None:
             self._form.addRow("Icons:", picker)
 
+    def _build_hatch_rows(self, feat):
+        pat_idx  = self._layer.fields().indexOf("fill_pattern")
+        size_idx = self._layer.fields().indexOf("element_size")
+        ang_idx  = self._layer.fields().indexOf("angle")
+        opa_idx  = self._layer.fields().indexOf("opacity")
+
+        # ── Fill pattern ──────────────────────────────────────────────
+        pat_combo = QComboBox()
+        for name in ["lines", "diagonal", "crosshatch", "dots"]:
+            pat_combo.addItem(name)
+        current_pat = self._attr(feat, pat_idx) or "lines"
+        pat_combo.setCurrentText(current_pat)
+
+        def on_pat_changed(text, _idx=pat_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+                apply_hatch_renderer(self._layer)
+                self._layer.triggerRepaint()
+
+        pat_combo.currentTextChanged.connect(on_pat_changed)
+        self._form.addRow("Pattern:", pat_combo)
+
+        # ── Element size ──────────────────────────────────────────────
+        current_size = self._attr(feat, size_idx)
+        size_edit = self._edit(
+            f"{float(current_size):.2f}" if current_size is not None else "1.00",
+            "map units",
+        )
+
+        def on_size_edited(_idx=size_idx):
+            try:
+                v = float(size_edit.text())
+            except ValueError:
+                return
+            if v <= 0:
+                return
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(v, 4))
+                self._layer.triggerRepaint()
+
+        size_edit.editingFinished.connect(on_size_edited)
+        self._form.addRow("Size:", size_edit)
+
+        # ── Angle ─────────────────────────────────────────────────────
+        current_ang = self._attr(feat, ang_idx)
+        ang_edit = self._edit(
+            f"{float(current_ang):.1f}" if current_ang is not None else "45.0",
+            "degrees",
+        )
+
+        def on_ang_edited(_idx=ang_idx):
+            try:
+                v = float(ang_edit.text()) % 360
+            except ValueError:
+                return
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(v, 1))
+                self._layer.triggerRepaint()
+
+        ang_edit.editingFinished.connect(on_ang_edited)
+        self._form.addRow("Angle:", ang_edit)
+
+        # ── Opacity ───────────────────────────────────────────────────
+        current_opa = self._attr(feat, opa_idx)
+        opa_edit = self._edit(
+            f"{float(current_opa):.2f}" if current_opa is not None else "0.70",
+            "0 – 1",
+        )
+
+        def on_opa_edited(_idx=opa_idx):
+            try:
+                v = max(0.0, min(1.0, float(opa_edit.text())))
+            except ValueError:
+                return
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(v, 2))
+                self._layer.triggerRepaint()
+
+        opa_edit.editingFinished.connect(on_opa_edited)
+        self._form.addRow("Opacity:", opa_edit)
+
+        self._form.addRow(self._sep())
+        self._form.addRow("Color:", self._make_color_button())
+
     # ------------------------------------------------------------------
     # SVG icon picker
     # ------------------------------------------------------------------
@@ -616,6 +720,8 @@ class PropertiesDock(QDockWidget):
                     apply_polyline_color_renderer(self._layer)
                 elif lyr_name == "_points":
                     apply_point_color_renderer(self._layer)
+                elif lyr_name == "_hatches":
+                    apply_hatch_renderer(self._layer)
                 self._layer.triggerRepaint()
                 self._deferred_refresh()
 

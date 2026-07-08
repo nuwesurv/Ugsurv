@@ -1,6 +1,6 @@
 import os
 import math
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 from qgis.core import (
     QgsProject,
     QgsVectorFileWriter,
@@ -8,11 +8,15 @@ from qgis.core import (
     QgsCoordinateTransformContext,
     QgsGeometry,
     QgsPointXY,
+    QgsFillSymbol,
     QgsLineSymbol,
     QgsMarkerSymbol,
     QgsSingleSymbolRenderer,
     QgsRuleBasedRenderer,
     QgsSvgMarkerSymbolLayer,
+    QgsLinePatternFillSymbolLayer,
+    QgsPointPatternFillSymbolLayer,
+    QgsSimpleMarkerSymbolLayer,
     QgsProperty,
     QgsSymbolLayer,
 )
@@ -141,6 +145,88 @@ def apply_circle_color_renderer(layer):
 
 def apply_polyline_color_renderer(layer):
     _line_style_renderer(layer, "#E05C00")
+
+
+def apply_hatch_renderer(layer):
+    """Rule-based fill renderer driven by fill_pattern / element_size / color / angle fields."""
+    _COLOR_EXPR = 'if("color" IS NOT NULL AND "color" != \'\', "color", \'#E05C00\')'
+    _DIST_EXPR  = 'if("element_size" IS NOT NULL AND "element_size" > 0, "element_size", 1.0)'
+    _ANGLE_EXPR = 'if("angle" IS NOT NULL, "angle", 45.0)'
+
+    # PropertyDistance was renamed/reorganised across QGIS versions; probe at runtime.
+    def _dist_prop():
+        for name in ("PropertyDistance", "PropertyDistanceX"):
+            p = getattr(QgsSymbolLayer, name, None)
+            if p is not None:
+                return p
+        return None
+
+    _DIST_PROP = _dist_prop()
+
+    def _line_sl(angle_offset=0):
+        lpf = QgsLinePatternFillSymbolLayer()
+        lpf.setDataDefinedProperty(
+            QgsSymbolLayer.PropertyLineAngle,
+            QgsProperty.fromExpression(f'({_ANGLE_EXPR}) + {angle_offset}'),
+        )
+        if _DIST_PROP is not None:
+            lpf.setDataDefinedProperty(
+                _DIST_PROP,
+                QgsProperty.fromExpression(_DIST_EXPR),
+            )
+        lpf.setDataDefinedProperty(
+            QgsSymbolLayer.PropertyStrokeColor,
+            QgsProperty.fromExpression(_COLOR_EXPR),
+        )
+        lpf.setLineWidth(0.3)
+        return lpf
+
+    # lines / diagonal — single set of parallel lines, angle from field
+    line_sym = QgsFillSymbol()
+    line_sym.deleteSymbolLayer(0)
+    line_sym.appendSymbolLayer(_line_sl(0))
+    line_rule = QgsRuleBasedRenderer.Rule(line_sym, elseRule=True)
+
+    # crosshatch — two perpendicular sets
+    cross_sym = QgsFillSymbol()
+    cross_sym.deleteSymbolLayer(0)
+    cross_sym.appendSymbolLayer(_line_sl(0))
+    cross_sym.appendSymbolLayer(_line_sl(90))
+    cross_rule = QgsRuleBasedRenderer.Rule(cross_sym)
+    cross_rule.setFilterExpression("\"fill_pattern\" = 'crosshatch'")
+
+    # dots — point pattern fill
+    dot_sym = QgsFillSymbol()
+    dot_sym.deleteSymbolLayer(0)
+    ppf = QgsPointPatternFillSymbolLayer()
+    _DX = getattr(QgsSymbolLayer, "PropertyDistanceX", None)
+    _DY = getattr(QgsSymbolLayer, "PropertyDistanceY", None)
+    if _DX is not None:
+        ppf.setDataDefinedProperty(_DX, QgsProperty.fromExpression(_DIST_EXPR))
+    if _DY is not None:
+        ppf.setDataDefinedProperty(_DY, QgsProperty.fromExpression(_DIST_EXPR))
+    dot_marker = ppf.subSymbol()
+    dot_marker.deleteSymbolLayer(0)
+    dot_sl = QgsSimpleMarkerSymbolLayer()
+    dot_sl.setShape(QgsSimpleMarkerSymbolLayer.Circle)
+    dot_sl.setSize(0.4)
+    dot_sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyFillColor,
+        QgsProperty.fromExpression(_COLOR_EXPR),
+    )
+    dot_sl.setStrokeStyle(Qt.NoPen)
+    dot_marker.appendSymbolLayer(dot_sl)
+    dot_sym.appendSymbolLayer(ppf)
+    dot_rule = QgsRuleBasedRenderer.Rule(dot_sym)
+    dot_rule.setFilterExpression("\"fill_pattern\" = 'dots'")
+
+    root = QgsRuleBasedRenderer.Rule(None)
+    root.appendChild(cross_rule)
+    root.appendChild(dot_rule)
+    root.appendChild(line_rule)  # else rule must be last
+
+    layer.setRenderer(QgsRuleBasedRenderer(root))
+    layer.setLegend(None)
 
 
 def apply_point_color_renderer(layer):

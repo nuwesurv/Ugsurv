@@ -287,10 +287,10 @@ class JoinTool(QgsMapTool):
 
         new_geom   = QgsGeometry.fromPolylineXY(chained)
         attrs      = polyline_attrs(new_geom)
-        length     = attrs["length"]
-        is_closed  = attrs["closed"]
-        area_sqm   = attrs["area_sqm"]
-        area_acres = attrs["area_acres"]
+        length     = attrs.get("length",    0.0)
+        is_closed  = attrs.get("closed",    False)
+        area_sqm   = attrs.get("area_sqm",  0.0)
+        area_acres = attrs.get("area_acres", 0.0)
 
         # Write result to the first selected feature's layer
         target = segments[0][0]
