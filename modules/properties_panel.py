@@ -516,7 +516,7 @@ class PropertiesDock(QDockWidget):
 
         # ── Fill pattern ──────────────────────────────────────────────
         pat_combo = QComboBox()
-        for name in ["lines", "diagonal", "crosshatch", "dots"]:
+        for name in ["lines", "diagonal", "crosshatch", "dots", "pavers"]:
             pat_combo.addItem(name)
         current_pat = self._attr(feat, pat_idx) or "lines"
         pat_combo.setCurrentText(current_pat)

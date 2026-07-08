@@ -14,6 +14,7 @@ from qgis.core import (
     QgsSingleSymbolRenderer,
     QgsRuleBasedRenderer,
     QgsSvgMarkerSymbolLayer,
+    QgsEllipseSymbolLayer,
     QgsLinePatternFillSymbolLayer,
     QgsPointPatternFillSymbolLayer,
     QgsSimpleMarkerSymbolLayer,
@@ -220,9 +221,63 @@ def apply_hatch_renderer(layer):
     dot_rule = QgsRuleBasedRenderer.Rule(dot_sym)
     dot_rule.setFilterExpression("\"fill_pattern\" = 'dots'")
 
+    # pavers — running-bond brick pattern using offset rectangular markers
+    pav_sym = QgsFillSymbol()
+    pav_sym.deleteSymbolLayer(0)
+
+    ppf_pav = QgsPointPatternFillSymbolLayer()
+    _DX  = getattr(QgsSymbolLayer, "PropertyDistanceX",    None)
+    _DY  = getattr(QgsSymbolLayer, "PropertyDistanceY",    None)
+    _DDX = getattr(QgsSymbolLayer, "PropertyDisplacementX", None)
+    if _DX  is not None:
+        ppf_pav.setDataDefinedProperty(_DX,  QgsProperty.fromExpression(_DIST_EXPR))
+    if _DY  is not None:
+        # brick height = half the width
+        ppf_pav.setDataDefinedProperty(_DY,  QgsProperty.fromExpression(f'({_DIST_EXPR}) * 0.5'))
+    if _DDX is not None:
+        # offset alternate rows by half a brick width → running bond
+        ppf_pav.setDataDefinedProperty(_DDX, QgsProperty.fromExpression(f'({_DIST_EXPR}) * 0.5'))
+
+    # Static fallbacks so the pattern renders correctly even without data-defined support
+    ppf_pav.setDistanceX(2.0)
+    ppf_pav.setDistanceY(1.0)
+    ppf_pav.setDisplacementX(1.0)
+
+    # Sub-symbol: rectangle (ellipse layer with rectangle shape)
+    pav_marker = ppf_pav.subSymbol()
+    pav_marker.deleteSymbolLayer(0)
+    brick_sl = QgsEllipseSymbolLayer()
+    # Set rectangle shape — try enum first, then string name
+    try:
+        brick_sl.setSymbolName(QgsEllipseSymbolLayer.Rectangle)
+    except (AttributeError, TypeError):
+        try:
+            brick_sl.setSymbolName("rectangle")
+        except Exception:
+            pass
+    # Width ≈ 85 % of spacing, height ≈ 40 % (leaves a mortar gap)
+    _PW = getattr(QgsSymbolLayer, "PropertyWidth",  None)
+    _PH = getattr(QgsSymbolLayer, "PropertyHeight", None)
+    if _PW is not None:
+        brick_sl.setDataDefinedProperty(_PW, QgsProperty.fromExpression(f'({_DIST_EXPR}) * 0.85'))
+    if _PH is not None:
+        brick_sl.setDataDefinedProperty(_PH, QgsProperty.fromExpression(f'({_DIST_EXPR}) * 0.4'))
+    brick_sl.setDataDefinedProperty(
+        QgsSymbolLayer.PropertyStrokeColor,
+        QgsProperty.fromExpression(_COLOR_EXPR),
+    )
+    from PyQt5.QtGui import QColor as _QColor
+    brick_sl.setFillColor(_QColor(0, 0, 0, 0))   # transparent fill — outline only
+    brick_sl.setStrokeWidth(0.3)
+    pav_marker.appendSymbolLayer(brick_sl)
+    pav_sym.appendSymbolLayer(ppf_pav)
+    pav_rule = QgsRuleBasedRenderer.Rule(pav_sym)
+    pav_rule.setFilterExpression("\"fill_pattern\" = 'pavers'")
+
     root = QgsRuleBasedRenderer.Rule(None)
     root.appendChild(cross_rule)
     root.appendChild(dot_rule)
+    root.appendChild(pav_rule)
     root.appendChild(line_rule)  # else rule must be last
 
     layer.setRenderer(QgsRuleBasedRenderer(root))
