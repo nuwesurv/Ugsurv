@@ -43,6 +43,7 @@ from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from .dynamic_input import DynamicInput
+from .context_menu import RightClickMenu
 from . import snap_utils
 
 
@@ -178,6 +179,8 @@ class VertexSelector(QgsMapTool):
         # MOVING (circle only): floating radius input
         self._dinput = DynamicInput(canvas, terminal_dock, [{"key": "radius", "label": "New radius"}])
         self._dinput.on_cancel = self._cancel_move
+
+        self._context_menu = RightClickMenu(canvas, terminal_dock)
 
         # Reset to IDLE before any selected/gripped layer is removed so we never
         # hold a dangling C++ pointer.
@@ -377,6 +380,14 @@ class VertexSelector(QgsMapTool):
         self._rm(self._sel_extra_bands.pop(idx))
         self._sel_extra_items.pop(idx)
         return True
+
+    def _select_all_in_layer(self, layer, primary_fid):
+        """Add every feature in layer to the extra (teal) selection, skipping the primary."""
+        for feat in layer.getFeatures():
+            fid = feat.id()
+            if fid != primary_fid:
+                self._add_to_extra_selection(layer, fid)
+        self.canvas.refresh()
 
     # ------------------------------------------------------------------
     # State transitions
@@ -1514,12 +1525,30 @@ class VertexSelector(QgsMapTool):
     def canvasPressEvent(self, event):
         raw_pt = self.toMapCoordinates(event.pos())
 
-        # Right-click: cancel move (if moving) or clear grip / feature selection
+        # Right-click: cancel move (if moving) or show context menu
         if event.button() == Qt.RightButton:
             if self._state == _S_MOVING:
                 self._cancel_move()
-            elif self._state in (_S_GRIPPED, _S_FEATURE):
-                self._enter_idle()
+                return
+            sel_layer = None
+            sel_fid   = None
+            if self._state == _S_FEATURE:
+                sel_layer = self._sel_layer
+                sel_fid   = self._sel_fid
+            elif self._state == _S_GRIPPED and self._gripped:
+                sel_layer = self._gripped.layer
+                sel_fid   = self._gripped.fid
+            if sel_layer is not None and sel_fid is not None:
+                on_sim = lambda layer=sel_layer, fid=sel_fid: self._select_all_in_layer(layer, fid)
+            else:
+                on_sim = None
+            self._context_menu.show(
+                event.pos(),
+                sel_layer=sel_layer,
+                sel_fid=sel_fid,
+                on_cancel=self._enter_idle if self._state != _S_IDLE else None,
+                on_select_similar=on_sim,
+            )
             return
 
         if event.button() != Qt.LeftButton:
