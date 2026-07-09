@@ -516,7 +516,7 @@ class PropertiesDock(QDockWidget):
 
         # ── Fill pattern ──────────────────────────────────────────────
         pat_combo = QComboBox()
-        for name in ["lines", "diagonal", "crosshatch", "dots", "pavers"]:
+        for name in ["lines", "diagonal", "crosshatch", "dots", "pavers", "wetland"]:
             pat_combo.addItem(name)
         current_pat = self._attr(feat, pat_idx) or "lines"
         pat_combo.setCurrentText(current_pat)
@@ -526,8 +526,13 @@ class PropertiesDock(QDockWidget):
                 if not self._layer.isEditable():
                     self._layer.startEditing()
                 self._layer.changeAttributeValue(self._fid, _idx, text)
+                if text == "wetland":
+                    col_idx = self._layer.fields().indexOf("color")
+                    if col_idx >= 0:
+                        self._layer.changeAttributeValue(self._fid, col_idx, "#46aeef")
                 apply_hatch_renderer(self._layer)
                 self._layer.triggerRepaint()
+                self._deferred_refresh()
 
         pat_combo.currentTextChanged.connect(on_pat_changed)
         self._form.addRow("Pattern:", pat_combo)

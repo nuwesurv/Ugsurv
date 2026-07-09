@@ -17,6 +17,7 @@ from qgis.core import (
     QgsEllipseSymbolLayer,
     QgsLinePatternFillSymbolLayer,
     QgsPointPatternFillSymbolLayer,
+    QgsSimpleFillSymbolLayer,
     QgsSimpleMarkerSymbolLayer,
     QgsProperty,
     QgsSymbolLayer,
@@ -274,10 +275,101 @@ def apply_hatch_renderer(layer):
     pav_rule = QgsRuleBasedRenderer.Rule(pav_sym)
     pav_rule.setFilterExpression("\"fill_pattern\" = 'pavers'")
 
+    # wetland — faithful recreation of QGIS "topo swamp":
+    #   • aqua-green semi-transparent background fill
+    #   • scattered reed clumps: 3 vertical line markers of different heights
+    #     arranged as a tuft (short right, tall centre, tall left)
+    wet_sym = QgsFillSymbol()
+    wet_sym.deleteSymbolLayer(0)
+
+    # ── Layer 1: aqua-green background ────────────────────────────────
+    bg = QgsSimpleFillSymbolLayer()
+    bg.setColor(_QColor(0, 0, 0, 0))   # transparent fill
+    bg.setStrokeStyle(Qt.NoPen)
+    wet_sym.appendSymbolLayer(bg)
+
+    # ── Layer 2: reed-clump point pattern fill ────────────────────────
+    ppf_wet = QgsPointPatternFillSymbolLayer()
+
+    # Grid spacing — scaled to element_size (element_size drives dist_y)
+    _WDX  = getattr(QgsSymbolLayer, "PropertyDistanceX",    None)
+    _WDY  = getattr(QgsSymbolLayer, "PropertyDistanceY",    None)
+    _WDDX = getattr(QgsSymbolLayer, "PropertyDisplacementX", None)
+    _WDDY = getattr(QgsSymbolLayer, "PropertyDisplacementY", None)
+    if _WDX  is not None:
+        ppf_wet.setDataDefinedProperty(_WDX,  QgsProperty.fromExpression(f'({_DIST_EXPR}) * 1.73'))
+    if _WDY  is not None:
+        ppf_wet.setDataDefinedProperty(_WDY,  QgsProperty.fromExpression(_DIST_EXPR))
+    if _WDDX is not None:
+        ppf_wet.setDataDefinedProperty(_WDDX, QgsProperty.fromExpression(f'({_DIST_EXPR}) * 0.76'))
+    if _WDDY is not None:
+        ppf_wet.setDataDefinedProperty(_WDDY, QgsProperty.fromExpression(f'({_DIST_EXPR}) * 0.24'))
+    # Static fallbacks in map units
+    ppf_wet.setDistanceX(6.0)
+    ppf_wet.setDistanceY(3.5)
+    ppf_wet.setDisplacementX(2.7)
+    ppf_wet.setDisplacementY(0.8)
+
+    # Build the 3-marker reed clump sub-symbol
+    clump = ppf_wet.subSymbol()
+    clump.deleteSymbolLayer(0)
+
+    # Probe for line shape and offset properties
+    _line_shape = (
+        getattr(QgsSimpleMarkerSymbolLayer, "Line", None)
+        or getattr(getattr(QgsSimpleMarkerSymbolLayer, "Shape", object()), "Line", None)
+    )
+    _PS  = getattr(QgsSymbolLayer, "PropertySize",    None)
+    _POX = getattr(QgsSymbolLayer, "PropertyOffsetX", None)
+    _POY = getattr(QgsSymbolLayer, "PropertyOffsetY", None)
+
+    def _reed(size_f, ox_f, oy_f):
+        """One vertical line marker, sized and offset as a fraction of element_size."""
+        sl = QgsSimpleMarkerSymbolLayer()
+        if _line_shape is not None:
+            try:
+                sl.setShape(_line_shape)
+            except Exception:
+                pass
+        sl.setAngle(90)          # vertical stem
+        sl.setStrokeWidth(0.4)
+        sl.setFillColor(_QColor(0, 0, 0, 0))
+        # Size
+        if _PS is not None:
+            sl.setDataDefinedProperty(_PS,  QgsProperty.fromExpression(f'({_DIST_EXPR}) * {size_f}'))
+        else:
+            sl.setSize(size_f * 3.5)
+        # Horizontal offset
+        if _POX is not None:
+            sl.setDataDefinedProperty(_POX, QgsProperty.fromExpression(f'({_DIST_EXPR}) * {ox_f}'))
+        # Vertical offset
+        if _POY is not None:
+            sl.setDataDefinedProperty(_POY, QgsProperty.fromExpression(f'({_DIST_EXPR}) * {oy_f}'))
+        # Reed colour driven by "color" field (water blue default via auto-set)
+        sl.setDataDefinedProperty(
+            QgsSymbolLayer.PropertyStrokeColor,
+            QgsProperty.fromExpression(_COLOR_EXPR),
+        )
+        return sl
+
+    # Proportions from QGIS topo swamp (normalised to dist_y = 1.0):
+    #   short reed right:   size=0.33, offset=(+0.12, +0.21)
+    #   tall centre reed:   size=0.58, offset=(0, 0)
+    #   tall reed left:     size=0.58, offset=(-0.12, +0.27)
+    clump.appendSymbolLayer(_reed(0.33,  0.12,  0.21))
+    clump.appendSymbolLayer(_reed(0.58,  0.00,  0.00))
+    clump.appendSymbolLayer(_reed(0.58, -0.12,  0.27))
+
+    wet_sym.appendSymbolLayer(ppf_wet)
+
+    wet_rule = QgsRuleBasedRenderer.Rule(wet_sym)
+    wet_rule.setFilterExpression("\"fill_pattern\" = 'wetland'")
+
     root = QgsRuleBasedRenderer.Rule(None)
     root.appendChild(cross_rule)
     root.appendChild(dot_rule)
     root.appendChild(pav_rule)
+    root.appendChild(wet_rule)
     root.appendChild(line_rule)  # else rule must be last
 
     layer.setRenderer(QgsRuleBasedRenderer(root))
