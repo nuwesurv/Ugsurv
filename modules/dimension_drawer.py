@@ -8,20 +8,15 @@ from qgis.core import (
     QgsPointXY,
     QgsField,
     QgsWkbTypes,
-    QgsLineSymbol,
-    QgsPalLayerSettings,
-    QgsTextFormat,
-    QgsVectorLayerSimpleLabeling,
     QgsCoordinateReferenceSystem,
     QgsRectangle,
-    QgsUnitTypes,
 )
 from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtGui import QIcon, QFont, QColor
+from qgis.PyQt.QtGui import QColor
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_dimension_style
 from . import snap_utils
 from . import crs_utils
 import math
@@ -200,41 +195,16 @@ class DimensionDrawer(QgsMapTool):
         self.terminal_dock.command.setFocus()
             
             
-    def _apply_dim_style(self, layer):
-        symbol = QgsLineSymbol.createSimple({
-            'color': 'transparent',
-            'width': '0',
-            'line_style': 'dashed',
-        })
-        layer.renderer().setSymbol(symbol)
-
-        label_settings = QgsPalLayerSettings()
-        label_settings.fieldName = 'distance'
-        label_settings.placement = QgsPalLayerSettings.Line
-
-        _font = QFont("Century Gothic", 10)
-        _font.setBold(True)
-        _font.setItalic(True)
-        text_format = QgsTextFormat()
-        text_format.setFont(_font)
-        text_format.setColor(QColor(0, 0, 0))
-        text_format.setSize(3)
-        text_format.setSizeUnit(QgsUnitTypes.RenderMapUnits)
-        label_settings.setFormat(text_format)
-
-        layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
-        layer.setLabelsEnabled(True)
-        layer.triggerRepaint()
-
     def _ensure_dim_fields(self, layer):
         existing = {f.name() for f in layer.fields()}
         to_add = []
-        if "distance" not in existing: to_add.append(QgsField("distance", QVariant.Double))
-        if "start_x"  not in existing: to_add.append(QgsField("start_x",  QVariant.Double))
-        if "start_y"  not in existing: to_add.append(QgsField("start_y",  QVariant.Double))
-        if "end_x"    not in existing: to_add.append(QgsField("end_x",    QVariant.Double))
-        if "end_y"    not in existing: to_add.append(QgsField("end_y",    QVariant.Double))
-        if "bearing"  not in existing: to_add.append(QgsField("bearing",  QVariant.Double))
+        if "distance"       not in existing: to_add.append(QgsField("distance",       QVariant.Double))
+        if "decimal_places" not in existing: to_add.append(QgsField("decimal_places", QVariant.Int))
+        if "color"          not in existing: to_add.append(QgsField("color",          QVariant.String))
+        if "text_size"      not in existing: to_add.append(QgsField("text_size",      QVariant.Double))
+        if "font_type"      not in existing: to_add.append(QgsField("font_type",      QVariant.String))
+        if "line_thickness" not in existing: to_add.append(QgsField("line_thickness", QVariant.Double))
+        if "line_type"      not in existing: to_add.append(QgsField("line_type",      QVariant.String))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -250,24 +220,25 @@ class DimensionDrawer(QgsMapTool):
         layer = open_layer_from_gpkg(layer_name)
         if layer:
             self._ensure_dim_fields(layer)
-            self._apply_dim_style(layer)
+            apply_dimension_style(layer)
             add_to_plugin_group(layer)
             layer.startEditing()
             return layer
 
         mem = QgsVectorLayer(f"LineString?crs=EPSG:{self.appropriate_crs}", layer_name, "memory")
         mem.dataProvider().addAttributes([
-            QgsField("distance", QVariant.Double),
-            QgsField("start_x",  QVariant.Double),
-            QgsField("start_y",  QVariant.Double),
-            QgsField("end_x",    QVariant.Double),
-            QgsField("end_y",    QVariant.Double),
-            QgsField("bearing",  QVariant.Double),
+            QgsField("distance",       QVariant.Double),
+            QgsField("decimal_places", QVariant.Int),
+            QgsField("color",          QVariant.String),
+            QgsField("text_size",      QVariant.Double),
+            QgsField("font_type",      QVariant.String),
+            QgsField("line_thickness", QVariant.Double),
+            QgsField("line_type",      QVariant.String),
         ])
         mem.updateFields()
 
         layer = create_layer_in_gpkg(mem)
-        self._apply_dim_style(layer)
+        apply_dimension_style(layer)
         add_to_plugin_group(layer)
         layer.startEditing()
         return layer
@@ -507,16 +478,16 @@ class DimensionDrawer(QgsMapTool):
         
         p1, p2 = self.dim_points[0], self.dim_points[1]
         dim_dist = p1.distance(p2)
-        bearing  = self._bearing(p1, p2)
 
         self.feature = QgsFeature(self.dim_layer.fields())
         self.feature.setGeometry(QgsGeometry.fromPolylineXY(self.dim_points))
-        self.feature.setAttribute("distance", round(dim_dist, 3))
-        self.feature.setAttribute("start_x",  round(p1.x(), 3))
-        self.feature.setAttribute("start_y",  round(p1.y(), 3))
-        self.feature.setAttribute("end_x",    round(p2.x(), 3))
-        self.feature.setAttribute("end_y",    round(p2.y(), 3))
-        self.feature.setAttribute("bearing",  round(bearing, 2))
+        self.feature.setAttribute("distance",       round(dim_dist, 3))
+        self.feature.setAttribute("decimal_places", 3)
+        self.feature.setAttribute("color",          "#000000")
+        self.feature.setAttribute("text_size",      4)
+        self.feature.setAttribute("font_type",      "Century Gothic")
+        self.feature.setAttribute("line_thickness", 0.3)
+        self.feature.setAttribute("line_type",      "solid")
         self.dim_layer.addFeature(self.feature)
         self.dim_layer.triggerRepaint()
         

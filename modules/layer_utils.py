@@ -1,6 +1,7 @@
 import os
 import math
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QColor, QFont
 from qgis.core import (
     QgsProject,
     QgsVectorFileWriter,
@@ -21,6 +22,10 @@ from qgis.core import (
     QgsSimpleMarkerSymbolLayer,
     QgsProperty,
     QgsSymbolLayer,
+    QgsPalLayerSettings,
+    QgsTextFormat,
+    QgsVectorLayerSimpleLabeling,
+    QgsUnitTypes,
 )
 
 def polyline_attrs(geom):
@@ -428,6 +433,54 @@ def apply_point_color_renderer(layer):
 
     layer.setRenderer(QgsRuleBasedRenderer(root))
     layer.setLegend(None)
+
+
+def apply_dimension_style(layer):
+    """Transparent line (label anchor only) + map-unit labels for the dimension layer."""
+    _COLOR_EXPR = 'if("color" IS NOT NULL AND "color" != \'\', "color", \'#000000\')'
+    _SIZE_EXPR  = 'if("text_size" IS NOT NULL AND "text_size" > 0, "text_size", 1.5)'
+    _FONT_EXPR  = 'if("font_type" IS NOT NULL AND "font_type" != \'\', "font_type", \'Century Gothic\')'
+
+    # Transparent line — exists only so QGIS has a geometry to hang the label on
+    sym = QgsLineSymbol.createSimple({'color': 'transparent', 'width': '0'})
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    layer.setLegend(None)
+
+    # Read current font from the layer's first feature so re-calls keep the font in sync
+    default_font = "Century Gothic"
+    for feat in layer.getFeatures():
+        v = feat["font_type"] if layer.fields().indexOf("font_type") >= 0 else None
+        if v:
+            default_font = str(v)
+        break
+
+    font = QFont(default_font, 10)
+    font.setBold(True)
+    font.setItalic(True)
+
+    tf = QgsTextFormat()
+    tf.setFont(font)
+    tf.setColor(QColor(0, 0, 0))
+    tf.setSize(1.5)
+    tf.setSizeUnit(QgsUnitTypes.RenderMapUnits)
+
+    pal = QgsPalLayerSettings()
+    pal.isExpression = True
+    pal.fieldName = 'round("distance", coalesce("decimal_places", 3))'
+    pal.placement = QgsPalLayerSettings.Line
+    pal.setFormat(tf)
+
+    try:
+        dd = pal.dataDefinedProperties()
+        dd.setProperty(QgsPalLayerSettings.Color,  QgsProperty.fromExpression(_COLOR_EXPR))
+        dd.setProperty(QgsPalLayerSettings.Size,   QgsProperty.fromExpression(_SIZE_EXPR))
+        dd.setProperty(QgsPalLayerSettings.Family, QgsProperty.fromExpression(_FONT_EXPR))
+    except Exception:
+        pass
+
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+    layer.setLabelsEnabled(True)
+    layer.triggerRepaint()
 
 
 _DATA_DIR  = r"C:\UgSurv"

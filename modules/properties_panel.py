@@ -7,7 +7,7 @@ from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
     QColorDialog, QComboBox, QDockWidget, QFileDialog, QFormLayout, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit, QPushButton,
-    QScrollArea, QWidget, QVBoxLayout,
+    QScrollArea, QSpinBox, QDoubleSpinBox, QWidget, QVBoxLayout,
 )
 from qgis.core import (
     QgsApplication, QgsCircularString, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
@@ -23,6 +23,7 @@ from .layer_utils import (
     apply_hatch_renderer,
     apply_polyline_color_renderer,
     apply_point_color_renderer,
+    apply_dimension_style,
 )
 
 
@@ -197,6 +198,8 @@ class PropertiesDock(QDockWidget):
             self._build_point_rows(feat, geom)
         elif lyr_name == "_hatches" and not geom.isEmpty():
             self._build_hatch_rows(feat)
+        elif lyr_name == "_dimension_layer" and not geom.isEmpty():
+            self._build_dimension_rows(feat)
         elif not geom.isEmpty():
             self._form.addRow("Type:", self._ro(QgsWkbTypes.displayString(geom.wkbType())))
 
@@ -605,6 +608,73 @@ class PropertiesDock(QDockWidget):
         self._form.addRow(self._sep())
         self._form.addRow("Color:", self._make_color_button())
 
+    def _build_dimension_rows(self, feat):
+        dist_idx = self._layer.fields().indexOf("distance")
+        dp_idx   = self._layer.fields().indexOf("decimal_places")
+        size_idx = self._layer.fields().indexOf("text_size")
+        font_idx = self._layer.fields().indexOf("font_type")
+
+        dp = self._attr(feat, dp_idx)
+        dp = int(dp) if dp is not None else 3
+        dist = self._attr(feat, dist_idx)
+        self._form.addRow("Distance:", self._ro(f"{round(dist, dp)} m" if dist is not None else "—"))
+        self._form.addRow(self._sep())
+
+        # ── Decimal places ────────────────────────────────────────────
+        dp_spin = QSpinBox()
+        dp_spin.setRange(0, 6)
+        dp_spin.setValue(dp)
+
+        def on_dp_changed(v, _idx=dp_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, v)
+                apply_dimension_style(self._layer)
+
+        dp_spin.valueChanged.connect(on_dp_changed)
+        self._form.addRow("Decimals:", dp_spin)
+
+        # ── Text color ────────────────────────────────────────────────
+        self._form.addRow("Text Color:", self._make_color_button())
+
+        # ── Font size ─────────────────────────────────────────────────
+        current_size = self._attr(feat, size_idx)
+        size_spin = QDoubleSpinBox()
+        size_spin.setRange(0.1, 100.0)
+        size_spin.setSingleStep(0.1)
+        size_spin.setDecimals(3)
+        size_spin.setSuffix(" m")
+        size_spin.setValue(float(current_size) if current_size is not None else 1.5)
+
+        def on_size_changed(v, _idx=size_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, round(v, 3))
+                apply_dimension_style(self._layer)
+
+        size_spin.valueChanged.connect(on_size_changed)
+        self._form.addRow("Font Size:", size_spin)
+
+        # ── Font type ─────────────────────────────────────────────────
+        font_combo = QComboBox()
+        for name in ["Century Gothic", "Arial", "Calibri", "Times New Roman", "Courier New"]:
+            font_combo.addItem(name)
+        current_font = self._attr(feat, font_idx)
+        font_combo.setCurrentText(current_font if current_font else "Century Gothic")
+
+        def on_font_changed(text, _idx=font_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+                apply_dimension_style(self._layer)
+
+        font_combo.currentTextChanged.connect(on_font_changed)
+        self._form.addRow("Font:", font_combo)
+
+
     # ------------------------------------------------------------------
     # SVG icon picker
     # ------------------------------------------------------------------
@@ -727,6 +797,8 @@ class PropertiesDock(QDockWidget):
                     apply_point_color_renderer(self._layer)
                 elif lyr_name == "_hatches":
                     apply_hatch_renderer(self._layer)
+                elif lyr_name == "_dimension_layer":
+                    apply_dimension_style(self._layer)
                 self._layer.triggerRepaint()
                 self._deferred_refresh()
 
