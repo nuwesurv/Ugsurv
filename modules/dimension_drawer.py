@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import QLabel
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QColor
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_dimension_style
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_dimension_style, enable_feature_render_order
 from . import snap_utils
 from . import crs_utils
 import math
@@ -205,6 +205,7 @@ class DimensionDrawer(QgsMapTool):
         if "font_type"      not in existing: to_add.append(QgsField("font_type",      QVariant.String))
         if "line_thickness" not in existing: to_add.append(QgsField("line_thickness", QVariant.Double))
         if "line_type"      not in existing: to_add.append(QgsField("line_type",      QVariant.String))
+        if "z_index"        not in existing: to_add.append(QgsField("z_index",        QVariant.Int))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -215,12 +216,14 @@ class DimensionDrawer(QgsMapTool):
         if layers:
             layer = layers[0]
             self._ensure_dim_fields(layer)
+            enable_feature_render_order(layer)
             return layer
 
         layer = open_layer_from_gpkg(layer_name)
         if layer:
             self._ensure_dim_fields(layer)
             apply_dimension_style(layer)
+            enable_feature_render_order(layer)
             add_to_plugin_group(layer)
             layer.startEditing()
             return layer
@@ -234,11 +237,13 @@ class DimensionDrawer(QgsMapTool):
             QgsField("font_type",      QVariant.String),
             QgsField("line_thickness", QVariant.Double),
             QgsField("line_type",      QVariant.String),
+            QgsField("z_index",        QVariant.Int),
         ])
         mem.updateFields()
 
         layer = create_layer_in_gpkg(mem)
         apply_dimension_style(layer)
+        enable_feature_render_order(layer)
         add_to_plugin_group(layer)
         layer.startEditing()
         return layer
@@ -488,6 +493,7 @@ class DimensionDrawer(QgsMapTool):
         self.feature.setAttribute("font_type",      "Century Gothic")
         self.feature.setAttribute("line_thickness", 0.3)
         self.feature.setAttribute("line_type",      "solid")
+        self.feature.setAttribute("z_index",        1)
         self.dim_layer.addFeature(self.feature)
         self.dim_layer.triggerRepaint()
         

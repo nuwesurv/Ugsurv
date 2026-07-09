@@ -22,7 +22,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from . import snap_utils
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, circle_attrs, apply_circle_color_renderer
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, circle_attrs, apply_circle_color_renderer, enable_feature_render_order
 import math
 from . import crs_utils
 
@@ -141,6 +141,7 @@ class CircleDrawer(QgsMapTool):
         if "color"         not in existing: to_add.append(QgsField("color",         QVariant.String))
         if "line_type"      not in existing: to_add.append(QgsField("line_type",      QVariant.String))
         if "line_thickness" not in existing: to_add.append(QgsField("line_thickness", QVariant.Double))
+        if "z_index"        not in existing: to_add.append(QgsField("z_index",        QVariant.Int))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -166,6 +167,7 @@ class CircleDrawer(QgsMapTool):
 
     def _apply_circle_style(self, layer):
         apply_circle_color_renderer(layer)
+        enable_feature_render_order(layer)
         layer.setLabelsEnabled(False)
 
     def _create_circle_layer(self):
@@ -186,6 +188,7 @@ class CircleDrawer(QgsMapTool):
             QgsField("color",         QVariant.String),
             QgsField("line_type",      QVariant.String),
             QgsField("line_thickness", QVariant.Double),
+            QgsField("z_index",        QVariant.Int),
         ])
         mem.updateFields()
 
@@ -235,6 +238,9 @@ class CircleDrawer(QgsMapTool):
             feature.setAttribute(lt_idx, "solid")
         if lw_idx >= 0:
             feature.setAttribute(lw_idx, 0.4)
+        zi_idx = self.circle_layer.fields().indexOf("z_index")
+        if zi_idx >= 0:
+            feature.setAttribute(zi_idx, 1)
 
         self.circle_layer.addFeature(feature)
         self.circle_layer.updateExtents()

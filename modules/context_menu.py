@@ -79,7 +79,7 @@ class RightClickMenu:
         menu.addSeparator()
 
         # 4. Display Order
-        self._add_display_order(menu, sel_layer)
+        self._add_display_order(menu, sel_layer, sel_fid)
 
         # 5. Select Similar — only when a feature is active
         if sel_layer is not None and sel_fid is not None and on_select_similar is not None:
@@ -210,9 +210,9 @@ class RightClickMenu:
     # 4. Display Order
     # ------------------------------------------------------------------
 
-    def _add_display_order(self, menu, sel_layer):
+    def _add_display_order(self, menu, sel_layer, sel_fid):
         sub = menu.addMenu("Display Order")
-        has_layer = sel_layer is not None
+        has_feature = sel_layer is not None and sel_fid is not None
 
         for label, direction in [
             ("Bring to Front",  'front'),
@@ -221,40 +221,42 @@ class RightClickMenu:
             ("Send to Back",    'back'),
         ]:
             act = QAction(label, sub)
-            act.setEnabled(has_layer)
-            if has_layer:
+            act.setEnabled(has_feature)
+            if has_feature:
                 act.triggered.connect(
-                    lambda checked=False, d=direction: self._layer_order(sel_layer, d)
+                    lambda checked=False, d=direction: self._feature_order(sel_layer, sel_fid, d)
                 )
             sub.addAction(act)
 
-    def _layer_order(self, layer, direction):
-        root = QgsProject.instance().layerTreeRoot()
-        node = root.findLayer(layer.id())
-        if node is None:
+    def _feature_order(self, layer, fid, direction):
+        idx = layer.fields().indexOf("z_index")
+        if idx < 0:
             return
-        parent = node.parent()
-        children = parent.children()
-        idx = next((i for i, c in enumerate(children) if c == node), None)
-        if idx is None:
+        feat = layer.getFeature(fid)
+        if not feat.isValid():
             return
-        n = len(children)
+        current = feat["z_index"]
+        if current is None:
+            current = 1
 
-        if direction == 'front':
-            new_idx = 0
-        elif direction == 'back':
-            new_idx = n - 1
+        if direction in ('front', 'back'):
+            vals = [f["z_index"] or 1 for f in layer.getFeatures()]
+            if direction == 'front':
+                new_z = (max(vals) if vals else 0) + 1
+            else:
+                new_z = (min(vals) if vals else 0) - 1
         elif direction == 'forward':
-            new_idx = max(0, idx - 1)
+            new_z = current + 1
         elif direction == 'backward':
-            new_idx = min(n - 1, idx + 1)
+            new_z = current - 1
         else:
             return
 
-        if new_idx == idx:
-            return
-
-        clone = node.clone()
-        parent.insertChildNode(new_idx, clone)
-        parent.removeChildNode(node)
+        was_editing = layer.isEditable()
+        if not was_editing:
+            layer.startEditing()
+        layer.changeAttributeValue(fid, idx, new_z)
+        if not was_editing:
+            layer.commitChanges()
+        self.canvas.refresh()
 

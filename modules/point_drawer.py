@@ -26,7 +26,7 @@ from qgis.core import (
 from PyQt5.QtCore import QVariant
 from .dynamic_input import DynamicInput
 from . import snap_utils
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_point_color_renderer
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_point_color_renderer, enable_feature_render_order
 
 
 _LAYER_NAME = "_points"
@@ -80,6 +80,7 @@ class PointDrawer(QgsMapTool):
         if "symbol"      not in existing: to_add.append(QgsField("symbol",      QVariant.String))
         if "symbol_size" not in existing: to_add.append(QgsField("symbol_size", QVariant.Double))
         if "symbol_svg"  not in existing: to_add.append(QgsField("symbol_svg",  QVariant.String))
+        if "z_index"     not in existing: to_add.append(QgsField("z_index",     QVariant.Int))
         if to_add:
             lyr.dataProvider().addAttributes(to_add)
             lyr.updateFields()
@@ -104,6 +105,7 @@ class PointDrawer(QgsMapTool):
 
     def _apply_point_style(self, lyr):
         apply_point_color_renderer(lyr)
+        enable_feature_render_order(lyr)
 
     def _create_layer(self):
         crs = QgsProject.instance().crs().authid()
@@ -115,6 +117,7 @@ class PointDrawer(QgsMapTool):
             QgsField("symbol",      QVariant.String),
             QgsField("symbol_size", QVariant.Double),
             QgsField("symbol_svg",  QVariant.String),
+            QgsField("z_index",     QVariant.Int),
         ])
         mem.updateFields()
         lyr = create_layer_in_gpkg(mem)
@@ -158,6 +161,9 @@ class PointDrawer(QgsMapTool):
             feat.setAttribute(sym_idx, "circle")
         if size_idx >= 0:
             feat.setAttribute(size_idx, 2.0)
+        zi_idx = self._layer.fields().indexOf("z_index")
+        if zi_idx >= 0:
+            feat.setAttribute(zi_idx, 1)
         self._layer.addFeature(feat)
         self._layer.triggerRepaint()
         self._log(f"\nPoint: {pt.x():.4f}, {pt.y():.4f}")

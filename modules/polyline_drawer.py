@@ -18,7 +18,7 @@ from qgis.gui import QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 
 from .dynamic_input import DynamicInput
-from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, polyline_attrs, connect_polyline_recalc, apply_polyline_color_renderer
+from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, polyline_attrs, connect_polyline_recalc, apply_polyline_color_renderer, enable_feature_render_order
 from . import snap_utils
 import math
 from . import crs_utils
@@ -161,6 +161,7 @@ class PolylineDrawer(QgsMapTool):
         if "color"          not in existing: to_add.append(QgsField("color",          QVariant.String))
         if "line_type"      not in existing: to_add.append(QgsField("line_type",      QVariant.String))
         if "line_thickness" not in existing: to_add.append(QgsField("line_thickness", QVariant.Double))
+        if "z_index"        not in existing: to_add.append(QgsField("z_index",        QVariant.Int))
         if to_add:
             layer.dataProvider().addAttributes(to_add)
             layer.updateFields()
@@ -168,6 +169,7 @@ class PolylineDrawer(QgsMapTool):
 
     def _apply_polyline_style(self, layer):
         apply_polyline_color_renderer(layer)
+        enable_feature_render_order(layer)
 
     def _create_polyline_layer(self):
         mem = QgsVectorLayer(
@@ -184,6 +186,7 @@ class PolylineDrawer(QgsMapTool):
             QgsField("color",          QVariant.String),
             QgsField("line_type",      QVariant.String),
             QgsField("line_thickness", QVariant.Double),
+            QgsField("z_index",        QVariant.Int),
         ])
         mem.updateFields()
 
@@ -215,6 +218,7 @@ class PolylineDrawer(QgsMapTool):
         feature.setAttribute("color",          LAYER_COLOR)
         feature.setAttribute("line_type",      "solid")
         feature.setAttribute("line_thickness", 0.4)
+        feature.setAttribute("z_index",        1)
 
         self.polyline_layer.addFeature(feature)
         self.polyline_layer.updateExtents()

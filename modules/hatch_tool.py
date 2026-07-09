@@ -32,6 +32,7 @@ from .layer_utils import (
     add_to_plugin_group,
     apply_hatch_renderer,
     create_layer_in_gpkg,
+    enable_feature_render_order,
     open_layer_from_gpkg,
 )
 
@@ -84,18 +85,36 @@ class HatchTool(QgsMapTool):
     # Layer
     # ------------------------------------------------------------------
 
+    def _ensure_hatch_fields(self, lyr):
+        existing = {f.name() for f in lyr.fields()}
+        to_add = []
+        if "fill_pattern" not in existing: to_add.append(QgsField("fill_pattern", QVariant.String))
+        if "element_size" not in existing: to_add.append(QgsField("element_size", QVariant.Double))
+        if "color"        not in existing: to_add.append(QgsField("color",        QVariant.String))
+        if "angle"        not in existing: to_add.append(QgsField("angle",        QVariant.Double))
+        if "opacity"      not in existing: to_add.append(QgsField("opacity",      QVariant.Double))
+        if "z_index"      not in existing: to_add.append(QgsField("z_index",      QVariant.Int))
+        if to_add:
+            lyr.dataProvider().addAttributes(to_add)
+            lyr.updateFields()
+
     def _get_or_create_layer(self):
         existing = QgsProject.instance().mapLayersByName(_LAYER_NAME)
         if existing:
             lyr = existing[0]
             if not lyr.isEditable():
                 lyr.startEditing()
+            self._ensure_hatch_fields(lyr)
+            apply_hatch_renderer(lyr)
+            enable_feature_render_order(lyr)
             return lyr
 
         lyr = open_layer_from_gpkg(_LAYER_NAME)
         if lyr and lyr.isValid():
+            self._ensure_hatch_fields(lyr)
             add_to_plugin_group(lyr)
             apply_hatch_renderer(lyr)
+            enable_feature_render_order(lyr)
             lyr.startEditing()
             return lyr
 
@@ -107,12 +126,14 @@ class HatchTool(QgsMapTool):
             QgsField("color",        QVariant.String),
             QgsField("angle",        QVariant.Double),
             QgsField("opacity",      QVariant.Double),
+            QgsField("z_index",      QVariant.Int),
         ])
         mem.updateFields()
 
         lyr = create_layer_in_gpkg(mem)
         add_to_plugin_group(lyr)
         apply_hatch_renderer(lyr)
+        enable_feature_render_order(lyr)
         lyr.startEditing()
         return lyr
 
@@ -222,6 +243,7 @@ class HatchTool(QgsMapTool):
         _set("color",        _DEFAULT_COLOR)
         _set("angle",        _DEFAULT_ANGLE)
         _set("opacity",      _DEFAULT_OPACITY)
+        _set("z_index",      1)
 
         lyr.addFeature(feat)
         lyr.updateExtents()

@@ -7,6 +7,7 @@ from qgis.core import (
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsCoordinateTransformContext,
+    QgsFeatureRequest,
     QgsGeometry,
     QgsPointXY,
     QgsFillSymbol,
@@ -27,6 +28,18 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsUnitTypes,
 )
+
+def enable_feature_render_order(layer):
+    """Sort features by z_index so higher values are drawn on top within the layer."""
+    renderer = layer.renderer()
+    if renderer is None:
+        return
+    order = QgsFeatureRequest.OrderBy([
+        QgsFeatureRequest.OrderByClause("z_index", True)
+    ])
+    renderer.setOrderBy(order)
+    renderer.setOrderByEnabled(True)
+
 
 def polyline_attrs(geom):
     """Return computed attribute dict for any polyline geometry.
