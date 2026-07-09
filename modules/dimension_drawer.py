@@ -14,6 +14,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsCoordinateReferenceSystem,
     QgsRectangle,
+    QgsUnitTypes,
 )
 from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
@@ -217,7 +218,8 @@ class DimensionDrawer(QgsMapTool):
         text_format = QgsTextFormat()
         text_format.setFont(_font)
         text_format.setColor(QColor(0, 0, 0))
-        text_format.setSize(10)
+        text_format.setSize(3)
+        text_format.setSizeUnit(QgsUnitTypes.RenderMapUnits)
         label_settings.setFormat(text_format)
 
         layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
