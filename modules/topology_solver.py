@@ -125,14 +125,21 @@ class TopologySolver(QgsMapToolIdentifyFeature):
 
             if event.button() == Qt.LeftButton:
                 point = self.toMapCoordinates(event.pos())
+
+                active_layer = self.iface.activeLayer()
+                if not active_layer:
+                    self.terminal_dock.commandOutputText += f'\nNo active layer selected in the Layers panel!'
+                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                    return
+
                 # Call identify from parent class
                 results = self.identify(
                     event.x(),
                     event.y(),
-                    [layer for layer in QgsProject.instance().mapLayers().values()],
+                    [active_layer],
                     QgsMapToolIdentifyFeature.TopDownAll
                 )
-                
+
                 # if the selected are greater htan 1 notify user.
                 if len(results)>1:
                     self.terminal_dock.commandOutputText += f'\nMore than 1 feature was selected...'

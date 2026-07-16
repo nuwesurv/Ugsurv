@@ -161,10 +161,12 @@ def _line_style_renderer(layer, default_color):
 
 def apply_circle_color_renderer(layer):
     _line_style_renderer(layer, "#E05C00")
+    enable_feature_render_order(layer)
 
 
 def apply_polyline_color_renderer(layer):
     _line_style_renderer(layer, "#E05C00")
+    enable_feature_render_order(layer)
 
 
 def apply_hatch_renderer(layer):
@@ -392,6 +394,7 @@ def apply_hatch_renderer(layer):
 
     layer.setRenderer(QgsRuleBasedRenderer(root))
     layer.setLegend(None)
+    enable_feature_render_order(layer)
 
 
 def apply_point_color_renderer(layer):
@@ -446,6 +449,7 @@ def apply_point_color_renderer(layer):
 
     layer.setRenderer(QgsRuleBasedRenderer(root))
     layer.setLegend(None)
+    enable_feature_render_order(layer)
 
 
 def apply_dimension_style(layer):
@@ -493,6 +497,7 @@ def apply_dimension_style(layer):
 
     layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
     layer.setLabelsEnabled(True)
+    enable_feature_render_order(layer)
     layer.triggerRepaint()
 
 
