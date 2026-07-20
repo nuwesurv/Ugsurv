@@ -528,7 +528,7 @@ def restore_no_legend_layers(*_):
         return
     for layer_node in group.findLayers():
         layer = layer_node.layer()
-        if layer:
+        if layer and layer.isValid():
             layer.setLegend(None)
 
 

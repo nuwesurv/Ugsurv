@@ -410,7 +410,7 @@ class Ugsurv:
             'BREAK', 'CHAMFER', 'EXPLODE', 'HATCH',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
-            'SPIKY', 'PTOVERLAP', 'IMPORT', 'PRINT', 'GAME',
+            'SPIKY', 'PTOVERLAP', 'SOLVETOPO', 'IMPORT', 'PRINT', 'GAME',
             # Terminal
             'HELP', 'CLEAR',
         ])
@@ -694,20 +694,20 @@ class Ugsurv:
             self.dlg.show()
 
         elif cmd in ('addgeom', 'ga'):
-            self.append_geom_dock = GeometryAppenderDock(self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.append_geom_dock)
+            self._show_dock('append_geom_dock',
+                            lambda: GeometryAppenderDock(self.iface.mainWindow()))
 
         elif cmd == 'crs':
-            self.crs_adjust_dock = CrsAdjustDock(self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.crs_adjust_dock)
+            self._show_dock('crs_adjust_dock',
+                            lambda: CrsAdjustDock(self.iface.mainWindow()))
 
         elif cmd in ('spiky', 'spk'):
-            self.spiky_detect_dock = SpikyGeomsDock(self.canvas, self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.spiky_detect_dock)
+            self._show_dock('spiky_detect_dock',
+                            lambda: SpikyGeomsDock(self.canvas, self.iface.mainWindow()))
 
         elif cmd in ('ptoverlap', 'pto', 'pt_overlap'):
-            self.overlap_detect_dock = OverlapPointsDock(self.canvas, self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.overlap_detect_dock)
+            self._show_dock('overlap_detect_dock',
+                            lambda: OverlapPointsDock(self.canvas, self.iface.mainWindow()))
 
         elif cmd in ('import', 'imp'):
             self.dlg = FileImportDialog(parent=self.iface.mainWindow())
@@ -718,8 +718,8 @@ class Ugsurv:
             self.dlg.show()
 
         elif cmd in ('solvetopo', 'st'):
-            self.solve_topo_dock = SolveTopologyDock(self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.solve_topo_dock)
+            self._show_dock('solve_topo_dock',
+                            lambda: SolveTopologyDock(self.iface.mainWindow()))
 
         elif cmd in ('game', 'gm'):
             self.global_map_tool.set_tool(Game1(self.canvas, self.terminal_dock))
@@ -730,6 +730,20 @@ class Ugsurv:
             
             
             
+    def _show_dock(self, attr, factory):
+        """Raise existing dock if alive, otherwise create one via factory() and add it."""
+        existing = getattr(self, attr, None)
+        if existing is not None:
+            try:
+                existing.show()
+                existing.raise_()
+                return
+            except RuntimeError:
+                pass  # underlying C++ object was deleted — recreate
+        dock = factory()
+        setattr(self, attr, dock)
+        self.iface.addDockWidget(Qt.LeftDockWidgetArea, dock)
+
     def destroyAllTools(self):
         # Remove global Esc shortcut
         try:
@@ -786,6 +800,13 @@ class Ugsurv:
         try:
             self.iface.removeDockWidget(self.append_geom_dock)
             self.append_geom_dock.deleteLater()
+        except:
+            pass
+
+        # Remove the solve topology dock
+        try:
+            self.iface.removeDockWidget(self.solve_topo_dock)
+            self.solve_topo_dock.deleteLater()
         except:
             pass
         
