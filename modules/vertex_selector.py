@@ -870,18 +870,17 @@ class VertexSelector(QgsMapTool):
         geom = feat.geometry()
         if geom.isEmpty():
             return
-        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+        gt = QgsWkbTypes.geometryType(geom.wkbType())
+        if gt not in (QgsWkbTypes.LineGeometry, QgsWkbTypes.PolygonGeometry):
             return
         _, _, vertex_after, _ = geom.closestSegmentWithContext(map_pt)
-        verts = self._geom_verts(geom)
-        pts = [vpt for _, vpt in verts]
-        pts.insert(vertex_after, map_pt)
+        new_geom = QgsGeometry(geom)
+        new_geom.insertVertex(map_pt.x(), map_pt.y(), vertex_after)
         if not lyr.isEditable():
             lyr.startEditing()
-        lyr.changeGeometry(fid, QgsGeometry.fromPolylineXY(pts))
+        lyr.changeGeometry(fid, new_geom)
         lyr.triggerRepaint()
         self._log(f"\nInserted vertex — drag or click to place  |  Esc / RMB to cancel")
-        # Grip the new vertex and immediately start moving it
         new_sv = _SelVtx(lyr, fid, vertex_after, map_pt)
         self._enter_gripped(new_sv)
         self._enter_moving()
@@ -1035,7 +1034,7 @@ class VertexSelector(QgsMapTool):
 
     def _update_closed_attrs(self, sv):
         """Recompute closed / area attributes after any geometry change on a polylines feature."""
-        if sv.layer.name() != "polylines":
+        if sv.layer.name() != "_polylines":
             return
         feat = sv.layer.getFeature(sv.fid)
         geom = feat.geometry()
