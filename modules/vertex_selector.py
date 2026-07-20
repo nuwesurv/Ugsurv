@@ -1525,10 +1525,16 @@ class VertexSelector(QgsMapTool):
     def canvasPressEvent(self, event):
         raw_pt = self.toMapCoordinates(event.pos())
 
-        # Right-click: cancel move (if moving) or show context menu
+        # Right-click: cancel move (if moving), finish extension (if extending), or show context menu
         if event.button() == Qt.RightButton:
             if self._state == _S_MOVING:
                 self._cancel_move()
+                return
+            if self._state == _S_GRIPPED and self._gripped_can_extend():
+                if self._move_band is not None:
+                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                self._snap_marker.setVisible(False)
+                self._enter_idle()
                 return
             sel_layer = None
             sel_fid   = None
@@ -1586,6 +1592,12 @@ class VertexSelector(QgsMapTool):
                 if self._move_band is not None:
                     self._move_band.reset(QgsWkbTypes.LineGeometry)
                 self._snap_marker.setVisible(False)
+                self._extend_line(sv.point)
+            elif sv and self._gripped_can_extend():
+                # Vertex on another feature clicked while extending — extend line to that point
+                self._snap_marker.setVisible(False)
+                if self._move_band is not None:
+                    self._move_band.reset(QgsWkbTypes.LineGeometry)
                 self._extend_line(sv.point)
             elif sv:
                 # Any vertex clicked (same or different feature) → grip it and move immediately
