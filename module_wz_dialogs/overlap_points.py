@@ -38,6 +38,7 @@ from qgis.core import (
     QgsPointXY,
     QgsProject,
     QgsCoordinateTransform,
+    QgsGeometry,
 )
 
 try:
@@ -128,7 +129,7 @@ class OverlapPointsDock(QDockWidget):
         self.status_label = QLabel("No search run yet.")
         layout.addWidget(self.status_label)
 
-        # Button row
+        # Button row – find
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         self.run_btn = QPushButton("Find Overlaps")
@@ -136,6 +137,19 @@ class OverlapPointsDock(QDockWidget):
         self.run_btn.clicked.connect(self.run_search)
         btn_row.addWidget(self.run_btn)
         layout.addLayout(btn_row)
+
+        # Button row – solve
+        solve_row = QHBoxLayout()
+        self.solve_selected_btn = QPushButton("Solve Selected")
+        self.solve_selected_btn.setFixedWidth(120)
+        self.solve_selected_btn.clicked.connect(self.solve_selected)
+        self.solve_all_btn = QPushButton("Solve All")
+        self.solve_all_btn.setFixedWidth(120)
+        self.solve_all_btn.clicked.connect(self.solve_all)
+        solve_row.addWidget(self.solve_selected_btn)
+        solve_row.addStretch()
+        solve_row.addWidget(self.solve_all_btn)
+        layout.addLayout(solve_row)
 
         self.setWidget(root)
 
@@ -150,13 +164,15 @@ class OverlapPointsDock(QDockWidget):
     def _clear_table(self):
         self.table.setRowCount(0)
 
-    def _append_row(self, feat_id, x, y):
+    def _append_row(self, feat_id, x, y, meta=None):
         row = self.table.rowCount()
         self.table.insertRow(row)
         values = [str(feat_id), f"{x:.4f}", f"{y:.4f}"]
         for col, val in enumerate(values):
             item = QTableWidgetItem(val)
             item.setTextAlignment(Qt.AlignCenter)
+            if col == self.COL_FID and meta is not None:
+                item.setData(Qt.UserRole, meta)
             self.table.setItem(row, col, item)
 
     # ------------------------------------------------------------------ #
@@ -243,22 +259,32 @@ class OverlapPointsDock(QDockWidget):
                 continue
 
             feat_id = feature.id()
+            was_multipart = geom.isMultipart()
 
-            if geom.isMultipart():
+            if was_multipart:
                 all_polygons = geom.asMultiPolygon()
             else:
                 all_polygons = [geom.asPolygon()]
 
-            for polygon in all_polygons:
-                for ring in polygon:
+            for poly_idx, polygon in enumerate(all_polygons):
+                for ring_idx, ring in enumerate(polygon):
                     if not ring or len(ring) < 3:
                         continue
 
                     coords = [(pt.x(), pt.y()) for pt in ring]
-                    pairs = self._find_overlaps(coords, tolerance)
+                    clusters = self._find_clusters(coords, tolerance)
 
-                    for pair in pairs:
-                        self._append_row(feat_id, pair["x"], pair["y"])
+                    for cluster in clusters:
+                        avg_x = float(np.mean([coords[i][0] for i in cluster]))
+                        avg_y = float(np.mean([coords[i][1] for i in cluster]))
+                        meta = {
+                            "feat_id": feat_id,
+                            "poly_idx": poly_idx,
+                            "ring_idx": ring_idx,
+                            "vtx_indices": cluster,
+                            "was_multipart": was_multipart,
+                        }
+                        self._append_row(feat_id, avg_x, avg_y, meta)
                         total_overlaps += 1
 
         self._set_status(
@@ -268,22 +294,141 @@ class OverlapPointsDock(QDockWidget):
         )
 
     # ------------------------------------------------------------------ #
+    #  Solve logic                                                         #
+    # ------------------------------------------------------------------ #
+
+    def solve_all(self):
+        """Remove the duplicate vertex for every overlap currently in the table."""
+        self._solve_rows(list(range(self.table.rowCount())))
+
+    def solve_selected(self):
+        """Remove the duplicate vertex only for the selected table row(s)."""
+        rows = [idx.row() for idx in self.table.selectionModel().selectedRows()]
+        if not rows:
+            self._set_status("Select a row first.", "red")
+            return
+        self._solve_rows(rows)
+
+    def _solve_rows(self, rows):
+        layer = self.layer_combo.currentLayer()
+        if not layer:
+            self._set_status("No layer selected!", "red")
+            return
+        if not rows:
+            return
+
+        from collections import defaultdict
+
+        # Collect clusters per (feat_id, poly_idx, ring_idx)
+        by_feat = defaultdict(lambda: defaultdict(list))
+        feat_was_multipart = {}
+
+        for row in rows:
+            item = self.table.item(row, self.COL_FID)
+            if not item:
+                continue
+            meta = item.data(Qt.UserRole)
+            if not meta:
+                continue
+            fid = meta["feat_id"]
+            key = (meta["poly_idx"], meta["ring_idx"])
+            by_feat[fid][key].append(meta["vtx_indices"])
+            feat_was_multipart[fid] = meta["was_multipart"]
+
+        if not by_feat:
+            self._set_status("No valid overlaps to solve.", "darkorange")
+            return
+
+        was_editing = layer.isEditable()
+        if not was_editing:
+            layer.startEditing()
+
+        solved = 0
+        for feat_id, ring_clusters in by_feat.items():
+            feature = layer.getFeature(feat_id)
+            geom = feature.geometry()
+            was_multipart = feat_was_multipart[feat_id]
+
+            if was_multipart:
+                all_polygons = geom.asMultiPolygon()
+            else:
+                all_polygons = [geom.asPolygon()]
+
+            for (poly_idx, ring_idx), cluster_list in ring_clusters.items():
+                ring = list(all_polygons[poly_idx][ring_idx])
+
+                # First pass: compute average and record what to replace / delete.
+                # Do NOT modify ring yet so indices stay valid across clusters.
+                replacements = {}   # index -> new QgsPointXY at average position
+                to_delete = set()   # indices to remove after replacements are set
+
+                for vtx_indices in cluster_list:
+                    # Ensure the ring stays a valid polygon (min 3 unique vertices)
+                    unique_remaining = (len(ring) - 1) - len(to_delete) - (len(vtx_indices) - 1)
+                    if unique_remaining < 3:
+                        continue
+
+                    avg_x = sum(ring[i].x() for i in vtx_indices) / len(vtx_indices)
+                    avg_y = sum(ring[i].y() for i in vtx_indices) / len(vtx_indices)
+                    avg_pt = QgsPointXY(avg_x, avg_y)
+
+                    i0 = vtx_indices[0]
+                    replacements[i0] = avg_pt
+                    to_delete.update(vtx_indices[1:])
+                    solved += 1
+
+                # Apply average positions
+                for idx, pt in replacements.items():
+                    ring[idx] = pt
+                    if idx == 0:
+                        ring[-1] = pt   # keep closing vertex in sync
+
+                # Remove extra vertices from the end toward the front
+                for idx in sorted(to_delete, reverse=True):
+                    if idx < len(ring) - 1:    # never touch the closing vertex slot
+                        del ring[idx]
+
+                all_polygons[poly_idx][ring_idx] = ring
+
+            if was_multipart:
+                new_geom = QgsGeometry.fromMultiPolygonXY(all_polygons)
+            else:
+                new_geom = QgsGeometry.fromPolygonXY(all_polygons[0])
+
+            layer.changeGeometry(feat_id, new_geom)
+
+        if not was_editing:
+            layer.commitChanges()
+
+        self.canvas.refresh()
+        self._set_status(f"Merged {solved} cluster(s) to average. Re-running search…", "green")
+        self.run_search()
+
+    # ------------------------------------------------------------------ #
     #  Geometry math                                                       #
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _find_overlaps(coords, tolerance):
+    def _find_clusters(coords, tolerance):
         """
-        Return a list of dicts for every pair of vertices in the ring whose
-        Euclidean distance is strictly below *tolerance*.
+        Group near-coincident vertices into clusters using union-find.
+
+        Two vertices are linked when their Euclidean distance is strictly below
+        *tolerance*.  Transitivity is handled automatically, so three vertices
+        that are each within tolerance of at least one other member end up in
+        the same cluster even if the first and last are farther than *tolerance*
+        apart.
 
         Parameters
         ----------
         coords    : list of (x, y) tuples — the ring's vertex sequence.
                     A closing duplicate (first == last) is stripped automatically.
         tolerance : float — distance limit in map units (exclusive upper bound).
+
+        Returns
+        -------
+        list of sorted lists of int — one entry per cluster of size >= 2.
         """
-        # Remove the closing duplicate so we don't always flag index 0 vs last
         if coords[0] == coords[-1]:
             coords = coords[:-1]
 
@@ -292,19 +437,26 @@ class OverlapPointsDock(QDockWidget):
             return []
 
         pts = np.array(coords, dtype=np.float64)
-        overlaps = []
+
+        parent = list(range(n))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
 
         for i in range(n):
             for j in range(i + 1, n):
                 diff = pts[i] - pts[j]
-                dist = np.sqrt(diff[0] ** 2 + diff[1] ** 2)
-                if dist < tolerance:
-                    overlaps.append({
-                        "vtx_a": i,
-                        "vtx_b": j,
-                        "x": round(coords[i][0], 4),
-                        "y": round(coords[i][1], 4),
-                        "dist": round(float(dist), 6),
-                    })
+                if np.sqrt(diff[0] ** 2 + diff[1] ** 2) < tolerance:
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[ri] = rj
 
-        return overlaps
+        groups = {}
+        for i in range(n):
+            root = find(i)
+            groups.setdefault(root, []).append(i)
+
+        return [sorted(members) for members in groups.values() if len(members) > 1]

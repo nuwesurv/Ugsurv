@@ -126,7 +126,7 @@ class ImportPrintDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle('Import Print')
         self.setMinimumWidth(1000)
-        self.setMinimumHeight(700)
+        self.setMinimumHeight(400)
         # self.setFixedWidth(400)
         self.terminal_dock = terminal_dock
         self.align_points = []   # store active alignment points

@@ -66,6 +66,7 @@ from .module_wz_dialogs.layout_importer import ImportPrintDialog
 from .module_wz_dialogs.file_importer import FileImportDialog
 from .module_wz_dialogs.append_geometry import GeometryAppenderDock
 from .module_wz_dialogs.crs_adjust import CrsAdjustDock
+from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
 from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
@@ -584,6 +585,7 @@ class Ugsurv:
                 "\n  CRS            Adjust CRS of selected features"
                 "\n  SPIKY   [SPK]  Detect spiky vertices"
                 "\n  PTOVERLAP[PTO] Detect overlapping boundary points"
+                "\n  SOLVETOPO[ST]  Solve topology against rivers/roads/land"
                 "\n  IMPORT  [IMP]  Import CSV, XLSX, DWG/DXF or PDF as a layer"
                 "\n  PRINT   [PR ]  Import & georeference a cadastral print"
                 "\n  GAME    [GM]   Total-station laser game"
@@ -714,6 +716,10 @@ class Ugsurv:
         elif cmd in ('print', 'pr'):
             self.dlg = ImportPrintDialog(terminal_dock=self.terminal_dock)
             self.dlg.show()
+
+        elif cmd in ('solvetopo', 'st'):
+            self.solve_topo_dock = SolveTopologyDock(self.iface.mainWindow())
+            self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.solve_topo_dock)
 
         elif cmd in ('game', 'gm'):
             self.global_map_tool.set_tool(Game1(self.canvas, self.terminal_dock))
