@@ -501,7 +501,7 @@ def apply_dimension_style(layer):
     layer.triggerRepaint()
 
 
-_DATA_DIR  = r"C:\UgSurv"
+_DATA_DIR  = os.path.join(os.path.expanduser("~"), "Desktop", "Ugsurv_features")
 _GPKG_PATH = os.path.join(_DATA_DIR, "ugsurv_layers.gpkg")
 _GROUP_NAME = "UgSurv"
 

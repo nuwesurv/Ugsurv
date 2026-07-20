@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout,
-    QTextEdit, QLineEdit, QSpacerItem, QSizePolicy,
+    QTextEdit, QLineEdit,
     QListWidget, QListWidgetItem,
 )
 from PyQt5.QtGui import QIcon, QTextCursor
@@ -17,11 +17,8 @@ class TerminalDialog(QDockWidget):
         icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
         self.setWindowIcon(QIcon(icon_path))
 
-        self.setAllowedAreas(
-            Qt.LeftDockWidgetArea |
-            Qt.RightDockWidgetArea |
-            Qt.BottomDockWidgetArea
-        )
+        self.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetClosable)
 
         container = QWidget()
         self._container = container          # kept for overlay positioning
@@ -37,9 +34,7 @@ class TerminalDialog(QDockWidget):
         self.commandDisplay.setStyleSheet("color: #5f5f5f;")
         self.commandDisplay.setMinimumHeight(30)
         self.commandDisplay.textChanged.connect(self.scrollUpcommandDisplay)
-        main_layout.addWidget(self.commandDisplay)
-
-        main_layout.addItem(QSpacerItem(0, 10, QSizePolicy.Minimum, QSizePolicy.Expanding))
+        main_layout.addWidget(self.commandDisplay, stretch=1)
 
         # ── State ────────────────────────────────────────────────────────
         self.commandOutputText = "Loading plugin 0.01ms...\nPlugin has been loaded 🧪 0.01ms..."

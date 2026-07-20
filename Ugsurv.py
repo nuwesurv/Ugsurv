@@ -260,6 +260,22 @@ class Ugsurv:
                 new_tool is self.global_map_tool
             )
 
+    def _on_plugin_button(self):
+        """Cursor-icon toolbar button: activate plugin if off, re-activate maptool if on."""
+        if not self.active:
+            self.run()
+        else:
+            self.activate_maptool()
+
+    def _on_terminal_visibility(self, visible):
+        """Deactivate the plugin when the terminal dock is closed/hidden."""
+        if not visible and self.active:
+            try:
+                self.terminal_dock.visibilityChanged.disconnect(self._on_terminal_visibility)
+            except Exception:
+                pass
+            self.run()
+
     # ------------------------------------------------------------------ snap
     @staticmethod
     def _make_snap_icon(active=True):
@@ -419,6 +435,7 @@ class Ugsurv:
         
         # Connect these functions to ui
         self.terminal_dock.command.returnPressed.connect(self.acceptInput)
+        self.terminal_dock.visibilityChanged.connect(self._on_terminal_visibility)
 
         # Global Esc shortcut — fires regardless of which widget has focus,
         # so Esc always cancels the active map tool even when the terminal is focused.
@@ -447,8 +464,13 @@ class Ugsurv:
 
         # Properties panel — shows/edits properties of the selected feature
         if hasattr(self, 'properties_dock') and self.properties_dock:
-            self.iface.removeDockWidget(self.properties_dock)
-            self.properties_dock.deleteLater()
+            try:
+                from PyQt5 import sip
+                if not sip.isdeleted(self.properties_dock):
+                    self.iface.removeDockWidget(self.properties_dock)
+                    self.properties_dock.deleteLater()
+            except Exception:
+                pass
         self.properties_dock = PropertiesDock(self.iface.mainWindow())
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
 
@@ -580,7 +602,6 @@ class Ugsurv:
                 "\n── Survey tools ──────────────────────"
                 "\n  TOPO    [TS]   Topology solver"
                 "\n  FIXG    [FG]   Fix geometry"
-                "\n  PARCEL  [PP]   Auto-plot parcels"
                 "\n  ADDGEOM [GA]   Add geometry to layer"
                 "\n  CRS            Adjust CRS of selected features"
                 "\n  SPIKY   [SPK]  Detect spiky vertices"
@@ -818,6 +839,10 @@ class Ugsurv:
             pass
 
         # Remove the terminal
+        try:
+            self.terminal_dock.visibilityChanged.disconnect(self._on_terminal_visibility)
+        except Exception:
+            pass
         try:
             self.iface.removeDockWidget(self.terminal_dock)
             self.terminal_dock.deleteLater()
