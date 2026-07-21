@@ -29,6 +29,7 @@ def solve_dependency_issues() -> list[str]:
         ("geopandas","geopandas"),
         ("shapely",  "shapely"),
         ("numpy",    "numpy"),
+        ("openpyxl", "openpyxl"),
     ]
 
     for module, package in dependencies:

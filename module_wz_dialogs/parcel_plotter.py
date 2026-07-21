@@ -27,7 +27,11 @@ import os
 from qgis.PyQt.QtCore import Qt
 import os.path
 from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
-from qgis.core import QgsProject, QgsVectorLayer, QgsField, QgsCoordinateReferenceSystem
+from qgis.PyQt.QtCore import QVariant
+from qgis.core import (
+    QgsProject, QgsVectorLayer, QgsField, QgsCoordinateReferenceSystem,
+    QgsFeature, QgsGeometry, QgsVectorFileWriter,
+)
 from qgis.gui import QgsProjectionSelectionWidget
 
 
@@ -43,6 +47,37 @@ try:
     import shapely as sh
 except Exception:
     print('Failed to find shapely module')
+
+
+_NORTH_EXACT = {'n', 'y', 'northing', 'northings', 'north', 'lat', 'latitude', 'ycoord', 'y_coord'}
+_NORTH_SUB   = ['northing', 'north', 'lat', 'ycoord']
+_EAST_EXACT  = {'e', 'x', 'easting', 'eastings', 'east', 'lon', 'longitude', 'xcoord', 'x_coord'}
+_EAST_SUB    = ['easting', 'east', 'lon', 'xcoord']
+_CODE_EXACT  = {'code', 'codes', 'parcel', 'lot', 'plot', 'block', 'id', 'no', 'num', 'number', 'desc', 'description'}
+_CODE_SUB    = ['code', 'parcel', 'lot', 'plot', 'block', 'number', 'desc']
+
+
+def _detect_columns(columns):
+    """Return best-guess column names for north, east, and code fields."""
+    norms = [(col, col.lower().replace('_', '').replace(' ', '').replace('-', ''))
+             for col in columns]
+
+    def _pick(exact_set, sub_list):
+        for col, n in norms:        # exact match has highest priority
+            if n in exact_set:
+                return col
+        for kw in sub_list:         # substring match, ordered by specificity
+            for col, n in norms:
+                if kw in n:
+                    return col
+        return None
+
+    return {
+        'north': _pick(_NORTH_EXACT, _NORTH_SUB),
+        'east':  _pick(_EAST_EXACT,  _EAST_SUB),
+        'code':  _pick(_CODE_EXACT,  _CODE_SUB),
+    }
+
 
 class ParcelPlotterDialog(QDialog):
     def __init__(self, parent = None):
@@ -154,15 +189,13 @@ class ParcelPlotterDialog(QDialog):
             self.eastings.addItems(columns)
             self.code.addItems(columns)
             
-            for col in columns:
-                if col.lower().count('no') > 0:
-                    self.northings.setCurrentText(col)
-                    
-                if col.lower().count('ea') > 0:
-                    self.eastings.setCurrentText(col)
-                    
-                if col.lower().count('co') > 0 or col.lower().count('d') > 0:
-                    self.code.setCurrentText(col)
+            detected = _detect_columns(columns)
+            if detected['north']:
+                self.northings.setCurrentText(detected['north'])
+            if detected['east']:
+                self.eastings.setCurrentText(detected['east'])
+            if detected['code']:
+                self.code.setCurrentText(detected['code'])
 
             self.response.setText(f'File selected: {filepath} 👍')
             self.filepath_store.setText(filepath)
@@ -227,11 +260,33 @@ class ParcelPlotterDialog(QDialog):
                 self.response.setText("No valid polygons created")
                 return
 
-            epsg_code = self.crsWidget.crs().postgisSrid() 
-            new_gdf = new_gdf.set_crs(epsg=epsg_code)
-            # new_gdf = new_gdf.set_crs(epsg=32636)
+            crs = self.crsWidget.crs()
+            epsg_code = crs.postgisSrid()
+
+            mem_layer = QgsVectorLayer(f'Polygon?crs=EPSG:{epsg_code}', filename, 'memory')
+            prov = mem_layer.dataProvider()
+            prov.addAttributes([QgsField(code, QVariant.String)])
+            mem_layer.updateFields()
+            feats = []
+            for _, row in new_gdf.iterrows():
+                feat = QgsFeature()
+                feat.setGeometry(QgsGeometry.fromWkt(row['geometry'].wkt))
+                feat.setAttributes([str(row[code])])
+                feats.append(feat)
+            prov.addFeatures(feats)
+            mem_layer.updateExtents()
+
             new_layer_path = os.path.splitext(filepath)[0] + '.gpkg'
-            new_gdf.to_file(new_layer_path, driver='GPKG')
+            options = QgsVectorFileWriter.SaveVectorOptions()
+            options.driverName = 'GPKG'
+            options.fileEncoding = 'UTF-8'
+            error, msg = QgsVectorFileWriter.writeAsVectorFormatV2(
+                mem_layer, new_layer_path,
+                QgsProject.instance().transformContext(), options
+            )
+            if error != QgsVectorFileWriter.NoError:
+                self.response.setText(f"Failed to write file: {msg}")
+                return
 
             # Load layer in QGIS
             layer_name = f'{filename}'
