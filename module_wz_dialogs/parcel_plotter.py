@@ -284,7 +284,7 @@ class ParcelPlotterDialog(QDialog):
                 mem_layer, new_layer_path,
                 QgsProject.instance().transformContext(), options
             )
-            if error != QgsVectorFileWriter.NoError:
+            if error != QgsVectorFileWriter.WriterError.NoError:
                 self.response.setText(f"Failed to write file: {msg}")
                 return
 
