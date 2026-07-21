@@ -1,10 +1,6 @@
 import contextlib
-import glob
 import os
 import csv
-import shutil
-import subprocess
-import tempfile
 
 from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtWidgets import (
@@ -19,18 +15,16 @@ from qgis.core import (
 )
 from qgis.gui import QgsProjectionSelectionWidget
 
-from ..modules.layer_utils import add_to_plugin_group
+from ..modules.layer_utils import add_to_plugin_group, create_layer_in_gpkg, apply_point_color_renderer
 
 
 class FileImportDialog(QDialog):
-    """Import CSV, XLSX, DWG/DXF, or PDF files as QGIS layers."""
+    """Import CSV, XLSX, or PDF files as QGIS layers."""
 
     _SUPPORTED = {
         '.csv':  'csv',
         '.xlsx': 'xlsx',
         '.xls':  'xlsx',
-        '.dwg':  'dwg',
-        '.dxf':  'dwg',
         '.pdf':  'pdf',
     }
 
@@ -88,18 +82,7 @@ class FileImportDialog(QDialog):
         csv_grid.addWidget(self._csv_crs, 2, 1)
         self._stack.addWidget(csv_widget)
 
-        # Page 2 — DWG / DXF
-        dwg_widget = QWidget()
-        dwg_layout = QVBoxLayout(dwg_widget)
-        dwg_layout.setContentsMargins(0, 0, 0, 0)
-        dwg_layout.addWidget(QLabel(
-            'DWG/DXF will be imported as a vector layer via OGR.\n'
-            'DXF is supported on all platforms; DWG requires the ODA/OpenDWG library.'
-        ))
-        dwg_layout.addStretch()
-        self._stack.addWidget(dwg_widget)
-
-        # Page 3 — PDF
+        # Page 2 — PDF
         pdf_widget = QWidget()
         pdf_layout = QVBoxLayout(pdf_widget)
         pdf_layout.setContentsMargins(0, 0, 0, 0)
@@ -157,11 +140,8 @@ class FileImportDialog(QDialog):
             self._load_xlsx_headers(path)
             self._stack.setCurrentIndex(1)
             self._import_btn.setEnabled(True)
-        elif self._fmt == 'dwg':
-            self._stack.setCurrentIndex(2)
-            self._import_btn.setEnabled(True)
         elif self._fmt == 'pdf':
-            self._stack.setCurrentIndex(3)
+            self._stack.setCurrentIndex(2)
             self._import_btn.setEnabled(True)
         else:
             self._stack.setCurrentIndex(0)
@@ -243,8 +223,6 @@ class FileImportDialog(QDialog):
         name = self._name_edit.text().strip() or 'imported'
         if self._fmt in ('csv', 'xlsx'):
             self._import_tabular(name)
-        elif self._fmt == 'dwg':
-            self._import_dwg(name)
         elif self._fmt == 'pdf':
             self._import_pdf(name)
 
@@ -299,7 +277,9 @@ class FileImportDialog(QDialog):
                 f'No valid rows found — check that "{x_col}" and "{y_col}" contain numbers.')
             return
 
-        add_to_plugin_group(mem_lyr)
+        lyr = create_layer_in_gpkg(mem_lyr)
+        apply_point_color_renderer(lyr)
+        add_to_plugin_group(lyr)
         QMessageBox.information(self, 'Done', f'Imported {ok} points as "{name}".')
 
     def _read_csv_rows(self):
@@ -328,8 +308,7 @@ class FileImportDialog(QDialog):
             return result
         except ImportError:
             pass
-        # OGR fallback
-        try:
+        with contextlib.suppress(Exception):
             from osgeo import ogr
             ds = ogr.Open(self._file_path)
             if ds:
@@ -341,161 +320,8 @@ class FileImportDialog(QDialog):
                         {n: str(feat.GetField(n) or '') for n in names}
                         for feat in lyr
                     ]
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', str(e))
-            return None
         QMessageBox.critical(self, 'Error', 'Cannot read XLSX — install openpyxl.')
         return None
-
-    # ------------------------------------------------------------------
-    # DWG / DXF → vector layer
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # ODA File Converter helpers (DWG → DXF)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _find_oda_converter():
-        """Return the path to ODAFileConverter.exe, or None if not installed."""
-        patterns = [
-            r'C:\Program Files\ODA\ODAFileConverter*\ODAFileConverter.exe',
-            r'C:\Program Files (x86)\ODA\ODAFileConverter*\ODAFileConverter.exe',
-            r'C:\Program Files\Teigha\TeighaFileConverter*\TeighaFileConverter.exe',
-            r'C:\Program Files (x86)\Teigha\TeighaFileConverter*\TeighaFileConverter.exe',
-        ]
-        for pat in patterns:
-            hits = sorted(glob.glob(pat))
-            if hits:
-                return hits[-1]  # newest version
-        return shutil.which('ODAFileConverter') or shutil.which('TeighaFileConverter')
-
-    def _dwg_to_dxf(self, dwg_path):
-        """Convert a DWG file to DXF beside the original; return the DXF path or None."""
-        oda = self._find_oda_converter()
-        if not oda:
-            return None
-
-        tmp_in  = tempfile.mkdtemp(prefix='ugsurv_in_')
-        tmp_out = tempfile.mkdtemp(prefix='ugsurv_out_')
-        try:
-            shutil.copy2(dwg_path, os.path.join(tmp_in, os.path.basename(dwg_path)))
-            subprocess.run(
-                [oda, tmp_in, tmp_out, 'ACAD2018', 'DXF', '0', '1'],
-                timeout=60, check=False,
-            )
-            base    = os.path.splitext(os.path.basename(dwg_path))[0]
-            dxf_out = os.path.join(tmp_out, base + '.dxf')
-            if os.path.exists(dxf_out):
-                dest = os.path.join(os.path.dirname(dwg_path), base + '.dxf')
-                shutil.copy2(dxf_out, dest)
-                return dest
-        except Exception:
-            pass
-        finally:
-            shutil.rmtree(tmp_in,  ignore_errors=True)
-            shutil.rmtree(tmp_out, ignore_errors=True)
-        return None
-
-    def _dwg_fallback_dialog(self, dwg_path):
-        """Show an error/options dialog when DWG auto-conversion fails.
-
-        Returns a DXF path the user browses to, or None to abort.
-        """
-        oda_found = self._find_oda_converter() is not None
-
-        msg = QMessageBox(self)
-        msg.setWindowTitle('Cannot open DWG')
-        msg.setIcon(QMessageBox.Warning)
-
-        if oda_found:
-            msg.setText(
-                'ODA File Converter was found but the conversion failed.\n'
-                'The DWG file may be corrupt or use an unsupported version.\n\n'
-                'Convert the file manually to DXF, then click "Browse for DXF".'
-            )
-        else:
-            msg.setText(
-                'DWG files need the free ODA File Converter to open automatically.\n\n'
-                'Option A — Install ODA File Converter, then retry:\n'
-                'opendesign.com/guestfiles/oda_file_converter\n\n'
-                'Option B — Convert the DWG to DXF using any CAD tool\n'
-                '(FreeCAD, LibreCAD, AutoCAD, online converter, etc.),\n'
-                'then click "Browse for DXF" below.'
-            )
-
-        browse_btn = msg.addButton('Browse for DXF…', QMessageBox.AcceptRole)
-        msg.addButton(QMessageBox.Cancel)
-        msg.exec_()
-
-        if msg.clickedButton() != browse_btn:
-            return None
-
-        dxf_path, _ = QFileDialog.getOpenFileName(
-            self, 'Select the DXF version of the drawing',
-            os.path.dirname(dwg_path),
-            'DXF files (*.dxf)',
-        )
-        return dxf_path or None
-
-    # ------------------------------------------------------------------
-    # DWG / DXF → vector layer
-    # ------------------------------------------------------------------
-
-    def _import_dwg(self, name):
-        path = self._file_path
-        ext  = os.path.splitext(path)[1].lower()
-
-        # 1. Try opening directly — works when GDAL includes libopencad (open-source
-        #    DWG reader built into many QGIS/OSGeo4W distributions).
-        probe = QgsVectorLayer(path, name, 'ogr')
-
-        if not probe.isValid() and ext == '.dwg':
-            # 2. libopencad unavailable or version unsupported — try ODA File Converter.
-            dxf = self._dwg_to_dxf(path)
-            if dxf:
-                path  = dxf
-                probe = QgsVectorLayer(path, name, 'ogr')
-            else:
-                # 3. Neither worked — let user browse for a pre-converted DXF.
-                path = self._dwg_fallback_dialog(path)
-                if not path:
-                    return
-                probe = QgsVectorLayer(path, name, 'ogr')
-
-        if not probe.isValid():
-            QMessageBox.critical(self, 'Error',
-                f'Could not open "{os.path.basename(path)}".')
-            return
-
-        # DXF files expose multiple OGR sublayers — load each non-empty one.
-        SEP = '!!::!!'
-        sublayers = probe.dataProvider().subLayers()
-        if not sublayers:
-            add_to_plugin_group(probe)
-            QMessageBox.information(self, 'Done', f'Loaded "{name}".')
-            return
-
-        loaded = 0
-        for sl in sublayers:
-            parts = sl.split(SEP)
-            if len(parts) < 3:
-                continue
-            sub_name, feat_count = parts[1], parts[2]
-            if feat_count.isdigit() and int(feat_count) == 0:
-                continue
-            sub_lyr = QgsVectorLayer(f'{path}|layername={sub_name}',
-                                     f'{name} — {sub_name}', 'ogr')
-            if sub_lyr.isValid():
-                add_to_plugin_group(sub_lyr)
-                loaded += 1
-
-        if loaded == 0:
-            add_to_plugin_group(probe)
-            loaded = 1
-
-        QMessageBox.information(self, 'Done',
-            f'Loaded {loaded} layer(s) from "{os.path.basename(path)}".')
 
     # ------------------------------------------------------------------
     # PDF → raster layer
