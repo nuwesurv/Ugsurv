@@ -22,11 +22,12 @@
  ***************************************************************************/
 """
 
+import contextlib
 import os
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QFont, QColor
-from PyQt5.QtWidgets import (
+from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtGui import QIcon, QFont, QColor
+from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTableWidget, QPushButton, QTableWidgetItem,
     QSpacerItem, QSizePolicy, QDoubleSpinBox
@@ -116,8 +117,8 @@ class OverlapPointsDock(QDockWidget):
         self.table.setColumnCount(len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setRowCount(0)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.setColumnWidth(self.COL_FID, 55)
         self.table.setColumnWidth(self.COL_X,   95)
@@ -170,9 +171,9 @@ class OverlapPointsDock(QDockWidget):
         values = [str(feat_id), f"{x:.4f}", f"{y:.4f}"]
         for col, val in enumerate(values):
             item = QTableWidgetItem(val)
-            item.setTextAlignment(Qt.AlignCenter)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if col == self.COL_FID and meta is not None:
-                item.setData(Qt.UserRole, meta)
+                item.setData(Qt.ItemDataRole.UserRole, meta)
             self.table.setItem(row, col, item)
 
     # ------------------------------------------------------------------ #
@@ -212,7 +213,7 @@ class OverlapPointsDock(QDockWidget):
         marker.setCenter(point)
         marker.setColor(QColor(220, 30, 30))
         marker.setFillColor(QColor(220, 30, 30, 80))
-        marker.setIconType(QgsVertexMarker.ICON_CROSS)
+        marker.setIconType(QgsVertexMarker.IconType.ICON_CROSS)
         marker.setIconSize(16)
         marker.setPenWidth(3)
 
@@ -222,10 +223,8 @@ class OverlapPointsDock(QDockWidget):
 
     def _remove_active_marker(self):
         if self._active_marker is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(self._active_marker)
-            except Exception:
-                pass
             self._active_marker = None
 
     # ------------------------------------------------------------------ #
@@ -246,7 +245,7 @@ class OverlapPointsDock(QDockWidget):
             self._set_status("No layer selected!", "red")
             return
 
-        if layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+        if layer.geometryType() != QgsWkbTypes.GeometryType.PolygonGeometry:
             self._set_status("Selected layer must be a polygon layer.", "red")
             return
 
@@ -327,7 +326,7 @@ class OverlapPointsDock(QDockWidget):
             item = self.table.item(row, self.COL_FID)
             if not item:
                 continue
-            meta = item.data(Qt.UserRole)
+            meta = item.data(Qt.ItemDataRole.UserRole)
             if not meta:
                 continue
             fid = meta["feat_id"]

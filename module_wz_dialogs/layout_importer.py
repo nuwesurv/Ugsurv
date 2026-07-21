@@ -24,7 +24,7 @@
 
 import os
 from qgis.PyQt.QtGui import QPixmap, QFont
-from PyQt5.QtCore import Qt
+from qgis.PyQt.QtCore import Qt
 import qgis
 from qgis.PyQt.QtWidgets import (
                             QGroupBox, 
@@ -52,10 +52,9 @@ import math
 from osgeo import gdal, osr
 from qgis.gui import QgsProjectionSelectionWidget
 from qgis.core import QgsCoordinateReferenceSystem
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QTextEdit
-from PyQt5.QtGui import QFont, QIcon, QPainter, QColor
-from PyQt5.QtCore import QSize
+from qgis.PyQt.QtCore import pyqtSignal, QSize
+from qgis.PyQt.QtWidgets import QWidget
+from qgis.PyQt.QtGui import QIcon, QPainter, QColor
 
 # import fitz
 import tempfile
@@ -66,11 +65,11 @@ from io import BytesIO
 
 try:
     import fitz
-except:
+except Exception:
     print('Failed to find fitz module')
 try:
     from PIL import Image
-except:
+except Exception:
     print('Failed to find Pillow module')
 
 
@@ -83,10 +82,10 @@ class ZoomableView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setCursor(Qt.CrossCursor) # set the cursor to become a cross
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setCursor(Qt.CursorShape.CrossCursor) # set the cursor to become a cross
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
     def wheelEvent(self, event):
         zoomFactor = 1.25
@@ -97,7 +96,7 @@ class ZoomableView(QGraphicsView):
             self.scale(1 / zoomFactor, 1 / zoomFactor)
             
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             # Convert mouse pos to scene coords
             scene_pos = self.mapToScene(event.pos())
 
@@ -163,7 +162,7 @@ class ImportPrintDialog(QDialog):
 
         # self.pixmap = QPixmap(r"C:\Users\Nuwe Surv\Desktop\progs\grid_detect\image.png")
         # self.pixmap_item = self.scene.addPixmap(self.pixmap)
-        # self.pixmap_item.setCursor(Qt.CrossCursor)
+        # self.pixmap_item.setCursor(Qt.CursorShape.CrossCursor)
         self.view.clicked.connect(self.add_align_point)
 
         self.templayout.addWidget(self.view)
@@ -171,8 +170,8 @@ class ImportPrintDialog(QDialog):
 
         # Add the next and prev pages.
         self.buttongrouper1 = QHBoxLayout()
-        self.hspacer1 = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.hspacer2 = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.hspacer1 = QSpacerItem(40, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.hspacer2 = QSpacerItem(40, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.prevbutton = QPushButton('<< Prev')
         self.prevbutton.setFixedWidth(100)
         
@@ -194,7 +193,7 @@ class ImportPrintDialog(QDialog):
 
         # Add the close and run buttons.
         self.buttongrouper2 = QHBoxLayout()
-        self.hspacer3 = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.hspacer3 = QSpacerItem(40, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.plotbutton = QPushButton('Align print')
         self.plotbutton.setFixedWidth(100)
 
@@ -223,7 +222,7 @@ class ImportPrintDialog(QDialog):
 
         self.pixmap = QPixmap(self.image_holder[self.choosen_pagenumber])
         self.pixmap_item = self.scene.addPixmap(self.pixmap)
-        self.pixmap_item.setCursor(Qt.CrossCursor)
+        self.pixmap_item.setCursor(Qt.CursorShape.CrossCursor)
 
         # ✅ update label
         total = len(self.image_holder)
@@ -506,7 +505,7 @@ class ImportPrintDialog(QDialog):
 
         # Use system trash icon
         delete_btn.setIcon(self.style().standardIcon(QPushButton().style().SP_TrashIcon))
-        delete_btn.setCursor(Qt.PointingHandCursor)
+        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         
         delete_btn.setStyleSheet("""
                 QPushButton {

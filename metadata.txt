@@ -6,7 +6,7 @@
 name=Ugsurv
 qgisMinimumVersion=3.0
 description=General purpose plugin for Uganda survey workflows.
-version=0.3
+version=0.5
 author=Nuwe Surv
 email=nuwesurv@gmail.com
 

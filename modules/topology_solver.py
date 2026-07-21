@@ -30,22 +30,22 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         
         # Create rubber bands
         # Style the rubberband
-        self.rubber_band1 = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+        self.rubber_band1 = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band1.setColor(QColor(255, 0, 0))  # Green
         self.rubber_band1.setWidth(2)
-        self.rubber_band1.setLineStyle(Qt.DashLine)
+        self.rubber_band1.setLineStyle(Qt.PenStyle.DashLine)
         self.rubber_band1.setFillColor(QColor(255, 0, 0, 10))
         
         # Style the rubberband
-        self.rubber_band2 = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+        self.rubber_band2 = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band2.setColor(QColor(0, 0, 255))  # Blue
         self.rubber_band2.setWidth(2)
-        self.rubber_band2.setLineStyle(Qt.DashLine)
+        self.rubber_band2.setLineStyle(Qt.PenStyle.DashLine)
         self.rubber_band2.setFillColor(QColor(0, 0, 255, 10))
         
         
     def showRubberBandPolygon(self, geometry, rubber_band):
-        rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+        rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         rubber_band.addGeometry(geometry, None)
         rubber_band.show()
         
@@ -63,8 +63,8 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             self.terminal_dock.command.setFocus()
 
         # Remove rubberbands
-        self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
-        self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)
+        self.rubber_band1.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.rubber_band2.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         
         # Clean variables
         self.cursor_points.clear()
@@ -80,7 +80,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         super().deactivate()
         
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             self.deactivate()
             
             
@@ -104,13 +104,13 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         
     def canvasPressEvent(self, event):
         try:
-            if event.button() == Qt.RightButton:
+            if event.button() == Qt.MouseButton.RightButton:
                 self.solveTopology()
                 # self.solveTopology()
                 
                 # Reset the rubberbands
-                self.rubber_band1.reset(QgsWkbTypes.PolygonGeometry)
-                self.rubber_band2.reset(QgsWkbTypes.PolygonGeometry)
+                self.rubber_band1.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+                self.rubber_band2.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
                 
                 # Clean variables
                 self.cursor_points.clear()
@@ -123,7 +123,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                 return
 
 
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.MouseButton.LeftButton:
                 point = self.toMapCoordinates(event.pos())
 
                 active_layer = self.iface.activeLayer()
@@ -137,7 +137,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                     event.x(),
                     event.y(),
                     [active_layer],
-                    QgsMapToolIdentifyFeature.TopDownAll
+                    QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll
                 )
 
                 # if the selected are greater htan 1 notify user.

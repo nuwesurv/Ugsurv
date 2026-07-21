@@ -21,6 +21,8 @@ this tool activates (typing 'cp' while standing on a parcel), step 1 is
 skipped and the tool opens directly at step 2.
 """
 
+import contextlib
+
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
@@ -87,7 +89,7 @@ class CopyTool(QgsMapTool):
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.hide()
 
         self._dinput = DynamicInput(canvas, terminal_dock, [
@@ -106,15 +108,13 @@ class CopyTool(QgsMapTool):
         band.setFillColor(fill_color)
         band.setWidth(width)
         if dashed:
-            band.setLineStyle(Qt.DashLine)
+            band.setLineStyle(Qt.PenStyle.DashLine)
         return band
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _log(self, msg):
         self.terminal_dock.commandOutputText += msg
@@ -181,7 +181,7 @@ class CopyTool(QgsMapTool):
         return (id(layer), fid)
 
     def _existing_keys(self):
-        return [self._sel_key(l, f) for l, f, _ in self._sel_features]
+        return [self._sel_key(lyr, f) for lyr, f, _ in self._sel_features]
 
     def _add_to_selection(self, layer, fid, geom):
         if self._sel_key(layer, fid) in self._existing_keys():
@@ -425,9 +425,9 @@ class CopyTool(QgsMapTool):
 
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
-        shift  = bool(event.modifiers() & Qt.ShiftModifier)
+        shift  = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
-        if event.button() == Qt.RightButton:
+        if event.button() == Qt.MouseButton.RightButton:
             if self._state == _ST_SELECT:
                 if self._sel_features:
                     self._enter_base()
@@ -443,7 +443,7 @@ class CopyTool(QgsMapTool):
                 self._log("\nCopy cancelled")
             return
 
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
         if self._state == _ST_SELECT:
@@ -483,14 +483,14 @@ class CopyTool(QgsMapTool):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             if self._state != _ST_SELECT:
                 self._reset()
                 self._log("\nCopy cancelled")
             else:
                 self._hint.hide()
                 self.deactivate()
-        elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if self._state == _ST_SELECT:
                 if self._sel_features:
                     self._enter_base()

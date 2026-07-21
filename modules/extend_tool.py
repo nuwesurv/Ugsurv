@@ -15,6 +15,7 @@ Two-phase workflow:
       Esc     → cancel without modifying anything.
 """
 
+import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
@@ -85,7 +86,7 @@ class ExtendTool(QgsMapTool):
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.hide()
 
     # ------------------------------------------------------------------
@@ -109,19 +110,17 @@ class ExtendTool(QgsMapTool):
         self._hint.raise_()
 
     def _make_band(self, color, width=2, dashed=False):
-        band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
+        band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.LineGeometry)
         band.setColor(color)
         band.setWidth(width)
         if dashed:
-            band.setLineStyle(Qt.DashLine)
+            band.setLineStyle(Qt.PenStyle.DashLine)
         return band
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _log(self, msg):
         self.terminal_dock.commandOutputText += msg
@@ -135,7 +134,7 @@ class ExtendTool(QgsMapTool):
             lyr for lyr in QgsProject.instance().mapLayers().values()
             if isinstance(lyr, QgsVectorLayer)
             and lyr.isSpatial()
-            and QgsWkbTypes.geometryType(lyr.wkbType()) == QgsWkbTypes.LineGeometry
+            and QgsWkbTypes.geometryType(lyr.wkbType()) == QgsWkbTypes.GeometryType.LineGeometry
         ]
 
     def _find_line_near(self, map_pt):
@@ -213,13 +212,13 @@ class ExtendTool(QgsMapTool):
                 continue
             gt = QgsWkbTypes.geometryType(inter.wkbType())
             candidates = []
-            if gt == QgsWkbTypes.PointGeometry:
+            if gt == QgsWkbTypes.GeometryType.PointGeometry:
                 if inter.isMultipart():
                     candidates = [QgsPointXY(p.x(), p.y()) for p in inter.asMultiPoint()]
                 else:
                     p = inter.asPoint()
                     candidates = [QgsPointXY(p.x(), p.y())]
-            elif gt == QgsWkbTypes.LineGeometry:
+            elif gt == QgsWkbTypes.GeometryType.LineGeometry:
                 # Collinear overlap — take both endpoints
                 if inter.isMultipart():
                     for part in inter.asMultiPolyline():
@@ -244,7 +243,7 @@ class ExtendTool(QgsMapTool):
 
     def _update_boundary(self, layer, feat, shift=False):
         key  = (id(layer), feat.id())
-        keys = [(id(l), fid) for l, fid in self._boundary_edges]
+        keys = [(id(lyr), fid) for lyr, fid in self._boundary_edges]
         if shift:
             if key in keys:
                 idx = keys.index(key)
@@ -291,7 +290,7 @@ class ExtendTool(QgsMapTool):
             return
 
         key      = self._pending_key(layer, feat.id(), ep_idx)
-        existing = [self._pending_key(l, fid, ei) for l, fid, ei, _, _ in self._pending]
+        existing = [self._pending_key(lyr, fid, ei) for lyr, fid, ei, _, _ in self._pending]
 
         if shift:
             if key in existing:
@@ -467,17 +466,17 @@ class ExtendTool(QgsMapTool):
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
 
-        if event.button() == Qt.RightButton:
+        if event.button() == Qt.MouseButton.RightButton:
             if self._state == _ST_SELECT:
                 self._advance_to_extend()
             else:
                 self._finish()
             return
 
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        shift = bool(event.modifiers() & Qt.ShiftModifier)
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if self._state == _ST_SELECT:
             layer, feat = self._find_line_near(map_pt)
@@ -496,9 +495,9 @@ class ExtendTool(QgsMapTool):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             self.deactivate()
-        elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if self._state == _ST_SELECT:
                 self._advance_to_extend()
             else:

@@ -1,4 +1,4 @@
-﻿from qgis.gui import QgsMapTool, QgsRubberBand
+﻿from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsVectorLayer,
@@ -13,7 +13,6 @@ from qgis.core import (
 )
 from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
-from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QColor
 from .dynamic_input import DynamicInput
 from .layer_utils import add_to_plugin_group, open_layer_from_gpkg, create_layer_in_gpkg, apply_dimension_style, enable_feature_render_order

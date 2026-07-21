@@ -10,6 +10,8 @@ Attributes are copied to every resulting feature.
 Repeat for more features.  Enter / RMB / Esc → exit.
 """
 
+import contextlib
+
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
@@ -50,14 +52,14 @@ class ExplodeTool(QgsMapTool):
         self.terminal_dock = terminal_dock
         self._maptool      = None
 
-        self._hover_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
+        self._hover_band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.LineGeometry)
         self._hover_band.setColor(_C_HOVER)
         self._hover_band.setWidth(3)
         self._hover_band.setVisible(False)
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.hide()
 
     # ------------------------------------------------------------------
@@ -94,10 +96,8 @@ class ExplodeTool(QgsMapTool):
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _show_hint(self, screen_pos):
         self._hint.setText("Click feature to explode  (Enter / RMB = exit)")
@@ -132,12 +132,12 @@ class ExplodeTool(QgsMapTool):
             lyr.startEditing()
 
         if geom.isMultipart():
-            if gt == QgsWkbTypes.PointGeometry:
+            if gt == QgsWkbTypes.GeometryType.PointGeometry:
                 parts = [QgsGeometry.fromPointXY(QgsPointXY(p.x(), p.y()))
                          for p in geom.asMultiPoint()]
-            elif gt == QgsWkbTypes.LineGeometry:
+            elif gt == QgsWkbTypes.GeometryType.LineGeometry:
                 parts = [QgsGeometry.fromPolylineXY(p) for p in geom.asMultiPolyline()]
-            elif gt == QgsWkbTypes.PolygonGeometry:
+            elif gt == QgsWkbTypes.GeometryType.PolygonGeometry:
                 parts = [QgsGeometry.fromPolygonXY(p) for p in geom.asMultiPolygon()]
             else:
                 self._log("\nUnknown geometry type — cannot explode")
@@ -160,7 +160,7 @@ class ExplodeTool(QgsMapTool):
                 f"  into {len(parts)} single-part features"
             )
 
-        elif gt == QgsWkbTypes.LineGeometry:
+        elif gt == QgsWkbTypes.GeometryType.LineGeometry:
             pts = geom.asPolyline()
             if len(pts) < 2:
                 self._log("\nLine has fewer than 2 vertices")
@@ -224,17 +224,17 @@ class ExplodeTool(QgsMapTool):
         self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.RightButton:
+        if event.button() == Qt.MouseButton.RightButton:
             self.deactivate()
             return
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         self._apply_explode(self.toMapCoordinates(event.pos()))
         self.canvas.setFocus()
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             self.deactivate()
-        elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             self.deactivate()

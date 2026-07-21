@@ -10,6 +10,8 @@ Workflow
    Enter / RMB / Esc  → exit.
 """
 
+import contextlib
+
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from . import snap_utils
 from qgis.PyQt.QtCore import Qt, QPoint
@@ -102,10 +104,8 @@ class BreakTool(QgsMapTool):
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _show_hint(self, screen_pos):
         self._hint.setText("Click line to break  (Enter / RMB = exit)")

@@ -14,6 +14,7 @@ Workflow
    Repeat step 2 to keep creating parallel copies of the same line.
 """
 
+import contextlib
 import math
 
 from .layer_utils import polyline_attrs
@@ -125,10 +126,8 @@ class OffsetTool(QgsMapTool):
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _log(self, msg):
         self.terminal_dock.commandOutputText += msg

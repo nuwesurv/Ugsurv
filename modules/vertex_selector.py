@@ -25,6 +25,7 @@ State machine
     └──[click vertex]───────┘                    [click elsewhere]                 [Esc / RMB]
                                                       IDLE ◄──[commit click]────────────┘
 """
+import contextlib
 import math
 from collections import namedtuple
 
@@ -115,15 +116,15 @@ class VertexSelector(QgsMapTool):
         snap_utils.init_snap()
 
         # IDLE: yellow hover circle near cursor
-        self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 9)
+        self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.IconType.ICON_CIRCLE, 9)
         self._hover_marker.setVisible(False)
 
         # MOVING: cyan snap indicator
-        self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CIRCLE, 10)
+        self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.IconType.ICON_CIRCLE, 10)
         self._snap_marker.setVisible(False)
 
         # IDLE/FEATURE/MOVING: circle-center snap indicator ("+" cross)
-        self._center_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CROSS, 14)
+        self._center_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.IconType.ICON_CROSS, 14)
         self._center_marker.setPenWidth(2)
         self._center_marker.setVisible(False)
 
@@ -173,7 +174,7 @@ class VertexSelector(QgsMapTool):
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.hide()
 
         # MOVING (circle only): floating radius input
@@ -243,7 +244,7 @@ class VertexSelector(QgsMapTool):
         band.setFillColor(fill_color)
         band.setWidth(width)
         if dashed:
-            band.setLineStyle(Qt.DashLine)
+            band.setLineStyle(Qt.PenStyle.DashLine)
         return band
 
     # ------------------------------------------------------------------
@@ -297,10 +298,8 @@ class VertexSelector(QgsMapTool):
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _clear_grip_markers(self):
         for m in self._grip_markers:
@@ -359,7 +358,7 @@ class VertexSelector(QgsMapTool):
 
     def _add_to_extra_selection(self, layer, fid):
         key = (id(layer), fid)
-        if any((id(l), f) == key for l, f in self._sel_extra_items):
+        if any((id(lyr), f) == key for lyr, f in self._sel_extra_items):
             return
         feat = layer.getFeature(fid)
         geom = feat.geometry()
@@ -373,7 +372,7 @@ class VertexSelector(QgsMapTool):
 
     def _remove_from_extra(self, layer, fid):
         key  = (id(layer), fid)
-        keys = [(id(l), f) for l, f in self._sel_extra_items]
+        keys = [(id(lyr), f) for lyr, f in self._sel_extra_items]
         if key not in keys:
             return False
         idx = keys.index(key)
@@ -435,7 +434,7 @@ class VertexSelector(QgsMapTool):
 
         verts = self._feature_verts(layer, fid)
         for _, vpt in verts:
-            m = self._make_marker(_C_FEAT_VTX, QgsVertexMarker.ICON_CIRCLE, 6)
+            m = self._make_marker(_C_FEAT_VTX, QgsVertexMarker.IconType.ICON_CIRCLE, 6)
             m.setCenter(vpt)
             self._feature_vtx_markers.append(m)
 
@@ -444,7 +443,7 @@ class VertexSelector(QgsMapTool):
             for i in range(len(verts) - 1):
                 pt1, pt2 = verts[i][1], verts[i + 1][1]
                 mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
-                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 8)
+                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.IconType.ICON_CROSS, 8)
                 m.setCenter(mid)
                 m.setPenWidth(2)
                 self._mid_markers.append(m)
@@ -459,7 +458,7 @@ class VertexSelector(QgsMapTool):
 
         # Blue '+' placed just beyond each open endpoint, pointing outward along the line
         if (not geom.isEmpty()
-                and QgsWkbTypes.geometryType(geom.wkbType()) == QgsWkbTypes.LineGeometry
+                and QgsWkbTypes.geometryType(geom.wkbType()) == QgsWkbTypes.GeometryType.LineGeometry
                 and not self._is_closed_polyline(geom)
                 and len(verts) >= 2):
             px_offset = 14 * self.canvas.mapUnitsPerPixel()
@@ -475,7 +474,7 @@ class VertexSelector(QgsMapTool):
                                            ep_pt.y() + dy / ln * px_offset)
                 else:
                     marker_pt = QgsPointXY(ep_pt.x(), ep_pt.y())
-                m = self._make_marker(QColor(210, 40, 40), QgsVertexMarker.ICON_CROSS, 10)
+                m = self._make_marker(QColor(210, 40, 40), QgsVertexMarker.IconType.ICON_CROSS, 10)
                 m.setCenter(marker_pt)
                 m.setPenWidth(2)
                 self._end_markers.append(m)
@@ -506,7 +505,7 @@ class VertexSelector(QgsMapTool):
             hot = (vidx == sv.vidx)
             m = self._make_marker(
                 _C_GRIP_HOT if hot else _C_FEAT_VTX,
-                QgsVertexMarker.ICON_BOX if hot else QgsVertexMarker.ICON_CIRCLE,
+                QgsVertexMarker.IconType.ICON_BOX if hot else QgsVertexMarker.IconType.ICON_CIRCLE,
                 8 if hot else 6,
             )
             m.setCenter(vpt)
@@ -527,7 +526,7 @@ class VertexSelector(QgsMapTool):
             for i in range(len(verts) - 1):
                 pt1, pt2 = verts[i][1], verts[i + 1][1]
                 mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
-                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.ICON_CROSS, 8)
+                m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.IconType.ICON_CROSS, 8)
                 m.setCenter(mid)
                 m.setPenWidth(2)
                 self._mid_markers.append(m)
@@ -575,7 +574,7 @@ class VertexSelector(QgsMapTool):
         gt   = (
             QgsWkbTypes.geometryType(geom.wkbType())
             if not geom.isEmpty()
-            else QgsWkbTypes.LineGeometry
+            else QgsWkbTypes.GeometryType.LineGeometry
         )
         self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
         self._move_band.setToGeometry(geom, sv.layer)
@@ -871,7 +870,7 @@ class VertexSelector(QgsMapTool):
         if geom.isEmpty():
             return
         gt = QgsWkbTypes.geometryType(geom.wkbType())
-        if gt not in (QgsWkbTypes.LineGeometry, QgsWkbTypes.PolygonGeometry):
+        if gt not in (QgsWkbTypes.GeometryType.LineGeometry, QgsWkbTypes.GeometryType.PolygonGeometry):
             return
         _, _, vertex_after, _ = geom.closestSegmentWithContext(map_pt)
         new_geom = QgsGeometry(geom)
@@ -908,7 +907,7 @@ class VertexSelector(QgsMapTool):
         geom = feat.geometry()
         if geom.isEmpty():
             return False
-        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
             return False
         verts = self._geom_verts(geom)
         if len(verts) < 2:
@@ -933,7 +932,7 @@ class VertexSelector(QgsMapTool):
         geom = feat.geometry()
         if geom.isEmpty():
             return False
-        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
             return False
         if self._is_closed_polyline(geom):
             return False
@@ -1024,7 +1023,7 @@ class VertexSelector(QgsMapTool):
 
     def _is_closed_polyline(self, geom):
         """True if geom is a linestring whose first and last vertices coincide."""
-        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
             return False
         verts = self._geom_verts(geom)
         if len(verts) < 4:
@@ -1112,7 +1111,7 @@ class VertexSelector(QgsMapTool):
                 if geom.isEmpty():
                     continue
                 gt = QgsWkbTypes.geometryType(geom.wkbType())
-                if gt == QgsWkbTypes.PointGeometry:
+                if gt == QgsWkbTypes.GeometryType.PointGeometry:
                     continue
                 d = geom.distance(pt_geom)
                 if d < best_d:
@@ -1234,10 +1233,10 @@ class VertexSelector(QgsMapTool):
         border = _C_CROSS_BORDER if crossing else _C_DRAG_BORDER
         fill   = _C_CROSS_FILL   if crossing else _C_DRAG_FILL
         if self._drag_band is None:
-            self._drag_band = self._make_band(QgsWkbTypes.PolygonGeometry, border, fill)
+            self._drag_band = self._make_band(QgsWkbTypes.GeometryType.PolygonGeometry, border, fill)
         self._drag_band.setColor(border)
         self._drag_band.setFillColor(fill)
-        self._drag_band.setLineStyle(Qt.DashLine if crossing else Qt.SolidLine)
+        self._drag_band.setLineStyle(Qt.PenStyle.DashLine if crossing else Qt.PenStyle.SolidLine)
         rect = QgsRectangle(p1.x(), p1.y(), p2.x(), p2.y())
         self._drag_band.setToGeometry(QgsGeometry.fromRect(rect), None)
 
@@ -1352,13 +1351,13 @@ class VertexSelector(QgsMapTool):
         self.terminal_dock.command.setFocus()
         # Recreate markers if they were removed when a drawing tool took over
         if self._hover_marker is None:
-            self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.ICON_CIRCLE, 9)
+            self._hover_marker = self._make_marker(_C_HOVER, QgsVertexMarker.IconType.ICON_CIRCLE, 9)
             self._hover_marker.setVisible(False)
         if self._snap_marker is None:
-            self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CIRCLE, 10)
+            self._snap_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.IconType.ICON_CIRCLE, 10)
             self._snap_marker.setVisible(False)
         if self._center_marker is None:
-            self._center_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.ICON_CROSS, 14)
+            self._center_marker = self._make_marker(QColor(66, 135, 245), QgsVertexMarker.IconType.ICON_CROSS, 14)
             self._center_marker.setPenWidth(2)
             self._center_marker.setVisible(False)
 
@@ -1387,7 +1386,7 @@ class VertexSelector(QgsMapTool):
         self._update_center_marker(raw_pt)
 
         # Segment drag: left button held + started from edge click
-        if self._seg_press_pos is not None and (event.buttons() & Qt.LeftButton):
+        if self._seg_press_pos is not None and (event.buttons() & Qt.MouseButton.LeftButton):
             delta = event.pos() - self._seg_press_pos
             if not self._seg_dragging and (abs(delta.x()) > _DRAG_PX or abs(delta.y()) > _DRAG_PX):
                 self._seg_dragging = True
@@ -1400,7 +1399,7 @@ class VertexSelector(QgsMapTool):
                 return
 
         # Drag-to-select: left button held + started from empty space
-        if self._drag_start is not None and (event.buttons() & Qt.LeftButton):
+        if self._drag_start is not None and (event.buttons() & Qt.MouseButton.LeftButton):
             delta = event.pos() - self._drag_start
             if not self._is_dragging and (abs(delta.x()) > _DRAG_PX or abs(delta.y()) > _DRAG_PX):
                 self._is_dragging = True
@@ -1411,7 +1410,7 @@ class VertexSelector(QgsMapTool):
                 return
 
         # Vertex press-drag: left button held after clicking a vertex in _S_FEATURE
-        if self._vtx_press_pos is not None and (event.buttons() & Qt.LeftButton):
+        if self._vtx_press_pos is not None and (event.buttons() & Qt.MouseButton.LeftButton):
             delta = event.pos() - self._vtx_press_pos
             if not self._vtx_dragging and (abs(delta.x()) > _DRAG_PX or abs(delta.y()) > _DRAG_PX):
                 self._vtx_dragging = True
@@ -1425,7 +1424,7 @@ class VertexSelector(QgsMapTool):
                 feat = sv.layer.getFeature(sv.fid)
                 geom = feat.geometry()
                 gt   = (QgsWkbTypes.geometryType(geom.wkbType())
-                        if not geom.isEmpty() else QgsWkbTypes.LineGeometry)
+                        if not geom.isEmpty() else QgsWkbTypes.GeometryType.LineGeometry)
                 self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
                 self._move_band.setToGeometry(geom, sv.layer)
                 if self._hover_marker is not None:
@@ -1499,15 +1498,15 @@ class VertexSelector(QgsMapTool):
                 sv = self._gripped
                 if self._move_band is None:
                     self._move_band = self._make_band(
-                        QgsWkbTypes.LineGeometry, _C_MOVE, _C_MOVE_FILL, width=2, dashed=True
+                        QgsWkbTypes.GeometryType.LineGeometry, _C_MOVE, _C_MOVE_FILL, width=2, dashed=True
                     )
-                self._move_band.reset(QgsWkbTypes.LineGeometry)
+                self._move_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
                 self._move_band.addPoint(sv.point)
                 self._move_band.addPoint(map_pt)
             else:
                 self._snap_marker.setVisible(False)
                 if self._move_band is not None:
-                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                    self._move_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
             return
 
         # IDLE or FEATURE — show yellow hover circle on the nearest vertex
@@ -1525,13 +1524,13 @@ class VertexSelector(QgsMapTool):
         raw_pt = self.toMapCoordinates(event.pos())
 
         # Right-click: cancel move (if moving), finish extension (if extending), or show context menu
-        if event.button() == Qt.RightButton:
+        if event.button() == Qt.MouseButton.RightButton:
             if self._state == _S_MOVING:
                 self._cancel_move()
                 return
             if self._state == _S_GRIPPED and self._gripped_can_extend():
                 if self._move_band is not None:
-                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                    self._move_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
                 self._snap_marker.setVisible(False)
                 self._enter_idle()
                 return
@@ -1544,7 +1543,8 @@ class VertexSelector(QgsMapTool):
                 sel_layer = self._gripped.layer
                 sel_fid   = self._gripped.fid
             if sel_layer is not None and sel_fid is not None:
-                on_sim = lambda layer=sel_layer, fid=sel_fid: self._select_all_in_layer(layer, fid)
+                def on_sim(layer=sel_layer, fid=sel_fid):
+                    self._select_all_in_layer(layer, fid)
             else:
                 on_sim = None
             self._context_menu.show(
@@ -1556,7 +1556,7 @@ class VertexSelector(QgsMapTool):
             )
             return
 
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
         if self._state == _S_MOVING:
@@ -1570,7 +1570,7 @@ class VertexSelector(QgsMapTool):
 
         # Circle-center click: enter whole-circle translate mode (optional — only
         # when cursor is near the center cross, not a cardinal vertex).
-        if not (event.modifiers() & Qt.ShiftModifier):
+        if not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
             center_hit = self._find_circle_center_feature(map_pt)
             if center_hit:
                 self._enter_moving_center(center_hit[0], center_hit[1])
@@ -1589,14 +1589,14 @@ class VertexSelector(QgsMapTool):
             if sv and self._gripped_can_extend() and self._is_opposite_endpoint(sv):
                 # Clicked the opposite endpoint of the same feature → close the line
                 if self._move_band is not None:
-                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                    self._move_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
                 self._snap_marker.setVisible(False)
                 self._extend_line(sv.point)
             elif sv and self._gripped_can_extend():
                 # Vertex on another feature clicked while extending — extend line to that point
                 self._snap_marker.setVisible(False)
                 if self._move_band is not None:
-                    self._move_band.reset(QgsWkbTypes.LineGeometry)
+                    self._move_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
                 self._extend_line(sv.point)
             elif sv:
                 # Any vertex clicked (same or different feature) → grip it and move immediately
@@ -1612,7 +1612,7 @@ class VertexSelector(QgsMapTool):
                     commit_pt = self._snap_point(event.pos(), raw_pt)
                     self._snap_marker.setVisible(False)
                     if self._move_band is not None:
-                        self._move_band.reset(QgsWkbTypes.LineGeometry)
+                        self._move_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
                     self._extend_line(commit_pt)
                 else:
                     # Empty space — start drag so user can box-select a vertex
@@ -1621,7 +1621,7 @@ class VertexSelector(QgsMapTool):
             return
 
         if self._state == _S_FEATURE:
-            shift = bool(event.modifiers() & Qt.ShiftModifier)
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
             # 1. Blue '+' end marker — clicking beyond an open endpoint starts extension.
             end_sv = self._find_end_marker_near(map_pt)
@@ -1679,7 +1679,7 @@ class VertexSelector(QgsMapTool):
             return
 
         # IDLE
-        shift = bool(event.modifiers() & Qt.ShiftModifier)
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         if sv:
             if shift:
                 self._remove_from_extra(sv.layer, sv.fid)
@@ -1702,7 +1702,7 @@ class VertexSelector(QgsMapTool):
         self.terminal_dock.command.setFocus()
 
     def canvasReleaseEvent(self, event):
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
         # Vertex press-drag release
@@ -1765,12 +1765,12 @@ class VertexSelector(QgsMapTool):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             if self._state == _S_MOVING:
                 self._cancel_move()
             elif self._state in (_S_GRIPPED, _S_FEATURE):
                 self._enter_idle()
-        elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+        elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self._state in (_S_GRIPPED, _S_MOVING):
                 self._delete_gripped()
             elif self._state == _S_FEATURE:

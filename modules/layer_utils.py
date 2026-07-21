@@ -1,3 +1,4 @@
+import contextlib
 import os
 import math
 from PyQt5.QtCore import Qt, QTimer
@@ -272,10 +273,8 @@ def apply_hatch_renderer(layer):
     try:
         brick_sl.setSymbolName(QgsEllipseSymbolLayer.Rectangle)
     except (AttributeError, TypeError):
-        try:
+        with contextlib.suppress(Exception):
             brick_sl.setSymbolName("rectangle")
-        except Exception:
-            pass
     # Width ≈ 85 % of spacing, height ≈ 40 % (leaves a mortar gap)
     _PW = getattr(QgsSymbolLayer, "PropertyWidth",  None)
     _PH = getattr(QgsSymbolLayer, "PropertyHeight", None)
@@ -347,10 +346,8 @@ def apply_hatch_renderer(layer):
         """One vertical line marker, sized and offset as a fraction of element_size."""
         sl = QgsSimpleMarkerSymbolLayer()
         if _line_shape is not None:
-            try:
+            with contextlib.suppress(Exception):
                 sl.setShape(_line_shape)
-            except Exception:
-                pass
         sl.setAngle(90)          # vertical stem
         sl.setStrokeWidth(0.4)
         sl.setFillColor(_QColor(0, 0, 0, 0))
@@ -487,13 +484,11 @@ def apply_dimension_style(layer):
     pal.placement = QgsPalLayerSettings.Line
     pal.setFormat(tf)
 
-    try:
+    with contextlib.suppress(Exception):
         dd = pal.dataDefinedProperties()
         dd.setProperty(QgsPalLayerSettings.Color,  QgsProperty.fromExpression(_COLOR_EXPR))
         dd.setProperty(QgsPalLayerSettings.Size,   QgsProperty.fromExpression(_SIZE_EXPR))
         dd.setProperty(QgsPalLayerSettings.Family, QgsProperty.fromExpression(_FONT_EXPR))
-    except Exception:
-        pass
 
     layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
     layer.setLabelsEnabled(True)

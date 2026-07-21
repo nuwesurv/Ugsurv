@@ -21,6 +21,8 @@
  *                                                                         *
  ***************************************************************************/
 """
+import contextlib
+
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon, QFont, QColor, QPixmap, QPainter, QPen
 from qgis.PyQt.QtWidgets import QAction, QApplication, QToolButton, QMenu
@@ -34,22 +36,21 @@ from qgis.core import (
     QgsField,
     QgsWkbTypes,
     QgsLineSymbol,
-    QgsPalLayerSettings, 
-    QgsTextFormat, 
+    QgsPalLayerSettings,
+    QgsTextFormat,
     QgsVectorLayerSimpleLabeling,
-    QgsProject,
     QgsSnappingConfig
 )
-from PyQt5.QtCore import QVariant
+from qgis.PyQt.QtCore import QVariant
 from qgis.gui import QgsRubberBand, QgsVertexMarker
-from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtGui import QKeySequence
+from qgis.PyQt.QtWidgets import QShortcut
+from qgis.PyQt.QtGui import QKeySequence
 from qgis.gui import QgsMapCanvas
 
 
 
 # Initialize Qt resources from file resources.py
-from .resources import *
+from .resources import *  # noqa: F403
 # Import the code for the dialog
 from .modules.terminal import TerminalDialog
 
@@ -236,7 +237,7 @@ class Ugsurv:
         """Build a small red-crosshair QIcon that matches the canvas cursor."""
         size, c, gap, box = 24, 11, 3, 2
         px = QPixmap(size, size)
-        px.fill(Qt.transparent)
+        px.fill(Qt.GlobalColor.transparent)
         p = QPainter(px)
         p.setPen(QPen(QColor(220, 30, 30), 1))
         p.drawLine(0, c, c - gap, c)
@@ -270,10 +271,8 @@ class Ugsurv:
     def _on_terminal_visibility(self, visible):
         """Deactivate the plugin when the terminal dock is closed/hidden."""
         if not visible and self.active:
-            try:
+            with contextlib.suppress(Exception):
                 self.terminal_dock.visibilityChanged.disconnect(self._on_terminal_visibility)
-            except Exception:
-                pass
             self.run()
 
     # ------------------------------------------------------------------ snap
@@ -282,21 +281,21 @@ class Ugsurv:
         """Draw a U-magnet icon; grey when all snap modes are off."""
         size = 24
         px = QPixmap(size, size)
-        px.fill(Qt.transparent)
+        px.fill(Qt.GlobalColor.transparent)
         p = QPainter(px)
-        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         arm_col = QColor(240, 165, 0) if active else QColor(130, 130, 130)
-        p.setPen(QPen(arm_col, 3, Qt.SolidLine, Qt.RoundCap))
+        p.setPen(QPen(arm_col, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         p.drawLine(7, 4, 7, 14)
         p.drawLine(17, 4, 17, 14)
         p.drawArc(QRect(7, 9, 10, 10), 0, -180 * 16)
 
         lc = QColor(210, 50, 50)  if active else QColor(130, 130, 130)
         rc = QColor(50, 80, 210)  if active else QColor(130, 130, 130)
-        p.setPen(QPen(lc, 3, Qt.SolidLine, Qt.SquareCap))
+        p.setPen(QPen(lc, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
         p.drawLine(4, 4, 10, 4)
-        p.setPen(QPen(rc, 3, Qt.SolidLine, Qt.SquareCap))
+        p.setPen(QPen(rc, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
         p.drawLine(14, 4, 20, 4)
         p.end()
         return QIcon(px)
@@ -331,7 +330,7 @@ class Ugsurv:
         btn.setIcon(self._make_snap_icon(True))
         btn.setToolTip('Object snap options (Endpoint, Midpoint, Center, Intersection, Nearest)')
         btn.setMenu(menu)
-        btn.setPopupMode(QToolButton.MenuButtonPopup)
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         btn.clicked.connect(btn.showMenu)
         return btn
 
@@ -386,15 +385,11 @@ class Ugsurv:
             self.iface.removeToolBarIcon(action)
 
         # Remove snap dropdown button
-        try:
+        with contextlib.suppress(Exception):
             self._snap_btn.deleteLater()
-        except Exception:
-            pass
 
-        try:
+        with contextlib.suppress(Exception):
             QgsProject.instance().readProject.disconnect(restore_no_legend_layers)
-        except Exception:
-            pass
 
         # Remove all tools
         self.destroyAllTools()
@@ -430,7 +425,7 @@ class Ugsurv:
             # Terminal
             'HELP', 'CLEAR',
         ])
-        self.iface.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
+        self.iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
         self.terminal_dock.command.setFocus()
         
         # Connect these functions to ui
@@ -439,7 +434,7 @@ class Ugsurv:
 
         # Global Esc shortcut — fires regardless of which widget has focus,
         # so Esc always cancels the active map tool even when the terminal is focused.
-        self.esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self.iface.mainWindow())
+        self.esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.iface.mainWindow())
         self.esc_shortcut.activated.connect(self._on_escape)
 
         # This will help to setup the required snap settings.
@@ -464,23 +459,21 @@ class Ugsurv:
 
         # Properties panel — shows/edits properties of the selected feature
         if hasattr(self, 'properties_dock') and self.properties_dock:
-            try:
-                from PyQt5 import sip
+            with contextlib.suppress(Exception):
+                from qgis.PyQt import sip
                 if not sip.isdeleted(self.properties_dock):
                     self.iface.removeDockWidget(self.properties_dock)
                     self.properties_dock.deleteLater()
-            except Exception:
-                pass
         self.properties_dock = PropertiesDock(self.iface.mainWindow())
-        self.iface.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
+        self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
 
         # Tabify with the first existing right-side dock so the properties panel
         # shares the same tab bar instead of splitting the right panel area.
         main_win = self.iface.mainWindow()
-        from PyQt5.QtWidgets import QDockWidget as _QDW
+        from qgis.PyQt.QtWidgets import QDockWidget as _QDW
         for _existing in main_win.findChildren(_QDW):
             if (_existing is not self.properties_dock
-                    and main_win.dockWidgetArea(_existing) == Qt.RightDockWidgetArea):
+                    and main_win.dockWidgetArea(_existing) == Qt.DockWidgetArea.RightDockWidgetArea):
                 main_win.tabifyDockWidget(_existing, self.properties_dock)
                 break
 
@@ -509,7 +502,7 @@ class Ugsurv:
             # Vertex editor is running — let it handle Escape internally
             from qgis.PyQt.QtCore import QEvent
             from qgis.PyQt.QtGui import QKeyEvent
-            fake = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+            fake = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
             active.keyPressEvent(fake)
 
         # Always clear any partially typed text in the terminal command field
@@ -549,7 +542,7 @@ class Ugsurv:
                     and mt._active_tool is not getattr(mt, '_default_tool', None)):
                 from qgis.PyQt.QtCore import QEvent
                 from qgis.PyQt.QtGui import QKeyEvent
-                fake = QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier)
+                fake = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
                 mt._active_tool.keyPressEvent(fake)
                 return
 
@@ -755,99 +748,72 @@ class Ugsurv:
         """Raise existing dock if alive, otherwise create one via factory() and add it."""
         existing = getattr(self, attr, None)
         if existing is not None:
-            try:
+            with contextlib.suppress(RuntimeError):
                 existing.show()
                 existing.raise_()
                 return
-            except RuntimeError:
-                pass  # underlying C++ object was deleted — recreate
         dock = factory()
         setattr(self, attr, dock)
-        self.iface.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
     def destroyAllTools(self):
         # Remove global Esc shortcut
-        try:
+        with contextlib.suppress(Exception):
             self.esc_shortcut.activated.disconnect()
             self.esc_shortcut.deleteLater()
             self.esc_shortcut = None
-        except Exception:
-            pass
 
         # Evict any active delegate, then release the canvas tool
-        try:
+        with contextlib.suppress(Exception):
             self.canvas.mapToolSet.disconnect(self._on_map_tool_set)
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.global_map_tool._evict()
             self.canvas.unsetMapTool(self.global_map_tool)
             self.global_map_tool = None
-        except Exception:
-            pass
         self._maptool_action.setChecked(False)
-        
+
         # Remove any dialog boxes
-        try:
+        with contextlib.suppress(Exception):
             self.dlg.close()
             self.dlg.deleteLater()
             self.dlg = None
-        except:
-            pass
-        
-        
+
         # Remove the spiky detector
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.spiky_detect_dock)
             self.spiky_detect_dock.deleteLater()
-        except:
-            pass
 
         # Remove the overlap detector
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.overlap_detect_dock)
             self.overlap_detect_dock.deleteLater()
-        except:
-            pass
 
         # Remove the CRS adjust dock
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.crs_adjust_dock)
             self.crs_adjust_dock.deleteLater()
-        except:
-            pass
 
         # Remove the append geometry dock
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.append_geom_dock)
             self.append_geom_dock.deleteLater()
-        except:
-            pass
 
         # Remove the solve topology dock
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.solve_topo_dock)
             self.solve_topo_dock.deleteLater()
-        except:
-            pass
-        
+
         # Remove the properties panel
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.properties_dock)
             self.properties_dock.deleteLater()
-        except:
-            pass
 
         # Remove the terminal
-        try:
+        with contextlib.suppress(Exception):
             self.terminal_dock.visibilityChanged.disconnect(self._on_terminal_visibility)
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.terminal_dock)
             self.terminal_dock.deleteLater()
-        except:
-            pass
             
             
             

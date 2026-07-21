@@ -24,7 +24,7 @@
 
 import os
 
-from PyQt5.QtCore import Qt
+from qgis.PyQt.QtCore import Qt
 import os.path
 from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
 from qgis.core import QgsProject, QgsVectorLayer, QgsField, QgsCoordinateReferenceSystem
@@ -33,15 +33,15 @@ from qgis.gui import QgsProjectionSelectionWidget
 
 try:
     import pandas as pd
-except:
+except Exception:
     print('Failed to find pandas module')
 try:
     import geopandas as gpd
-except:
+except Exception:
     print('Failed to find geopandas module')
 try:
     import shapely as sh
-except:
+except Exception:
     print('Failed to find shapely module')
 
 class ParcelPlotterDialog(QDialog):
@@ -85,11 +85,11 @@ class ParcelPlotterDialog(QDialog):
         self.eastings = QComboBox()
         self.code = QComboBox()
 
-        self.tempHorizontal1.addWidget(self.label1,alignment=Qt.AlignRight)
+        self.tempHorizontal1.addWidget(self.label1,alignment=Qt.AlignmentFlag.AlignRight)
         self.tempHorizontal1.addWidget(self.northings)
-        self.tempHorizontal1.addWidget(self.label2,alignment=Qt.AlignRight)
+        self.tempHorizontal1.addWidget(self.label2,alignment=Qt.AlignmentFlag.AlignRight)
         self.tempHorizontal1.addWidget(self.eastings)
-        self.tempHorizontal1.addWidget(self.label3,alignment=Qt.AlignRight)
+        self.tempHorizontal1.addWidget(self.label3,alignment=Qt.AlignmentFlag.AlignRight)
         self.tempHorizontal1.addWidget(self.code)
         self.tempHorizontal1.setSpacing(10)
         self.templayout.addLayout(self.tempHorizontal1)
@@ -97,7 +97,7 @@ class ParcelPlotterDialog(QDialog):
 
         # Add the close and run buttons.
         self.buttongrouper = QHBoxLayout()
-        self.hspacer = QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.hspacer = QSpacerItem(40, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.refreshbutton = QPushButton('Refresh')
         self.refreshbutton.setFixedWidth(100)
         self.plotbutton = QPushButton('Plot')

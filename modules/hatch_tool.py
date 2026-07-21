@@ -9,6 +9,7 @@ Workflow
 4. RMB / Esc → exit.
 """
 
+import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
@@ -162,10 +163,8 @@ class HatchTool(QgsMapTool):
         self._hint.raise_()
 
     def _rm(self, item):
-        try:
+        with contextlib.suppress(Exception):
             self.canvas.scene().removeItem(item)
-        except Exception:
-            pass
 
     def _source_layers(self):
         return [

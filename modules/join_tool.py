@@ -18,6 +18,7 @@ Chaining uses backtracking over all orderings and per-segment reversals
 (feasible for the typical 2–6 features used in practice).
 """
 
+import contextlib
 from itertools import permutations
 
 from .layer_utils import polyline_attrs
@@ -75,7 +76,7 @@ class JoinTool(QgsMapTool):
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.hide()
 
     # ------------------------------------------------------------------
@@ -107,7 +108,7 @@ class JoinTool(QgsMapTool):
 
     def _make_band(self, geom, color, width=3):
         gt = (QgsWkbTypes.geometryType(geom.wkbType())
-              if not geom.isEmpty() else QgsWkbTypes.LineGeometry)
+              if not geom.isEmpty() else QgsWkbTypes.GeometryType.LineGeometry)
         band = QgsRubberBand(self.canvas, gt)
         band.setColor(color)
         band.setWidth(width)
@@ -115,10 +116,8 @@ class JoinTool(QgsMapTool):
 
     def _rm_band(self, band):
         if band is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(band)
-            except Exception:
-                pass
 
     def _clear_hover(self):
         self._rm_band(self._hover_band)
@@ -151,7 +150,7 @@ class JoinTool(QgsMapTool):
                 geom = feat.geometry()
                 if geom.isEmpty():
                     continue
-                if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry:
+                if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
                     continue
                 d = geom.distance(pt_geom)
                 if d < best_d:
@@ -179,8 +178,8 @@ class JoinTool(QgsMapTool):
 
     def _deselect(self, layer, fid):
         self._rm_band(self._sel_bands.pop((id(layer), fid), None))
-        self._selected = [(l, f) for l, f in self._selected
-                          if not (id(l) == id(layer) and f == fid)]
+        self._selected = [(lyr, f) for lyr, f in self._selected
+                          if not (id(lyr) == id(layer) and f == fid)]
         self._log(f"\nDeselected feature {fid}  [{len(self._selected)} total]")
 
     def _toggle(self, layer, fid):
@@ -345,7 +344,7 @@ class JoinTool(QgsMapTool):
                 feat = layer.getFeature(fid)
                 geom = feat.geometry()
                 if (geom.isEmpty()
-                        or QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.LineGeometry):
+                        or QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry):
                     continue
                 if not self._is_selected(layer, fid):
                     self._select(layer, fid)
@@ -398,10 +397,10 @@ class JoinTool(QgsMapTool):
             self._show_hint(event.pos(), "Click polylines to select")
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.RightButton:
+        if event.button() == Qt.MouseButton.RightButton:
             self._join_and_commit()
             return
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         raw_pt = self.toMapCoordinates(event.pos())
         hit    = self._find_line_near(raw_pt)
@@ -412,7 +411,7 @@ class JoinTool(QgsMapTool):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             self.deactivate()
-        elif key in (Qt.Key_Return, Qt.Key_Enter):
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._join_and_commit()

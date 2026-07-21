@@ -1,8 +1,9 @@
+import contextlib
 import os
 import csv
 
-from PyQt5.QtCore import Qt, QVariant
-from PyQt5.QtWidgets import (
+from qgis.PyQt.QtCore import Qt, QVariant
+from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QComboBox, QGroupBox, QGridLayout,
     QMessageBox, QWidget, QStackedWidget, QLineEdit,
@@ -215,7 +216,7 @@ class FileImportDialog(QDialog):
             return headers
         except ImportError:
             pass
-        try:
+        with contextlib.suppress(Exception):
             from osgeo import ogr
             ds = ogr.Open(path)
             if ds:
@@ -223,8 +224,6 @@ class FileImportDialog(QDialog):
                 if lyr:
                     defn = lyr.GetLayerDefn()
                     return [defn.GetFieldDefn(i).GetName() for i in range(defn.GetFieldCount())]
-        except Exception:
-            pass
         QMessageBox.critical(
             None, 'Error',
             'Could not read XLSX headers.\n'

@@ -35,6 +35,8 @@ While visible the widget mirrors its fields to/from terminal_dock.command
 using comma-separated text (one value per field).
 """
 
+import contextlib
+
 from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtWidgets import (
     QLabel,
@@ -147,10 +149,8 @@ class DynamicInput(QObject):
     def destroy(self):
         """Delete the widget (call from tool deactivate)."""
         self.hide()
-        try:
+        with contextlib.suppress(Exception):
             self._widget.deleteLater()
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # Commit / cancel
@@ -248,15 +248,11 @@ class DynamicInput(QObject):
             line.textChanged.connect(self._sync_to_terminal)
 
     def _disconnect_terminal(self):
-        try:
+        with contextlib.suppress(Exception):
             self._terminal.command.textChanged.disconnect(self._sync_from_terminal)
-        except Exception:
-            pass
         for line in self._lines.values():
-            try:
+            with contextlib.suppress(Exception):
                 line.textChanged.disconnect(self._sync_to_terminal)
-            except Exception:
-                pass
 
     def _sync_from_terminal(self, text: str):
         """Mirror terminal command field → floating fields (comma-split)."""

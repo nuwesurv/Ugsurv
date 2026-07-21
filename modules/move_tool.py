@@ -20,6 +20,8 @@ this tool activates (typing 'm' while standing on a parcel), step 1 is
 skipped and the tool opens directly at step 2.
 """
 
+import contextlib
+
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QColor
@@ -109,10 +111,8 @@ class MoveTool(QgsMapTool):
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _log(self, msg):
         self.terminal_dock.commandOutputText += msg
@@ -181,7 +181,7 @@ class MoveTool(QgsMapTool):
         return (id(layer), fid)
 
     def _existing_keys(self):
-        return [self._sel_key(l, f) for l, f, _ in self._sel_features]
+        return [self._sel_key(lyr, f) for lyr, f, _ in self._sel_features]
 
     def _add_to_selection(self, layer, fid, geom):
         if self._sel_key(layer, fid) in self._existing_keys():

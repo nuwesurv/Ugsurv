@@ -1,5 +1,7 @@
 """Shared snap helpers used by all manipulating tools."""
 
+import contextlib
+
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject, QgsRectangle,
     QgsVectorLayer, QgsWkbTypes,
@@ -214,7 +216,5 @@ def make_cc_marker(canvas):
 def rm_cc_marker(canvas, marker):
     """Remove a circle-center snap marker from the canvas scene."""
     if marker is not None:
-        try:
+        with contextlib.suppress(Exception):
             canvas.scene().removeItem(marker)
-        except Exception:
-            pass

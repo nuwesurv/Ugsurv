@@ -1,4 +1,4 @@
-from qgis.gui import QgsMapTool, QgsRubberBand
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsVectorLayer,
@@ -18,7 +18,6 @@ from qgis.core import (
 from qgis.PyQt.QtWidgets import QGraphicsTextItem
 from PyQt5.QtCore import QVariant, QPoint
 from PyQt5.QtWidgets import QLabel
-from qgis.gui import QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtGui import QFont, QColor
 from . import snap_utils
 from .dynamic_input import DynamicInput

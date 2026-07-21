@@ -1,10 +1,15 @@
+import re
 import subprocess
 import sys
 
+_SAFE_PACKAGE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*(\[.*?\])?(==|>=|<=|!=|~=|>|<)[A-Za-z0-9._*-]+$|^[A-Za-z0-9][A-Za-z0-9._-]*$')
+
 
 def install_package(package: str) -> int:
+    if not _SAFE_PACKAGE_RE.match(package):
+        raise ValueError(f"Refusing to install unsafe package name: {package!r}")
     python_exe = sys.prefix + r"\python.exe"
-    response = subprocess.check_call([
+    response = subprocess.check_call([  # nosec B603
         python_exe,
         "-m",
         "pip",

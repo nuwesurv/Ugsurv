@@ -22,7 +22,7 @@
  ***************************************************************************/
 """
 
-from PyQt5.QtWidgets import (
+from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton
 )

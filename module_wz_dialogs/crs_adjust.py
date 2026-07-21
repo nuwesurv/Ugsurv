@@ -22,8 +22,8 @@
  ***************************************************************************/
 """
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox
 )

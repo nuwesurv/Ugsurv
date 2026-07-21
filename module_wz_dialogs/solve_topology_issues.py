@@ -3,8 +3,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import numpy as np
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
-from PyQt5.QtWidgets import (
+from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject
+from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QDoubleSpinBox,
 )
@@ -402,7 +402,7 @@ class SolveTopologyDock(QDockWidget):
             lbl = QLabel(label_text)
             lbl.setFixedWidth(120)
             combo = QgsMapLayerComboBox()
-            combo.setFilters(QgsMapLayerProxyModel.VectorLayer)
+            combo.setFilters(QgsMapLayerProxyModel.Filter.VectorLayer)
             combo.setFixedHeight(inputheight)
             if allow_none:
                 combo.setAllowEmptyLayer(True)
@@ -422,7 +422,7 @@ class SolveTopologyDock(QDockWidget):
         lbl_out = QLabel('Output path:')
         lbl_out.setFixedWidth(120)
         self.wgt_output = QgsFileWidget()
-        self.wgt_output.setStorageMode(QgsFileWidget.SaveFile)
+        self.wgt_output.setStorageMode(QgsFileWidget.StorageMode.SaveFile)
         self.wgt_output.setFilter("GeoPackage (*.gpkg)")
         out_row.addWidget(lbl_out)
         out_row.addWidget(self.wgt_output)

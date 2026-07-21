@@ -1,3 +1,5 @@
+import contextlib
+
 from qgis.gui import QgsMapTool
 from qgis.PyQt.QtCore import Qt, QObject, QEvent
 from qgis.PyQt.QtGui import QColor, QCursor, QPixmap, QPainter, QPen
@@ -159,12 +161,9 @@ class UgsurvMaptool(QgsMapTool):
         old = self._active_tool
         self._active_tool = None
         self._evicting = True
-        try:
+        with contextlib.suppress(Exception):
             old.deactivate()
-        except Exception:
-            pass
-        finally:
-            self._evicting = False
+        self._evicting = False
         # clear_tool() is suppressed while evicting, so we restore the default
         # tool here instead — otherwise _active_tool stays None indefinitely.
         if self._active_tool is None and self._default_tool:

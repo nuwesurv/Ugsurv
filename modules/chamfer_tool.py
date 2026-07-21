@@ -18,6 +18,7 @@ Corner detection: the endpoint of each line nearest to the click position is
 taken as the corner end.  Click on the half of the line closest to the join.
 """
 
+import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
@@ -116,10 +117,8 @@ class ChamferTool(QgsMapTool):
 
     def _rm(self, item):
         if item is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.canvas.scene().removeItem(item)
-            except Exception:
-                pass
 
     def _show_hint(self, screen_pos):
         text = _HINT.get(self._state, "")

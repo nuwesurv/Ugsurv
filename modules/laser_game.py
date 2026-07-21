@@ -14,7 +14,9 @@ import math
 import random
 import time
 
-from PyQt5.QtCore import QTimer
+_rng = random.SystemRandom()
+
+from qgis.PyQt.QtCore import QTimer
 
 from .game_objects.Target import Target
 from .game_objects.LaserPhoton import LaserPhoton
@@ -64,23 +66,23 @@ class Game1(QgsMapTool):
         self.laserphotons = []
 
         # Rubber bands
-        self.target_line = self._make_rb(QgsWkbTypes.LineGeometry, QColor(255, 80, 80), 1, Qt.DashLine)
+        self.target_line = self._make_rb(QgsWkbTypes.GeometryType.LineGeometry, QColor(255, 80, 80), 1, Qt.PenStyle.DashLine)
 
         self.laser_telescope = self._make_rb(
-            QgsWkbTypes.PolygonGeometry, QColor(60, 60, 60), 1, Qt.SolidLine, QColor(234, 182, 28))
+            QgsWkbTypes.GeometryType.PolygonGeometry, QColor(60, 60, 60), 1, Qt.PenStyle.SolidLine, QColor(234, 182, 28))
         self.laser_telescope.setToGeometry(self._telescope_geom(0), None)
 
         self.ts_body = self._make_rb(
-            QgsWkbTypes.PolygonGeometry, QColor(60, 60, 60), 1, Qt.SolidLine, QColor(234, 182, 28))
+            QgsWkbTypes.GeometryType.PolygonGeometry, QColor(60, 60, 60), 1, Qt.PenStyle.SolidLine, QColor(234, 182, 28))
         self.ts_body.setToGeometry(self._tripod_geom(), None)
 
         # Life bar: dark boundary always at 100%, colored fill scales with life
         self.load_bar_bndry = self._make_rb(
-            QgsWkbTypes.PolygonGeometry, QColor(80, 80, 80), 2, Qt.SolidLine, QColor(40, 40, 40))
+            QgsWkbTypes.GeometryType.PolygonGeometry, QColor(80, 80, 80), 2, Qt.PenStyle.SolidLine, QColor(40, 40, 40))
         self.load_bar_bndry.setToGeometry(self._loadbar_geom(100), None)
 
         self.load_bar = self._make_rb(
-            QgsWkbTypes.PolygonGeometry, QColor(0, 0, 0), 0, Qt.SolidLine, QColor(0, 200, 0))
+            QgsWkbTypes.GeometryType.PolygonGeometry, QColor(0, 0, 0), 0, Qt.PenStyle.SolidLine, QColor(0, 200, 0))
         self.load_bar.setToGeometry(self._loadbar_geom(self.life_percent), None)
 
         self.zoom_to_extent()
@@ -95,22 +97,22 @@ class Game1(QgsMapTool):
         x_dist = self.game_extent.xMaximum() - self.game_extent.xMinimum()
         margin = x_dist * 0.1
         return [
-            random.randint(int(self.game_extent.xMinimum() + margin),
-                           int(self.game_extent.xMaximum() - margin)),
-            random.randint(int(self.game_extent.yMaximum()),
-                           int(self.game_extent.yMaximum()) + 100),
+            _rng.randint(int(self.game_extent.xMinimum() + margin),
+                         int(self.game_extent.xMaximum() - margin)),
+            _rng.randint(int(self.game_extent.yMaximum()),
+                         int(self.game_extent.yMaximum()) + 100),
         ]
 
     def zoom_to_extent(self):
         self.canvas.setExtent(self.game_extent)
         self.canvas.refresh()
 
-    def _make_rb(self, geom_type, color, width=2, linestyle=Qt.SolidLine, fill_color=None):
+    def _make_rb(self, geom_type, color, width=2, linestyle=Qt.PenStyle.SolidLine, fill_color=None):
         rb = QgsRubberBand(self.canvas, geom_type)
         rb.setColor(color)
         rb.setWidth(width)
         rb.setLineStyle(linestyle)
-        if fill_color and geom_type == QgsWkbTypes.PolygonGeometry:
+        if fill_color and geom_type == QgsWkbTypes.GeometryType.PolygonGeometry:
             rb.setFillColor(fill_color)
         return rb
 
@@ -146,11 +148,11 @@ class Game1(QgsMapTool):
             photon.remove()
         self.laserphotons.clear()
 
-        self.laser_telescope.reset(QgsWkbTypes.PolygonGeometry)
-        self.ts_body.reset(QgsWkbTypes.PolygonGeometry)
-        self.load_bar.reset(QgsWkbTypes.PolygonGeometry)
-        self.load_bar_bndry.reset(QgsWkbTypes.PolygonGeometry)
-        self.target_line.reset(QgsWkbTypes.LineGeometry)
+        self.laser_telescope.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.ts_body.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.load_bar.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.load_bar_bndry.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.target_line.reset(QgsWkbTypes.GeometryType.LineGeometry)
 
         self.terminal_dock.commandDisplay.setText(
             self.terminal_dock.commandOutputText + "\n........\n"
@@ -158,7 +160,7 @@ class Game1(QgsMapTool):
         super().deactivate()
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             self.deactivate()
 
     # ------------------------------------------------------------------
@@ -192,7 +194,7 @@ class Game1(QgsMapTool):
         )
 
     def canvasPressEvent(self, event):
-        if event.button() != Qt.LeftButton or not self.is_playing:
+        if event.button() != Qt.MouseButton.LeftButton or not self.is_playing:
             return
         if len(self.laserphotons) >= self.MAX_PHOTONS:
             return
@@ -275,7 +277,7 @@ class Game1(QgsMapTool):
         self._update_life_bar()
 
     def _update_life_bar(self):
-        self.load_bar.reset(QgsWkbTypes.PolygonGeometry)
+        self.load_bar.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         self.load_bar.setToGeometry(self._loadbar_geom(self.life_percent), None)
 
         if self.life_percent >= 60:
@@ -304,7 +306,7 @@ class Game1(QgsMapTool):
 
         # Wave 2: add a 4th target with slight horizontal drift
         if self.wave == 2:
-            drift = random.choice([-4, 4])
+            drift = _rng.choice([-4, 4])
             self.targets.append(
                 Target('Target4', self.canvas, self._rand_start(), self.game_extent,
                        [drift * speed_factor, -13 * speed_factor],
@@ -313,7 +315,7 @@ class Game1(QgsMapTool):
             self._base_speeds.append([drift, -13])
         # Wave 4: add a fast red target
         elif self.wave == 4:
-            drift = random.choice([-6, 6])
+            drift = _rng.choice([-6, 6])
             self.targets.append(
                 Target('Target5', self.canvas, self._rand_start(), self.game_extent,
                        [drift * speed_factor, -16 * speed_factor],
