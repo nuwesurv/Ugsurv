@@ -33,6 +33,7 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsProject,
     QgsSpatialIndex,
+    QgsWkbTypes,
 )
 
 
@@ -125,6 +126,29 @@ class GeometryAppenderDock(QDockWidget):
 
                 if not geom.isGeosValid():
                     geom = geom.makeValid()
+
+                # Reconcile geometry type with destination layer
+                dest_base = QgsWkbTypes.geometryType(to_layer.wkbType())
+                src_base = QgsWkbTypes.geometryType(geom.wkbType())
+                if src_base != dest_base:
+                    self._set_status(
+                        f"Skipped: cannot convert {QgsWkbTypes.displayString(geom.wkbType())} "
+                        f"to {QgsWkbTypes.displayString(to_layer.wkbType())}.", "red"
+                    )
+                    continue
+                dest_is_multi = QgsWkbTypes.isMultiType(to_layer.wkbType())
+                if geom.isMultipart() and not dest_is_multi:
+                    parts = geom.asGeometryCollection()
+                    if len(parts) == 1:
+                        geom = parts[0]
+                    else:
+                        converted = geom.convertToType(dest_base, False)
+                        if converted is None or converted.isNull():
+                            self._set_status("Skipped: multi-part geometry cannot be reduced to a single part.", "red")
+                            continue
+                        geom = converted
+                elif not geom.isMultipart() and dest_is_multi:
+                    geom = geom.convertToType(dest_base, True)
 
                 # Skip duplicates
                 candidate_ids = index.intersects(geom.boundingBox())

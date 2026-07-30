@@ -44,6 +44,7 @@ class TerminalDialog(QDockWidget):
         self._commands            = []     # populated via set_commands()
         self.on_activate_maptool  = None   # set by Ugsurv; called to restore the map tool
         self.on_canvas_key        = None   # set by Ugsurv; forwards key events to canvas
+        self.on_close             = None   # set by Ugsurv; called when the dock is closed
 
         # ── Suggestion list (floating overlay — NOT in layout) ───────────
         # Qt.NoFocus: the list never steals keyboard focus from the command
@@ -299,6 +300,11 @@ class TerminalDialog(QDockWidget):
         if self.historyIndex > 0:
             self.historyIndex -= 1
             self.command.setText(self.previousCommand())
+
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        if self.on_close:
+            self.on_close()
 
     def commandRepeatDown(self):
         if self.historyIndex < len(self.commandHistory) - 1:

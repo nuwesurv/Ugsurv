@@ -254,6 +254,17 @@ class Ugsurv:
             return
         self.canvas.setMapTool(self.global_map_tool)
 
+    def _toggle_maptool(self):
+        """Cursor-icon button: activate plugin if off, else toggle the maptool on/off."""
+        if not self.active:
+            self.run()
+            return
+        current = self.canvas.mapTool()
+        if current is self.global_map_tool:
+            self.canvas.unsetMapTool(self.global_map_tool)
+        else:
+            self.canvas.setMapTool(self.global_map_tool)
+
     def _on_map_tool_set(self, new_tool, _old_tool):
         """Keep the toolbar button checked iff our tool owns the canvas."""
         if hasattr(self, '_maptool_action'):
@@ -269,11 +280,19 @@ class Ugsurv:
             self.activate_maptool()
 
     def _on_terminal_visibility(self, visible):
-        """Deactivate the plugin when the terminal dock is closed/hidden."""
+        """Deactivate the plugin when the terminal dock is hidden (backup path)."""
         if not visible and self.active:
             with contextlib.suppress(Exception):
                 self.terminal_dock.visibilityChanged.disconnect(self._on_terminal_visibility)
             self.run()
+
+    def _on_terminal_closed(self):
+        """Deactivate the plugin when the terminal X button is clicked (primary path)."""
+        if not self.active:
+            return
+        with contextlib.suppress(Exception):
+            self.terminal_dock.visibilityChanged.disconnect(self._on_terminal_visibility)
+        self.run()
 
     # ------------------------------------------------------------------ snap
     @staticmethod
@@ -362,7 +381,7 @@ class Ugsurv:
         self._maptool_action.setToolTip('Activate UgSurv map tool')
         self._maptool_action.setCheckable(True)
         self._maptool_action.setChecked(False)
-        self._maptool_action.triggered.connect(self.activate_maptool)
+        self._maptool_action.triggered.connect(self._toggle_maptool)
         self.iface.addToolBarIcon(self._maptool_action)
         self.actions.append(self._maptool_action)
 
@@ -431,6 +450,7 @@ class Ugsurv:
         # Connect these functions to ui
         self.terminal_dock.command.returnPressed.connect(self.acceptInput)
         self.terminal_dock.visibilityChanged.connect(self._on_terminal_visibility)
+        self.terminal_dock.on_close = self._on_terminal_closed
 
         # Global Esc shortcut — fires regardless of which widget has focus,
         # so Esc always cancels the active map tool even when the terminal is focused.
@@ -769,6 +789,7 @@ class Ugsurv:
         with contextlib.suppress(Exception):
             self.global_map_tool._evict()
             self.canvas.unsetMapTool(self.global_map_tool)
+            self.global_map_tool.deleteLater()
             self.global_map_tool = None
         self._maptool_action.setChecked(False)
 

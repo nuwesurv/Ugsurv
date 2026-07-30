@@ -53,7 +53,7 @@ _NORTH_EXACT = {'n', 'y', 'northing', 'northings', 'north', 'lat', 'latitude', '
 _NORTH_SUB   = ['northing', 'north', 'lat', 'ycoord']
 _EAST_EXACT  = {'e', 'x', 'easting', 'eastings', 'east', 'lon', 'longitude', 'xcoord', 'x_coord'}
 _EAST_SUB    = ['easting', 'east', 'lon', 'xcoord']
-_CODE_EXACT  = {'code', 'codes', 'parcel', 'lot', 'plot', 'block', 'id', 'no', 'num', 'number', 'desc', 'description'}
+_CODE_EXACT  = {'code', 'codes', 'parcel', 'lot', 'plot', 'block', 'id', 'no','pin', 'num', 'number', 'desc', 'description'}
 _CODE_SUB    = ['code', 'parcel', 'lot', 'plot', 'block', 'number', 'desc']
 
 
@@ -242,26 +242,26 @@ class ParcelPlotterDialog(QDialog):
 
             gdf = gpd.GeoDataFrame(data=df)
 
+            crs = self.crsWidget.crs()
+            epsg_code = crs.postgisSrid()
+
             unique_codes = gdf[code].unique()
-            new_gdf = gpd.GeoDataFrame(columns=[code, 'geometry'])
-            for i, unique_code in enumerate(unique_codes):
+            rows = []
+            for unique_code in unique_codes:
                 gdf1 = gdf[gdf[code] == unique_code]
-                parcel_boundary = []
-                for point in gdf1['geometry']:
-                    parcel_boundary.append([point.x, point.y])
+                parcel_boundary = [[point.x, point.y] for point in gdf1['geometry']]
                 try:
-                    new_gdf.loc[i, code] = unique_code
-                    new_gdf.loc[i, 'geometry'] = sh.Polygon(parcel_boundary)
+                    poly = sh.Polygon(parcel_boundary)
+                    rows.append({code: unique_code, 'geometry': poly})
                 except Exception as e:
                     self.response.setText(f"Error creating polygon for code {unique_code}: {str(e)}")
                     continue
 
-            if new_gdf.empty:
+            if not rows:
                 self.response.setText("No valid polygons created")
                 return
 
-            crs = self.crsWidget.crs()
-            epsg_code = crs.postgisSrid()
+            new_gdf = gpd.GeoDataFrame(rows, geometry='geometry')
 
             mem_layer = QgsVectorLayer(f'Polygon?crs=EPSG:{epsg_code}', filename, 'memory')
             prov = mem_layer.dataProvider()
@@ -269,8 +269,11 @@ class ParcelPlotterDialog(QDialog):
             mem_layer.updateFields()
             feats = []
             for _, row in new_gdf.iterrows():
+                geom = row['geometry']
+                if geom is None or geom.is_empty:
+                    continue
                 feat = QgsFeature()
-                feat.setGeometry(QgsGeometry.fromWkt(row['geometry'].wkt))
+                feat.setGeometry(QgsGeometry.fromWkt(geom.wkt))
                 feat.setAttributes([str(row[code])])
                 feats.append(feat)
             prov.addFeatures(feats)
