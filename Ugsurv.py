@@ -71,6 +71,7 @@ from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
 from .module_wz_dialogs.parcel_correction_tool import ParcelCorrectionDock
 from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
+from .module_wz_dialogs.revert_geometry import RevertGeometryDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
 from .modules.vertex_selector import VertexSelector
@@ -440,8 +441,8 @@ class Ugsurv:
             'TRIM', 'EXTEND', 'JOIN',
             'BREAK', 'CHAMFER', 'EXPLODE', 'HATCH',
             # Survey tools
-            'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
-            'SPIKY', 'PTOVERLAP', 'SOLVETOPO', 'CORRTOPO', 'IMPORT', 'PRINT', 'GAME',
+            'TS', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
+            'SPIKY', 'PTOVERLAP', 'SOLVETOPO', 'CORRTOPO', 'REVERT', 'IMPORT', 'PRINT', 'GAME',
             # Terminal
             'HELP', 'CLEAR',
         ])
@@ -614,13 +615,14 @@ class Ugsurv:
                 "\n  Del            Delete gripped vertex"
                 "\n  Esc            Clear grip / cancel move"
                 "\n── Survey tools ──────────────────────"
-                "\n  TOPO    [TS]   Topology solver"
+                "\n  TS    [TS]   Topology solver"
                 "\n  FIXG    [FG]   Fix geometry"
                 "\n  ADDGEOM [GA]   Add geometry to layer"
                 "\n  CRS            Adjust CRS of selected features"
                 "\n  SPIKY   [SPK]  Detect spiky vertices"
                 "\n  PTOVERLAP[PTO] Detect overlapping boundary points"
                 "\n  SOLVETOPO[ST]  Solve topology against rivers/roads/land"
+                "\n  REVERT  [RV]   Revert selected features to original_geometry"
                 "\n  CORRTOPO [CT]  Split & classify parcels vs road/river/waterbody/land"
                 "\n  IMPORT  [IMP]  Import CSV, XLSX, DWG/DXF or PDF as a layer"
                 "\n  PRINT   [PR ]  Import & georeference a cadastral print"
@@ -757,6 +759,10 @@ class Ugsurv:
             self._show_dock('solve_topo_dock',
                             lambda: SolveTopologyDock(self.iface.mainWindow()))
 
+        elif cmd in ('revert', 'rv'):
+            self._show_dock('revert_geom_dock',
+                            lambda: RevertGeometryDock(self.iface.mainWindow()))
+
         elif cmd in ('corrtopo', 'ct'):
             self._show_dock('parcel_correction_dock',
                             lambda: ParcelCorrectionDock(self.iface.mainWindow()))
@@ -830,6 +836,11 @@ class Ugsurv:
             self.solve_topo_dock.close()
             self.iface.removeDockWidget(self.solve_topo_dock)
             self.solve_topo_dock.deleteLater()
+
+        # Remove the revert geometry dock
+        with contextlib.suppress(Exception):
+            self.iface.removeDockWidget(self.revert_geom_dock)
+            self.revert_geom_dock.deleteLater()
 
         # Remove the parcel correction dock
         with contextlib.suppress(Exception):
