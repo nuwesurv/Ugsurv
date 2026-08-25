@@ -373,9 +373,10 @@ def _find_laf_col(gdf):
 # ── Background worker ─────────────────────────────────────────────────────────
 
 class _Worker(QObject):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(str)
-    error    = pyqtSignal(str)
+    progress    = pyqtSignal(str)
+    finished    = pyqtSignal(str)
+    error       = pyqtSignal(str)
+    constraints = pyqtSignal(str)
 
     def __init__(self, parcels_src, rivers_src, roads_src, waterbodies_src, surveyed_src,
                  output_path, river_buffer_m, road_buffer_m, wb_buffer_m,
@@ -708,6 +709,39 @@ class _Worker(QObject):
             self.progress.emit("Saving output…")
             result.to_file(self.output_path, driver="GPKG")
 
+            # ── ref_clean_layers ──────────────────────────────────────────────
+            self.progress.emit("Building ref_clean_layers…")
+            try:
+                rows = []
+                if buf_river_geoms:
+                    for g in buf_river_geoms:
+                        if g is not None and not g.is_empty:
+                            rows.append({'geometry': g, 'origin': 'river'})
+                if buf_road_geoms:
+                    for g in buf_road_geoms:
+                        if g is not None and not g.is_empty:
+                            rows.append({'geometry': g, 'origin': 'road'})
+                if buf_wb_geoms:
+                    for g in buf_wb_geoms:
+                        if g is not None and not g.is_empty:
+                            rows.append({'geometry': g, 'origin': 'waterbody'})
+                if self.surveyed_src:
+                    for g in gdf_surveyed.geometry:
+                        if g is not None and not g.is_empty:
+                            rows.append({'geometry': g, 'origin': 'surveyed_land'})
+                if rows:
+                    import geopandas as gpd
+                    c_gdf = gpd.GeoDataFrame(rows, crs=target_crs)
+                    c_path = os.path.join(
+                        os.path.dirname(self.output_path), 'ref_clean_layers.gpkg'
+                    )
+                    c_gdf.to_file(c_path, driver='GPKG', layer='ref_clean_layers')
+                    self.constraints.emit(c_path)
+                else:
+                    self.progress.emit("No reference layers to combine — skipping ref_clean_layers.")
+            except Exception as e:
+                self.progress.emit(f"ref_clean_layers warning: {e}")
+
             pdf_path = os.path.splitext(self.output_path)[0] + '.pdf'
             self.progress.emit("Generating PDF report…")
             _generate_topo_pdf(pdf_path, {
@@ -927,6 +961,7 @@ class SolveTopologyDock(QDockWidget):
         self._worker.progress.connect(lambda msg: self._set_status(msg, "orange"))
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
+        self._worker.constraints.connect(self._on_constraints)
         self._worker.finished.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
         self._thread.finished.connect(lambda: self.run_btn.setEnabled(True))
@@ -935,6 +970,7 @@ class SolveTopologyDock(QDockWidget):
     def _on_finished(self, summary):
         self._set_status(summary, "green")
         self._load_output()
+        self._load_constraints()
 
     def _load_output(self):
         import os
@@ -947,6 +983,43 @@ class SolveTopologyDock(QDockWidget):
         layer = QgsVectorLayer(uri, layer_name, "ogr")
         if layer.isValid():
             QgsProject.instance().addMapLayer(layer)
+
+    def _on_constraints(self, path):
+        self._constraints_path = path
+
+    def _load_constraints(self):
+        import os
+        from qgis.core import (
+            QgsVectorLayer, QgsProject,
+            QgsCategorizedSymbolRenderer, QgsRendererCategory, QgsFillSymbol,
+        )
+        path = getattr(self, '_constraints_path', None)
+        if not path or not os.path.exists(path):
+            return
+        uri = f"{path}|layername=ref_clean_layers"
+        layer = QgsVectorLayer(uri, 'ref_clean_layers', 'ogr')
+        if not layer.isValid():
+            return
+
+        # R,G,B,A  (A = 0-255; 120 ≈ 47 % opacity)
+        _STYLES = [
+            ('river',         '26,110,191,120',   '#1A6EBF'),
+            ('road',          '192,57,43,120',     '#C0392B'),
+            ('waterbody',     '22,160,133,120',    '#16A085'),
+            ('surveyed_land', '125,60,152,120',    '#7D3C98'),
+        ]
+        categories = []
+        for origin, fill_rgba, border_color in _STYLES:
+            sym = QgsFillSymbol.createSimple({
+                'color':         fill_rgba,
+                'outline_color': border_color,
+                'outline_width': '0.4',
+            })
+            label = origin.replace('_', ' ').title()
+            categories.append(QgsRendererCategory(origin, sym, label))
+
+        layer.setRenderer(QgsCategorizedSymbolRenderer('origin', categories))
+        QgsProject.instance().addMapLayer(layer)
 
     def _on_error(self, msg):
         self._set_status(f"Error: {msg}", "red")
