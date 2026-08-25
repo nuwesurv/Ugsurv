@@ -68,6 +68,7 @@ from .module_wz_dialogs.file_importer import FileImportDialog
 from .module_wz_dialogs.append_geometry import GeometryAppenderDock
 from .module_wz_dialogs.crs_adjust import CrsAdjustDock
 from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
+from .module_wz_dialogs.parcel_correction_tool import ParcelCorrectionDock
 from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .modules.circle_drawer import CircleDrawer
@@ -440,7 +441,7 @@ class Ugsurv:
             'BREAK', 'CHAMFER', 'EXPLODE', 'HATCH',
             # Survey tools
             'TOPO', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
-            'SPIKY', 'PTOVERLAP', 'SOLVETOPO', 'IMPORT', 'PRINT', 'GAME',
+            'SPIKY', 'PTOVERLAP', 'SOLVETOPO', 'CORRTOPO', 'IMPORT', 'PRINT', 'GAME',
             # Terminal
             'HELP', 'CLEAR',
         ])
@@ -620,6 +621,7 @@ class Ugsurv:
                 "\n  SPIKY   [SPK]  Detect spiky vertices"
                 "\n  PTOVERLAP[PTO] Detect overlapping boundary points"
                 "\n  SOLVETOPO[ST]  Solve topology against rivers/roads/land"
+                "\n  CORRTOPO [CT]  Split & classify parcels vs road/river/waterbody/land"
                 "\n  IMPORT  [IMP]  Import CSV, XLSX, DWG/DXF or PDF as a layer"
                 "\n  PRINT   [PR ]  Import & georeference a cadastral print"
                 "\n  GAME    [GM]   Total-station laser game"
@@ -755,6 +757,10 @@ class Ugsurv:
             self._show_dock('solve_topo_dock',
                             lambda: SolveTopologyDock(self.iface.mainWindow()))
 
+        elif cmd in ('corrtopo', 'ct'):
+            self._show_dock('parcel_correction_dock',
+                            lambda: ParcelCorrectionDock(self.iface.mainWindow()))
+
         elif cmd in ('game', 'gm'):
             self.global_map_tool.set_tool(Game1(self.canvas, self.terminal_dock))
             
@@ -821,8 +827,14 @@ class Ugsurv:
 
         # Remove the solve topology dock
         with contextlib.suppress(Exception):
+            self.solve_topo_dock.close()
             self.iface.removeDockWidget(self.solve_topo_dock)
             self.solve_topo_dock.deleteLater()
+
+        # Remove the parcel correction dock
+        with contextlib.suppress(Exception):
+            self.iface.removeDockWidget(self.parcel_correction_dock)
+            self.parcel_correction_dock.deleteLater()
 
         # Remove the properties panel
         with contextlib.suppress(Exception):
