@@ -140,11 +140,9 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                     QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll
                 )
 
-                # if the selected are greater htan 1 notify user.
-                if len(results)>1:
-                    self.terminal_dock.commandOutputText += f'\nMore than 1 feature was selected...'
-                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                    return
+                # if multiple features found, use the first one
+                if len(results) > 1:
+                    results = [results[0]]
                 
                 if results:
                     self.cursor_points.append(point)
@@ -235,17 +233,17 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             merged_gaps = QgsGeometry.unaryUnion(hole_geoms)
             adj_feature2 = adj_feature1.combine(merged_gaps)
         else:
-            # Features have a gap along their boundary (union is multipart or no inner rings).
-            # Bridge the gap by buffering both features and filling the zone between them.
+            # Features have a gap — use morphological closing to bridge it.
+            # Expand the combined geometry past the gap, then contract back; the gap
+            # becomes filled because material from both sides meets during expansion.
             distance = adj_feature1.distance(merged_features)
             if distance > 0:
-                bridge = distance * 1.5
-                adj_buf = adj_feature1.buffer(bridge, 16)
-                ref_buf = merged_features.buffer(bridge, 16)
-                gap_zone = adj_buf.intersection(ref_buf)
-                gap_zone = gap_zone.difference(merged_features)
-                if not gap_zone.isEmpty():
-                    adj_feature2 = adj_feature1.combine(gap_zone)
+                close_dist = distance + 0.001
+                combined = QgsGeometry.unaryUnion([adj_feature1, merged_features])
+                closed = combined.buffer(close_dist, 16).buffer(-close_dist, 16)
+                if not closed.isEmpty():
+                    candidate = closed.difference(merged_features)
+                    adj_feature2 = candidate if not candidate.isEmpty() else adj_feature1
                 else:
                     adj_feature2 = adj_feature1
             else:

@@ -30,6 +30,8 @@ def solve_dependency_issues() -> list[str]:
         ("shapely",  "shapely"),
         ("numpy",    "numpy"),
         ("openpyxl", "openpyxl"),
+        ("docx",       "python-docx"),
+        ("reportlab",  "reportlab"),
     ]
 
     for module, package in dependencies:

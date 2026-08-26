@@ -7,8 +7,9 @@ from qgis.core import QgsMapLayerProxyModel, QgsGeometry, QgsVectorLayer
 
 
 class RevertGeometryDock(QDockWidget):
-    def __init__(self, parent=None):
+    def __init__(self, iface, parent=None):
         super().__init__(parent)
+        self._iface = iface
         self.setWindowTitle('Revert Geometry')
 
         root = QWidget()
@@ -36,6 +37,19 @@ class RevertGeometryDock(QDockWidget):
         self.setWidget(root)
 
         self.btn_revert.clicked.connect(self._revert)
+        iface.currentLayerChanged.connect(self._sync_active_layer)
+        self._sync_active_layer(iface.activeLayer())
+
+    def closeEvent(self, event):
+        try:
+            self._iface.currentLayerChanged.disconnect(self._sync_active_layer)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)
+
+    def _sync_active_layer(self, layer):
+        if layer and isinstance(layer, QgsVectorLayer):
+            self.cmb_layer.setLayer(layer)
 
     def _set_status(self, msg, color='green'):
         self.status.setStyleSheet(f'color: {color};')
