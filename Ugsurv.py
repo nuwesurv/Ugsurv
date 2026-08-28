@@ -71,6 +71,7 @@ from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
 from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
 from .module_wz_dialogs.revert_geometry import RevertGeometryDock
+from .module_wz_dialogs.feature_navigator import FeatureNavigatorDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
 from .modules.vertex_selector import VertexSelector
@@ -440,8 +441,8 @@ class Ugsurv:
             'TRIM', 'EXTEND', 'JOIN',
             'BREAK', 'CHAMFER', 'EXPLODE', 'HATCH',
             # Survey tools
-            'TS', 'FIXG', 'PARCEL', 'ADDGEOM', 'CRS',
-            'SPIKY', 'PTOVERLAP', 'SLV', 'REVERT', 'IMPORT', 'PRINT', 'GAME',
+            'TS', 'FIXG', 'PP', 'ADDGEOM', 'CRS',
+            'SPIKY', 'PTOVERLAP', 'SLV', 'REVERT', 'IMPORT', 'PRINT', 'GAME', 'NAV',
             # Terminal
             'HELP', 'CLEAR',
         ])
@@ -622,6 +623,7 @@ class Ugsurv:
                 "\n  PTOVERLAP[PTO] Detect overlapping boundary points"
                 "\n  SOLVETOPO[SLV]  Solve topology against rivers/roads/land"
                 "\n  REVERT  [RV]   Revert selected features to original_geometry"
+                "\n  NAV     [FN]   Navigate filtered features with ◀ / ▶ arrows"
                 "\n  IMPORT  [IMP]  Import CSV, XLSX, DWG/DXF or PDF as a layer"
                 "\n  PRINT   [PR ]  Import & georeference a cadastral print"
                 "\n  GAME    [GM]   Total-station laser game"
@@ -761,6 +763,10 @@ class Ugsurv:
             self._show_dock('revert_geom_dock',
                             lambda: RevertGeometryDock(self.iface, self.iface.mainWindow()))
 
+        elif cmd in ('nav', 'fn'):
+            self._show_dock('feature_nav_dock',
+                            lambda: FeatureNavigatorDock(self.canvas, self.iface.mainWindow()))
+
         elif cmd in ('game', 'gm'):
             self.global_map_tool.set_tool(Game1(self.canvas, self.terminal_dock))
             
@@ -835,6 +841,11 @@ class Ugsurv:
         with contextlib.suppress(Exception):
             self.iface.removeDockWidget(self.revert_geom_dock)
             self.revert_geom_dock.deleteLater()
+
+        # Remove the feature navigator dock
+        with contextlib.suppress(Exception):
+            self.iface.removeDockWidget(self.feature_nav_dock)
+            self.feature_nav_dock.deleteLater()
 
         # Remove the properties panel
         with contextlib.suppress(Exception):
