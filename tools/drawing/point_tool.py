@@ -1,0 +1,51 @@
+# -*- coding: utf-8 -*-
+"""
+PointTool — places individual point features.
+
+Each click commits one MultiPoint feature to the points layer.
+Enter or Esc exits the command.  Multiple points can be placed in a single
+command session.
+"""
+
+from qgis.PyQt.QtCore import Qt
+from qgis.core import QgsPointXY, QgsGeometry, QgsFeature
+
+from ...core.base_tool import BaseTool, ToolState
+from ...core.events import SemanticEvent, EventType
+
+
+class PointTool(BaseTool):
+    CURSOR = Qt.CursorShape.CrossCursor
+
+    def activate(self):
+        super().activate()
+        self._transition(ToolState.ACTING)
+
+    def _on_event(self, sem: SemanticEvent):
+        if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:
+            self._commit_point(sem.point)
+        elif sem.type == EventType.CONFIRM:
+            self._transition(ToolState.IDLE)
+
+    def _on_hover(self, sem: SemanticEvent):
+        pass  # no preview — cursor is the indicator
+
+    def _commit_point(self, pt: QgsPointXY):
+        geom = QgsGeometry.fromPointXY(pt)
+        geom.convertToMultiType()
+
+        ef = getattr(self._ctx, 'entity_factory', None)
+        if ef:
+            ef.commit(geom, self._ctx.active_cad_layer)
+            return
+
+        # fallback: write directly to storage points layer
+        layer = self._ctx.storage_manager.points_layer
+        if not layer:
+            return
+        if not layer.isEditable():
+            layer.startEditing()
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(geom)
+        feat["cad_layer"] = self._ctx.active_cad_layer
+        layer.addFeature(feat)
