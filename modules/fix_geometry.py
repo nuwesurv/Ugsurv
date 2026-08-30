@@ -7,7 +7,8 @@ from qgis.core import (
     QgsPointXY,
     QgsField,
     QgsPointLocator,
-    QgsWkbTypes
+    QgsWkbTypes,
+    QgsCoordinateTransform
 )
 from qgis.gui import QgsMapTool, QgsMapToolIdentifyFeature, QgsRubberBand
 from qgis.PyQt.QtGui import QIcon, QFont, QColor
@@ -16,8 +17,9 @@ import math
 
 class FixGeometry(QgsMapToolIdentifyFeature):
 
-    def __init__(self, canvas, terminal_dock):
+    def __init__(self, canvas, iface, terminal_dock):
         super().__init__(canvas)
+        self.iface = iface
         self.canvas = canvas
         self.terminal_dock = terminal_dock
         self.cursor_points = []
@@ -90,48 +92,53 @@ class FixGeometry(QgsMapToolIdentifyFeature):
         try:
             if event.button() == Qt.MouseButton.RightButton:
                 self.fixGeometry()
-                
-                # Reset the rubberbands
-                self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
-                
-                # Clean variables
-                self.cursor_points.clear()
-                self.selected_geoms.clear()
-                self.adj_feature_properties = {}
-                
-                self.terminal_dock.commandOutputText += f'\n------Next >>>'
-                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                self.deactivate()
                 return
-
 
             if event.button() == Qt.MouseButton.LeftButton:
                 point = self.toMapCoordinates(event.pos())
-                # Call identify from parent class
+
+                active_layer = self.iface.activeLayer()
+                if not active_layer:
+                    self.terminal_dock.commandOutputText += f'\nNo active layer selected in the Layers panel!'
+                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                    return
+
                 results = self.identify(
                     event.x(),
                     event.y(),
-                    [layer for layer in QgsProject.instance().mapLayers().values()],
+                    [active_layer],
                     QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll
                 )
 
-                if results:
-                    self.cursor_points.append(point)
-                    feature = results[0].mFeature
-                    self.selected_geoms.append(feature.geometry())
-                    if len(self.selected_geoms) == 1:
-                        self.adj_feature_properties['layer'] = results[0].mLayer.name()
-                        self.adj_feature_properties['fid'] = results[0].mFeature.id()
-                else:
-                    if len(self.selected_geoms) == 1:
-                        self.adj_feature_properties['layer'] = results[0].mLayer.name()
-                        self.adj_feature_properties['fid'] = results[0].mFeature.id()
-                        self.terminal_dock.commandOutputText += f'\nNo feature detected?'
-                        self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
-                    
-                self.terminal_dock.commandOutputText += f'\nFeature{len(self.cursor_points)}: {results[0].mLayer.name()}'
-                self.terminal_dock.commandDisplay.setText(
-                    self.terminal_dock.commandOutputText + '\n'
-                )
+                if not results:
+                    self.terminal_dock.commandOutputText += f'\nNo feature detected'
+                    self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)
+                    return
+
+                # Reset previous selection so only one feature is ever held
+                self.cursor_points.clear()
+                self.selected_geoms.clear()
+
+                self.cursor_points.append(point)
+                feature = results[0].mFeature
+                feat_layer = results[0].mLayer
+
+                geom = QgsGeometry(feature.geometry())
+                project_crs = QgsProject.instance().crs()
+                feat_crs = feat_layer.crs()
+                if feat_crs != project_crs:
+                    transform = QgsCoordinateTransform(feat_crs, project_crs, QgsProject.instance())
+                    geom.transform(transform)
+
+                self.selected_geoms.append(geom)
+                self.adj_feature_properties['layer'] = feat_layer.name()
+                self.adj_feature_properties['fid'] = feature.id()
+                self.showRubberBandPolygon(geom, self.rubber_band)
+
+                self.terminal_dock.commandOutputText += f'\nSelected: {feat_layer.name()} — right-click to fix, Esc to cancel'
+                self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText + '\n')
+
         except Exception as e:
             self.terminal_dock.commandOutputText += f'\nExperienced error: {e}'
             self.terminal_dock.commandDisplay.setText(self.terminal_dock.commandOutputText)

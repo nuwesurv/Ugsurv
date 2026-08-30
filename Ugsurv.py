@@ -441,7 +441,7 @@ class Ugsurv:
             'TRIM', 'EXTEND', 'JOIN',
             'BREAK', 'CHAMFER', 'EXPLODE', 'HATCH',
             # Survey tools
-            'TS', 'FIXG', 'PP', 'ADDGEOM', 'CRS',
+            'TS', 'FXG', 'PP', 'ADDGEOM', 'CRS',
             'SPIKY', 'PTOVERLAP', 'SLV', 'REVERT', 'IMPORT', 'PRINT', 'GAME', 'NAV',
             # Terminal
             'HELP', 'CLEAR',
@@ -724,8 +724,8 @@ class Ugsurv:
         elif cmd in ('topo', 'ts'):
             self.global_map_tool.set_tool(TopologySolver(self.canvas, self.iface, self.terminal_dock))
 
-        elif cmd in ('fixg', 'fg'):
-            self.global_map_tool.set_tool(FixGeometry(self.canvas, self.terminal_dock))
+        elif cmd in ('fxg', 'fxg'):
+            self.global_map_tool.set_tool(FixGeometry(self.canvas, self.iface, self.terminal_dock))
 
         elif cmd in ('parcel', 'pp'):
             self.dlg = ParcelPlotterDialog(parent=self.iface.mainWindow())
