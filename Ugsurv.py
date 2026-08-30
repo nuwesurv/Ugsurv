@@ -70,7 +70,7 @@ from .module_wz_dialogs.crs_adjust import CrsAdjustDock
 from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
 from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
 from .module_wz_dialogs.overlap_points import OverlapPointsDock
-from .module_wz_dialogs.revert_geometry import RevertGeometryDock
+from .module_wz_dialogs.revert_geometry import RevertMapTool
 from .module_wz_dialogs.feature_navigator import FeatureNavigatorDock
 from .modules.circle_drawer import CircleDrawer
 from .modules.polyline_drawer import PolylineDrawer
@@ -760,8 +760,7 @@ class Ugsurv:
                             lambda: SolveTopologyDock(self.iface.mainWindow()))
 
         elif cmd in ('revert', 'rv'):
-            self._show_dock('revert_geom_dock',
-                            lambda: RevertGeometryDock(self.iface, self.iface.mainWindow()))
+            self.global_map_tool.set_tool(RevertMapTool(self.canvas, self.iface, self.terminal_dock))
 
         elif cmd in ('nav', 'fn'):
             self._show_dock('feature_nav_dock',
