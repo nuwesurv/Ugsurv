@@ -33,15 +33,16 @@ from qgis.core import (
     QgsCircularString,
     QgsGeometry,
     QgsPoint,
+    QgsPointLocator,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
+from qgis.gui import QgsMapTool, QgsMapToolIdentifyFeature, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
-from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtGui import QColor, QCursor
 from qgis.PyQt.QtWidgets import QLabel
 from .dynamic_input import DynamicInput
 from .context_menu import RightClickMenu
@@ -56,6 +57,7 @@ _S_MOVING  = 2
 _S_FEATURE = 3   # feature highlighted by edge click; no vertex gripped yet
 
 _HIT_PX = 10
+_MAX_VTX_MARKERS = 200   # never create more than this many vertex/midpoint markers
 
 _C_HOVER       = QColor(255, 210,   0, 240)   # yellow – hover circle
 _C_GRIP_HOT    = QColor(  0,  60, 220, 255)   # deep blue – hot (gripped) vertex
@@ -92,7 +94,7 @@ _HINT = {
 }
 
 
-class VertexSelector(QgsMapTool):
+class VertexSelector(QgsMapToolIdentifyFeature):
     """Always-on vertex grip editor — the permanent default map tool."""
 
     # Emitted when a feature becomes active (FEATURE or GRIPPED state).
@@ -103,11 +105,20 @@ class VertexSelector(QgsMapTool):
     # Emitted after any geometry edit so the properties panel can refresh.
     feature_refreshed = pyqtSignal(object, int)
 
-    def __init__(self, canvas, terminal_dock):
+    def __init__(self, canvas, terminal_dock, iface=None):
         super().__init__(canvas)
         self.canvas        = canvas
         self.terminal_dock = terminal_dock
         self._maptool      = None   # injected by UgsurvMaptool.set_default_tool()
+        self._iface        = iface
+        self._locators     = {}    # layer_id → QgsPointLocator (rebuilt per layer)
+
+        # Cached geometry for the active MOVING state — avoids getFeature() per mouse move
+        self._moving_geom        = None   # QgsGeometry of the gripped feature
+        self._moving_extra_geoms = []     # QgsGeometry list for extra-selected features
+        self._moving_is_closed   = False  # whether gripped feature is a closed polyline
+        self._moving_first_idx   = 0
+        self._moving_last_idx    = 0
 
         self._state          = _S_IDLE
         self._gripped        = None   # _SelVtx – the hot grip
@@ -225,6 +236,9 @@ class VertexSelector(QgsMapTool):
                     self._remove_from_extra(lyr, fid)
             except RuntimeError:
                 self._remove_from_extra(lyr, fid)
+        # Purge stale locators for removed layers
+        for lid in layer_ids:
+            self._locators.pop(lid, None)
 
     # ------------------------------------------------------------------
     # Marker / rubber-band factories
@@ -433,21 +447,34 @@ class VertexSelector(QgsMapTool):
         self._sel_fid   = fid
 
         verts = self._feature_verts(layer, fid)
+        extent = self.canvas.extent()
+        count = 0
         for _, vpt in verts:
+            if count >= _MAX_VTX_MARKERS:
+                break
+            if not extent.contains(vpt):
+                continue
             m = self._make_marker(_C_FEAT_VTX, QgsVertexMarker.IconType.ICON_CIRCLE, 6)
             m.setCenter(vpt)
             self._feature_vtx_markers.append(m)
+            count += 1
 
         # "+" markers at segment midpoints — skip for circles (chords ≠ arc)
         if layer.name() != "_circles":
+            count = 0
             for i in range(len(verts) - 1):
+                if count >= _MAX_VTX_MARKERS:
+                    break
                 pt1, pt2 = verts[i][1], verts[i + 1][1]
                 mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
+                if not extent.contains(mid):
+                    continue
                 m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.IconType.ICON_CROSS, 8)
                 m.setCenter(mid)
                 m.setPenWidth(2)
                 self._mid_markers.append(m)
                 self._mid_points.append(mid)
+                count += 1
 
         feat = layer.getFeature(fid)
         geom = feat.geometry()
@@ -501,8 +528,13 @@ class VertexSelector(QgsMapTool):
         self._gripped = sv
 
         verts = self._feature_verts(sv.layer, sv.fid)
+        extent = self.canvas.extent()
+        count = 0
         for vidx, vpt in verts:
             hot = (vidx == sv.vidx)
+            # Always show the hot (gripped) vertex; cap others to visible extent
+            if not hot and (count >= _MAX_VTX_MARKERS or not extent.contains(vpt)):
+                continue
             m = self._make_marker(
                 _C_GRIP_HOT if hot else _C_FEAT_VTX,
                 QgsVertexMarker.IconType.ICON_BOX if hot else QgsVertexMarker.IconType.ICON_CIRCLE,
@@ -510,6 +542,8 @@ class VertexSelector(QgsMapTool):
             )
             m.setCenter(vpt)
             self._grip_markers.append(m)
+            if not hot:
+                count += 1
 
         # Full geometry outline
         feat = sv.layer.getFeature(sv.fid)
@@ -523,14 +557,20 @@ class VertexSelector(QgsMapTool):
         self._sel_layer = sv.layer
         self._sel_fid   = sv.fid
         if sv.layer.name() != "_circles":
+            count = 0
             for i in range(len(verts) - 1):
+                if count >= _MAX_VTX_MARKERS:
+                    break
                 pt1, pt2 = verts[i][1], verts[i + 1][1]
                 mid = QgsPointXY((pt1.x() + pt2.x()) / 2, (pt1.y() + pt2.y()) / 2)
+                if not extent.contains(mid):
+                    continue
                 m = self._make_marker(_C_MID_MARKER, QgsVertexMarker.IconType.ICON_CROSS, 8)
                 m.setCenter(mid)
                 m.setPenWidth(2)
                 self._mid_markers.append(m)
                 self._mid_points.append(mid)
+                count += 1
 
         self._log(
             f"\nGripped vertex {sv.vidx + 1}/{len(verts)}"
@@ -561,6 +601,8 @@ class VertexSelector(QgsMapTool):
         self._state = _S_MOVING
         if self._geom_band:
             self._geom_band.setVisible(False)   # hide static outline; move band takes over
+        if self._snap_marker:
+            self._snap_marker.setVisible(False)
         self._rm(self._move_band)               # discard any extend-preview band
         self._move_band = None
         for b in self._move_extra_bands:
@@ -579,7 +621,19 @@ class VertexSelector(QgsMapTool):
         self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
         self._move_band.setToGeometry(geom, sv.layer)
 
+        # Cache geometry and closed-polyline metadata so canvasMoveEvent never
+        # needs to call getFeature() or copy the whole geometry per mouse move.
+        self._moving_geom = geom
+        if not geom.isEmpty() and self._is_closed_polyline(geom):
+            self._moving_is_closed = True
+            verts = self._geom_verts(geom)
+            self._moving_first_idx = verts[0][0]
+            self._moving_last_idx  = verts[-1][0]
+        else:
+            self._moving_is_closed = False
+
         # Prepare preview bands for shared vertices on extra selected features
+        self._moving_extra_geoms = []
         for lyr, fid, vidx in self._shared_vertices(sv.point):
             xfeat = lyr.getFeature(fid)
             xgeom = xfeat.geometry()
@@ -589,6 +643,13 @@ class VertexSelector(QgsMapTool):
                 band.setToGeometry(xgeom, lyr)
                 self._move_extra_bands.append(band)
                 self._move_extra_data.append((lyr, fid, vidx))
+                # Cache extra geom + closed info as (geom, is_closed, first_idx, last_idx)
+                xc = self._is_closed_polyline(xgeom)
+                if xc:
+                    xv = self._geom_verts(xgeom)
+                    self._moving_extra_geoms.append((xgeom, True, xv[0][0], xv[-1][0]))
+                else:
+                    self._moving_extra_geoms.append((xgeom, False, 0, 0))
 
         if sv.layer.name() == "_circles" and not geom.isEmpty():
             center = self._circle_center_from_geom(geom)
@@ -759,6 +820,9 @@ class VertexSelector(QgsMapTool):
 
         feat = layer.getFeature(fid)
         geom = feat.geometry()
+        self._moving_geom        = geom if not geom.isEmpty() else None
+        self._moving_extra_geoms = []
+        self._moving_is_closed   = False
         if not geom.isEmpty():
             gt = QgsWkbTypes.geometryType(geom.wkbType())
             self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
@@ -788,7 +852,9 @@ class VertexSelector(QgsMapTool):
         self._enter_gripped(_SelVtx(sv.layer, sv.fid, sv.vidx, new_east))
 
     def _cancel_move(self):
-        self._moving_center = False
+        self._moving_center  = False
+        self._moving_geom    = None
+        self._moving_extra_geoms = []
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self._snap_marker.setVisible(False)
@@ -980,9 +1046,15 @@ class VertexSelector(QgsMapTool):
         else:
             self._center_marker.setVisible(False)
 
-    def _snap_point(self, _screen_pt, raw_pt):
-        """Return snapped point using the full custom priority chain."""
-        pt, icon = snap_utils.snap_point(self.canvas, raw_pt)
+    def _snap_point(self, _screen_pt, raw_pt, quick=False):
+        """Return snapped point using the custom priority chain.
+
+        quick=True skips midpoint / intersection / nearest — use for live-preview
+        mouse moves where those expensive snaps would stall the UI at 60 Hz.
+        """
+        active  = self._active_layer()
+        locator = self._get_locator(active) if active is not None else None
+        pt, icon = snap_utils.snap_point(self.canvas, raw_pt, active, locator=locator, quick=quick)
         if icon is not None and self._snap_marker:
             self._snap_marker.setCenter(pt)
             self._snap_marker.setIconType(icon)
@@ -998,11 +1070,25 @@ class VertexSelector(QgsMapTool):
     def _hit_tol(self):
         return _HIT_PX * self.canvas.mapUnitsPerPixel()
 
+    def _active_layer(self):
+        """Return the layer currently highlighted in the Layers panel, or None."""
+        if self._iface is None:
+            return None
+        lyr = self._iface.activeLayer()
+        if isinstance(lyr, QgsVectorLayer) and lyr.isSpatial():
+            return lyr
+        return None
+
     def _vector_layers(self):
-        return [
-            lyr for lyr in QgsProject.instance().mapLayers().values()
-            if isinstance(lyr, QgsVectorLayer) and lyr.isSpatial()
-        ]
+        """Yield all spatial vector layers, with the active layer first."""
+        active = self._active_layer()
+        seen = set()
+        if active is not None:
+            seen.add(id(active))
+            yield active
+        for lyr in QgsProject.instance().mapLayers().values():
+            if id(lyr) not in seen and isinstance(lyr, QgsVectorLayer) and lyr.isSpatial():
+                yield lyr
 
     def _geom_verts(self, geom):
         result, idx = [], 0
@@ -1061,63 +1147,101 @@ class VertexSelector(QgsMapTool):
             if area_acres_idx >= 0:
                 sv.layer.changeAttributeValue(sv.fid, area_acres_idx, 0.0)
 
+    def _get_locator(self, layer):
+        """Return a cached QgsPointLocator for layer, creating one if needed.
+        QgsPointLocator internally watches the layer for geometry changes and
+        invalidates itself, so we never need to rebuild it manually.
+        """
+        lid = layer.id()
+        if lid not in self._locators:
+            loc = QgsPointLocator(layer)
+            self._locators[lid] = loc
+        return self._locators[lid]
+
+    def _identify_feature_at(self, screen_x, screen_y):
+        """Native QGIS identify — uses spatial index, same approach as TopologySolver.
+        Searches the active layer first; falls back to all vector layers.
+        Returns (layer, fid) or None.
+        """
+        active = self._active_layer()
+        if active is not None:
+            results = self.identify(screen_x, screen_y, [active],
+                                    QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll)
+            if results:
+                return results[0].mLayer, results[0].mFeature.id()
+        results = self.identify(screen_x, screen_y,
+                                QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll,
+                                QgsMapToolIdentifyFeature.Type.VectorLayer)
+        if results:
+            return results[0].mLayer, results[0].mFeature.id()
+        return None
+
     def _find_vertex_near(self, map_pt, prefer=None):
         """Return the nearest _SelVtx within hit tolerance.
 
-        prefer=(layer, fid): if a vertex from that feature is within tolerance
-        it is returned unconditionally, even when a vertex from another feature
-        is geometrically closer (handles shared/coincident boundary vertices).
+        Uses QgsPointLocator (R-tree) for the active layer — O(log n) regardless
+        of feature count.  Falls back to manual scan only when 'prefer' targets
+        a non-active layer.
+
+        prefer=(layer, fid): vertex from that specific feature is returned
+        unconditionally when within tolerance (handles coincident boundary vertices).
         """
-        tol  = self._hit_tol()
-        best, best_d = None, tol
-        preferred, preferred_d = None, tol
-        rect = QgsRectangle(
-            map_pt.x() - tol, map_pt.y() - tol,
-            map_pt.x() + tol, map_pt.y() + tol,
-        )
-        for lyr in self._vector_layers():
-            for feat in lyr.getFeatures(rect):
-                if feat.geometry().isEmpty():
-                    continue
-                is_pref = (prefer is not None
-                           and id(lyr) == id(prefer[0])
-                           and feat.id() == prefer[1])
-                for vidx, vpt in self._geom_verts(feat.geometry()):
-                    d = map_pt.distance(vpt)
-                    if is_pref:
-                        if d < preferred_d:
-                            preferred_d = d
-                            preferred = _SelVtx(lyr, feat.id(), vidx, vpt)
-                    else:
+        tol    = self._hit_tol()
+        active = self._active_layer()
+        best      = None
+        preferred = None
+
+        # ── Fast path: R-tree lookup on the active layer ─────────────────────
+        if active is not None:
+            m = self._get_locator(active).nearestVertex(map_pt, tol)
+            if m.isValid():
+                best = _SelVtx(active, m.featureId(), m.vertexIndex(), m.point())
+
+            # If prefer targets this same layer, find nearest vertex on that feature
+            if prefer is not None and id(prefer[0]) == id(active):
+                feat = active.getFeature(prefer[1])
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    best_d = tol
+                    for vidx, vpt in self._geom_verts(feat.geometry()):
+                        d = map_pt.distance(vpt)
                         if d < best_d:
                             best_d = d
-                            best = _SelVtx(lyr, feat.id(), vidx, vpt)
-        return preferred if preferred is not None else best
+                            preferred = _SelVtx(active, prefer[1], vidx, vpt)
 
-    def _find_edge_near(self, map_pt):
-        """Return (layer, fid) of the nearest feature whose edge is within tol of map_pt.
-        Only called when no vertex hit was found, so vertex proximity is not re-checked.
-        """
-        tol = self._hit_tol()
-        pt_geom = QgsGeometry.fromPointXY(map_pt)
-        rect = QgsRectangle(
-            map_pt.x() - tol, map_pt.y() - tol,
-            map_pt.x() + tol, map_pt.y() + tol,
-        )
-        best, best_d = None, tol
-        for lyr in self._vector_layers():
-            for feat in lyr.getFeatures(rect):
-                geom = feat.geometry()
-                if geom.isEmpty():
-                    continue
-                gt = QgsWkbTypes.geometryType(geom.wkbType())
-                if gt == QgsWkbTypes.GeometryType.PointGeometry:
-                    continue
-                d = geom.distance(pt_geom)
-                if d < best_d:
-                    best_d = d
-                    best = (lyr, feat.id())
-        return best
+            # Done unless prefer forces us to check a different layer
+            if prefer is None or id(prefer[0]) == id(active):
+                return preferred if preferred is not None else best
+
+        # ── Slow path: prefer targets a layer other than active ───────────────
+        # Only check that specific feature — we already know which one it is.
+        if prefer is not None:
+            feat = prefer[0].getFeature(prefer[1])
+            if feat.isValid() and not feat.geometry().isEmpty():
+                best_d = tol
+                for vidx, vpt in self._geom_verts(feat.geometry()):
+                    d = map_pt.distance(vpt)
+                    if d < best_d:
+                        best_d = d
+                        preferred = _SelVtx(prefer[0], prefer[1], vidx, vpt)
+            # Also check active layer (already done above if active is not None)
+            if active is None:
+                # No active layer: scan all layers as fallback
+                rect = QgsRectangle(map_pt.x() - tol, map_pt.y() - tol,
+                                    map_pt.x() + tol, map_pt.y() + tol)
+                best_d = tol
+                for lyr in self._vector_layers():
+                    if prefer is not None and id(lyr) == id(prefer[0]):
+                        continue   # already handled above
+                    for feat in lyr.getFeatures(rect):
+                        if feat.geometry().isEmpty():
+                            continue
+                        for vidx, vpt in self._geom_verts(feat.geometry()):
+                            d = map_pt.distance(vpt)
+                            if d < best_d:
+                                best_d = d
+                                best = _SelVtx(lyr, feat.id(), vidx, vpt)
+
+        return preferred if preferred is not None else best
 
     def _find_midpoint_near(self, map_pt):
         """Return the pre-calculated midpoint QgsPointXY if map_pt is within hit tolerance."""
@@ -1427,6 +1551,16 @@ class VertexSelector(QgsMapTool):
                         if not geom.isEmpty() else QgsWkbTypes.GeometryType.LineGeometry)
                 self._move_band = self._make_band(gt, _C_MOVE, _C_MOVE_FILL, width=2)
                 self._move_band.setToGeometry(geom, sv.layer)
+                # Cache for fast per-move updates
+                self._moving_geom = geom
+                self._moving_extra_geoms = []
+                if not geom.isEmpty() and self._is_closed_polyline(geom):
+                    self._moving_is_closed = True
+                    _v = self._geom_verts(geom)
+                    self._moving_first_idx = _v[0][0]
+                    self._moving_last_idx  = _v[-1][0]
+                else:
+                    self._moving_is_closed = False
                 if self._hover_marker is not None:
                     self._hover_marker.setVisible(False)
             if not self._vtx_dragging:
@@ -1434,58 +1568,45 @@ class VertexSelector(QgsMapTool):
             # _vtx_dragging is True → fall through to _S_MOVING handler below
 
         if self._state == _S_MOVING:
-            map_pt = self._snap_point(event.pos(), raw_pt)
-            # Update live rubber-band: replace gripped vertex with cursor
+            # Hot path: raw cursor → rubber band only. No snap, no hints, no markers.
+            # Snap fires once on the commit click (canvasPressEvent).
             sv = self._gripped
-            if sv is None or not self._layer_ok(sv.layer):
+            if sv is None:
                 self._enter_idle()
                 return
-            feat = sv.layer.getFeature(sv.fid)
-            if not feat.geometry().isEmpty():
+            geom = self._moving_geom
+            if geom is not None and not geom.isEmpty():
                 if sv.layer.name() == "_circles" and self._moving_center:
-                    # Translate: rebuild circle at cursor position, same radius
-                    orig_center = self._circle_center_from_geom(feat.geometry())
+                    orig_center = self._circle_center_from_geom(geom)
                     if orig_center:
-                        radius  = orig_center.distance(sv.point)
-                        preview = self._build_circle_geom(map_pt, radius)
-                        self._move_band.setToGeometry(preview, sv.layer)
-                    self._show_hint(event.pos())
+                        radius = orig_center.distance(sv.point)
+                        self._move_band.setToGeometry(
+                            self._build_circle_geom(raw_pt, radius), sv.layer)
                     return
                 elif sv.layer.name() == "_circles":
-                    preview = self._circle_geom_for_drag(feat.geometry(), map_pt)
-                    # Keep input box near cursor; update placeholder with live radius
-                    center = self._circle_center_from_geom(feat.geometry())
+                    center = self._circle_center_from_geom(geom)
+                    self._move_band.setToGeometry(
+                        self._circle_geom_for_drag(geom, raw_pt), sv.layer)
                     if center:
-                        cp = self.canvas.getCoordinateTransform().transform(map_pt)
-                        self._dinput.update(cp.x(), cp.y(), {"radius": f"{center.distance(map_pt):.3f}"})
+                        cp = self.canvas.getCoordinateTransform().transform(raw_pt)
+                        self._dinput.update(cp.x(), cp.y(),
+                                            {"radius": f"{center.distance(raw_pt):.3f}"})
                 else:
-                    geom = feat.geometry()
-                    preview = QgsGeometry(geom)
-                    preview.moveVertex(map_pt.x(), map_pt.y(), sv.vidx)
-                    if self._is_closed_polyline(geom):
-                        verts = self._geom_verts(geom)
-                        first_idx, last_idx = verts[0][0], verts[-1][0]
-                        if sv.vidx == first_idx:
-                            preview.moveVertex(map_pt.x(), map_pt.y(), last_idx)
-                        elif sv.vidx == last_idx:
-                            preview.moveVertex(map_pt.x(), map_pt.y(), first_idx)
-                self._move_band.setToGeometry(preview, sv.layer)
-            # Update preview for shared vertices on extra selected features
-            for i, (xlyr, xfid, xvidx) in enumerate(self._move_extra_data):
-                xfeat = xlyr.getFeature(xfid)
-                xgeom = xfeat.geometry()
+                    self._move_band.movePoint(sv.vidx, raw_pt)
+                    if self._moving_is_closed:
+                        if sv.vidx == self._moving_first_idx:
+                            self._move_band.movePoint(self._moving_last_idx, raw_pt)
+                        elif sv.vidx == self._moving_last_idx:
+                            self._move_band.movePoint(self._moving_first_idx, raw_pt)
+            for i, ((xgeom, xc, xi0, xi1), (xlyr, xfid, xvidx)) in enumerate(
+                    zip(self._moving_extra_geoms, self._move_extra_data)):
                 if not xgeom.isEmpty() and i < len(self._move_extra_bands):
-                    xprev = QgsGeometry(xgeom)
-                    xprev.moveVertex(map_pt.x(), map_pt.y(), xvidx)
-                    if self._is_closed_polyline(xgeom):
-                        xverts = self._geom_verts(xgeom)
-                        xi0, xi1 = xverts[0][0], xverts[-1][0]
+                    self._move_extra_bands[i].movePoint(xvidx, raw_pt)
+                    if xc:
                         if xvidx == xi0:
-                            xprev.moveVertex(map_pt.x(), map_pt.y(), xi1)
+                            self._move_extra_bands[i].movePoint(xi1, raw_pt)
                         elif xvidx == xi1:
-                            xprev.moveVertex(map_pt.x(), map_pt.y(), xi0)
-                    self._move_extra_bands[i].setToGeometry(xprev, xlyr)
-            self._show_hint(event.pos())
+                            self._move_extra_bands[i].movePoint(xi0, raw_pt)
             return
 
         self._snap_marker.setVisible(False)
@@ -1494,7 +1615,7 @@ class VertexSelector(QgsMapTool):
         if self._state == _S_GRIPPED:
             self._show_hint(event.pos())
             if self._gripped_can_extend():
-                map_pt = self._snap_point(event.pos(), raw_pt)
+                map_pt = self._snap_point(event.pos(), raw_pt, quick=True)
                 sv = self._gripped
                 if self._move_band is None:
                     self._move_band = self._make_band(
@@ -1523,10 +1644,12 @@ class VertexSelector(QgsMapTool):
     def canvasPressEvent(self, event):
         raw_pt = self.toMapCoordinates(event.pos())
 
-        # Right-click: cancel move (if moving), finish extension (if extending), or show context menu
+        # Right-click: commit move (if moving), finish extension (if extending), or show context menu
         if event.button() == Qt.MouseButton.RightButton:
             if self._state == _S_MOVING:
-                self._cancel_move()
+                commit_pt = self._snap_point(event.pos(), raw_pt)
+                self._commit_move(commit_pt)
+                self.terminal_dock.command.setFocus()
                 return
             if self._state == _S_GRIPPED and self._gripped_can_extend():
                 if self._move_band is not None:
@@ -1663,9 +1786,9 @@ class VertexSelector(QgsMapTool):
                         self._seg_vidx1, self._seg_vidx2 = seg
                         self._seg_orig_geom = QgsGeometry(sel_geom)
             else:
-                edge = self._find_edge_near(map_pt)
-                if edge:
-                    other_lyr, other_fid = edge
+                hit = self._identify_feature_at(event.x(), event.y())
+                if hit:
+                    other_lyr, other_fid = hit
                     if shift:
                         if not self._remove_from_extra(other_lyr, other_fid):
                             if (id(other_lyr) == id(self._sel_layer)
@@ -1687,13 +1810,13 @@ class VertexSelector(QgsMapTool):
                 self._enter_gripped(sv)
                 self._vtx_press_pos = event.pos()  # track for immediate drag
         else:
-            edge = self._find_edge_near(map_pt)
-            if edge:
-                other_lyr, other_fid = edge
+            hit = self._identify_feature_at(event.x(), event.y())
+            if hit:
+                other_lyr, other_fid = hit
                 if shift:
                     self._remove_from_extra(other_lyr, other_fid)
                 else:
-                    self._enter_feature(*edge)
+                    self._enter_feature(other_lyr, other_fid)
             else:
                 # Empty space — start drag-to-select
                 self._drag_start       = event.pos()
@@ -1763,6 +1886,14 @@ class VertexSelector(QgsMapTool):
     def mouseDoubleClickEvent(self, event):
         self.terminal_dock.command.setFocus()
 
+    def _commit_at_cursor(self):
+        """Commit the current move using the current cursor position (for keyboard triggers)."""
+        screen_pos = self.canvas.mapFromGlobal(QCursor.pos())
+        raw_pt     = self.toMapCoordinates(screen_pos)
+        commit_pt  = self._snap_point(screen_pos, raw_pt)
+        self._commit_move(commit_pt)
+        self.terminal_dock.command.setFocus()
+
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key.Key_Escape:
@@ -1770,6 +1901,9 @@ class VertexSelector(QgsMapTool):
                 self._cancel_move()
             elif self._state in (_S_GRIPPED, _S_FEATURE):
                 self._enter_idle()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if self._state == _S_MOVING:
+                self._commit_at_cursor()
         elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self._state in (_S_GRIPPED, _S_MOVING):
                 self._delete_gripped()

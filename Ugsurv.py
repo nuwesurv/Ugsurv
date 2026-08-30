@@ -475,7 +475,7 @@ class Ugsurv:
         self.terminal_dock.on_canvas_key = lambda e: QApplication.sendEvent(self.canvas, e)
 
         # Vertex editor is always active when no drawing tool is running.
-        vertex_selector = VertexSelector(self.canvas, self.terminal_dock)
+        vertex_selector = VertexSelector(self.canvas, self.terminal_dock, self.iface)
         self.vertex_selector = vertex_selector
         self.global_map_tool.set_default_tool(vertex_selector)
 

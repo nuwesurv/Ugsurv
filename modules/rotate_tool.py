@@ -449,6 +449,8 @@ class RotateTool(QgsMapTool):
                 else:
                     self._hint.hide()
                     self.deactivate()
+            elif self._state == _ST_ANGLE:
+                self._commit(event.pos())
             else:
                 self._reset()
                 self._log("\nRotate cancelled")

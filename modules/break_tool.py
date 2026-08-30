@@ -108,7 +108,7 @@ class BreakTool(QgsMapTool):
                 self.canvas.scene().removeItem(item)
 
     def _show_hint(self, screen_pos):
-        self._hint.setText("Click line to break  (Enter / RMB = exit)")
+        self._hint.setText("Click / RMB on line to break  (Enter / Esc = exit)")
         self._hint.adjustSize()
         pos = screen_pos + QPoint(10, 14)
         if pos.x() + self._hint.width() > self.canvas.width():
@@ -253,7 +253,12 @@ class BreakTool(QgsMapTool):
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.RightButton:
-            self.deactivate()
+            map_pt = self.toMapCoordinates(event.pos())
+            lyr, feat = self._find_line_near(map_pt)
+            if feat and not feat.geometry().isMultipart():
+                self._apply_break(event.pos())
+            else:
+                self.deactivate()
             return
         if event.button() != Qt.LeftButton:
             return

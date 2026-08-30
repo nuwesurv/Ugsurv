@@ -23,7 +23,7 @@ skipped and the tool opens directly at step 2.
 import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtCore import Qt, QPoint, QPointF
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
@@ -155,6 +155,17 @@ class MoveTool(QgsMapTool):
             self._snap_marker.setVisible(False)
         return pt
 
+    def _snap_quick(self, screen_pos):
+        map_pt = self.toMapCoordinates(screen_pos)
+        pt, icon = snap_utils.snap_point(self.canvas, map_pt, quick=True)
+        if icon is not None and self._snap_marker:
+            self._snap_marker.setCenter(pt)
+            self._snap_marker.setIconType(icon)
+            self._snap_marker.setVisible(True)
+        elif self._snap_marker:
+            self._snap_marker.setVisible(False)
+        return pt
+
     def _show_hint(self, screen_pos):
         text = _HINT.get(self._state, "")
         if not text:
@@ -250,6 +261,7 @@ class MoveTool(QgsMapTool):
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         for b in self._prev_bands:
+            b.setPos(QPointF(0.0, 0.0))
             b.setVisible(False)
         if self._snap_marker:
             self._snap_marker.setVisible(False)
@@ -276,28 +288,41 @@ class MoveTool(QgsMapTool):
     def _enter_place(self, base_pt):
         self._base_pt = base_pt
         self._state   = _ST_PLACE
-        for b in self._prev_bands:
-            b.setVisible(True)
+        # Start editing all affected layers now so the commit is instant later
+        for layer, fid, geom in self._sel_features:
+            if not layer.isEditable():
+                layer.startEditing()
+        # Set original geometry once; _update_preview uses setPos for the live offset
+        for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
+            band.setToGeometry(geom, layer)
+            band.setPos(QPointF(0.0, 0.0))
+            band.setVisible(True)
         self._log("\nClick destination  or  type dx,dy + Enter  |  Esc to cancel")
         cp = self.canvas.getCoordinateTransform().transform(base_pt)
         self._dinput.on_commit = self._on_displacement_committed
         self.terminal_dock.request_input("dx,dy: ", self._on_displacement_terminal)
         self._dinput.show(cp.x(), cp.y())
 
-    def _update_preview(self, snap_pt):
-        if self._state == _ST_PLACE and self._base_pt:
-            dx = snap_pt.x() - self._base_pt.x()
-            dy = snap_pt.y() - self._base_pt.y()
-            for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
-                moved = QgsGeometry(geom)
-                moved.translate(dx, dy)
-                band.setToGeometry(moved, layer)
+    def _update_preview(self, raw_pt):
+        if self._state != _ST_PLACE or not self._base_pt:
+            return
+        ct     = self.canvas.getCoordinateTransform()
+        base_s = ct.transform(self._base_pt)
+        cur_s  = ct.transform(raw_pt)
+        offset = QPointF(cur_s.x() - base_s.x(), cur_s.y() - base_s.y())
+        for band in self._prev_bands:
+            band.setPos(offset)
 
     def _commit(self, screen_pos):
         snap_pt = self._snap(screen_pos)
         self._dinput.hide()
         self.terminal_dock.clear_input_handler()
         self._apply_move(snap_pt)
+
+    def _commit_at_cursor(self):
+        from qgis.PyQt.QtGui import QCursor
+        screen_pos = self.canvas.mapFromGlobal(QCursor.pos())
+        self._commit(screen_pos)
 
     def _apply_move(self, dest_pt: QgsPointXY):
         dx = dest_pt.x() - self._base_pt.x()
@@ -380,18 +405,22 @@ class MoveTool(QgsMapTool):
         super().deactivate()
 
     def canvasMoveEvent(self, event):
-        if self._state in (_ST_BASE, _ST_PLACE):
+        if self._state == _ST_PLACE and self._base_pt:
+            # Hot path: raw cursor for band (O(1) setPos), quick snap for indicator only
+            raw_pt = self.toMapCoordinates(event.pos())
+            self._update_preview(raw_pt)
+            snap_pt = self._snap_quick(event.pos())
+            self._snap_pt = snap_pt
+            dx = snap_pt.x() - self._base_pt.x()
+            dy = snap_pt.y() - self._base_pt.y()
+            cp = self.canvas.getCoordinateTransform().transform(snap_pt)
+            self._dinput.update(cp.x(), cp.y(), {
+                "dx": f"{dx:.3f}",
+                "dy": f"{dy:.3f}",
+            })
+        elif self._state == _ST_BASE:
             snap_pt = self._snap(event.pos())
             self._snap_pt = snap_pt
-            self._update_preview(snap_pt)
-            if self._state == _ST_PLACE and self._base_pt:
-                dx = snap_pt.x() - self._base_pt.x()
-                dy = snap_pt.y() - self._base_pt.y()
-                cp = self.canvas.getCoordinateTransform().transform(snap_pt)
-                self._dinput.update(cp.x(), cp.y(), {
-                    "dx": f"{dx:.3f}",
-                    "dy": f"{dy:.3f}",
-                })
         else:
             if self._snap_marker:
                 self._snap_marker.setVisible(False)
@@ -408,6 +437,8 @@ class MoveTool(QgsMapTool):
                 else:
                     self._hint.hide()
                     self.deactivate()
+            elif self._state == _ST_PLACE:
+                self._commit(event.pos())
             else:
                 self._reset()
                 self._log("\nMove cancelled")
@@ -470,6 +501,9 @@ class MoveTool(QgsMapTool):
             elif self._state == _ST_BASE:
                 if self._snap_pt:
                     self._enter_place(self._snap_pt)
+            elif self._state == _ST_PLACE:
+                if self._snap_pt:
+                    self._commit_at_cursor()
 
     def mouseDoubleClickEvent(self, event):
         self.terminal_dock.command.setFocus()

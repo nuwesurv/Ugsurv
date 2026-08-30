@@ -463,6 +463,8 @@ class ScaleTool(QgsMapTool):
                 else:
                     self._hint.hide()
                     self.deactivate()
+            elif self._state == _ST_SCALE:
+                self._commit(event.pos())
             else:
                 self._reset()
                 self._log("\nScale cancelled")
