@@ -268,6 +268,9 @@ class SelectTool(BaseTool):
         geom  = QgsGeometry.fromWkt(self._drag_geom_wkt)
         moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
         rb    = self._new_rubber_band(moved.type(), _style.PREVIEW_GRIP, 2)
+        if int(QgsWkbTypes.geometryType(moved.wkbType())) == 0:  # point: make preview visible
+            rb.setIconSize(12)
+            rb.setIcon(QgsRubberBand.ICON_BOX)
         rb.setToGeometry(moved)
 
     def _commit_grip_move(self, grip: Grip, new_pt: QgsPointXY):
@@ -291,13 +294,18 @@ class SelectTool(BaseTool):
                if self._ctx.snap_engine else 0.001)
         rect = QgsRectangle(pt.x() - tol, pt.y() - tol,
                             pt.x() + tol, pt.y() + tol)
+        click_geom = QgsGeometry.fromPointXY(pt)
+        best_lid, best_fid, best_d = None, None, float('inf')
         for layer_id, layer in self._all_geometry_layers():
             for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
-                if shift:
-                    sel.toggle(layer_id, feat.id())
-                else:
-                    sel.add(layer_id, feat.id())
-                return   # one feature per click
+                d = feat.geometry().distance(click_geom)
+                if d < best_d:
+                    best_d, best_lid, best_fid = d, layer_id, feat.id()
+        if best_lid is not None:
+            if shift:
+                sel.toggle(best_lid, best_fid)
+            else:
+                sel.add(best_lid, best_fid)
 
     def _update_drag_preview(self, start: QgsPointXY, end: QgsPointXY):
         if self._drag_rb is None:
@@ -412,17 +420,21 @@ class SelectTool(BaseTool):
 
 # ── geometry helper ────────────────────────────────────────────────────────
 def _replace_vertex(geom: QgsGeometry, idx: int, new_pt: QgsPointXY) -> QgsGeometry:
-    """Return a copy of geom with vertex at idx replaced by new_pt."""
+    """Return a copy of geom with vertex at idx replaced by new_pt.
+    Preserves single vs multi type to match the layer's geometry type."""
     pts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
     if 0 <= idx < len(pts):
         pts[idx] = new_pt
-    wtype = int(QgsWkbTypes.geometryType(geom.wkbType()))
+    wtype    = int(QgsWkbTypes.geometryType(geom.wkbType()))
+    is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
     if wtype == 0:   # Point
-        g = QgsGeometry.fromMultiPointXY(pts)
+        g = QgsGeometry.fromMultiPointXY(pts) if is_multi else QgsGeometry.fromPointXY(pts[0])
     elif wtype == 1:  # Line
         g = QgsGeometry.fromPolylineXY(pts)
-        g.convertToMultiType()
+        if is_multi:
+            g.convertToMultiType()
     else:             # Polygon
         g = QgsGeometry.fromPolygonXY([pts])
-        g.convertToMultiType()
+        if is_multi:
+            g.convertToMultiType()
     return g

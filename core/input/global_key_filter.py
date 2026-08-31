@@ -1,0 +1,148 @@
+# -*- coding: utf-8 -*-
+"""
+GlobalKeyFilter — canvas-level event filter that routes keyboard input to
+either the CommandLineWidget (idle mode) or the shared InputBuffer (drawing
+mode).
+
+Installed on the QgsMapCanvas widget directly (NOT on QApplication).  This
+guarantees the filter runs BEFORE QgsMapCanvas.keyPressEvent(), which is
+where QGIS processes its own 'S' snap toggle and other canvas shortcuts.
+The application-level notify() pipeline is bypassed entirely.
+
+Idle mode  (home / select tool active)
+  Type-anywhere command entry — user can type commands on the canvas without
+  clicking the command-line dock first:
+    Printable char → append to CommandLineWidget._input
+    Backspace      → remove last char from CommandLineWidget._input
+    Space / Enter  → execute CommandLineWidget._on_enter()
+    Escape         → clear CommandLineWidget._input
+
+Drawing mode  (any non-home tool active)
+    Printable char → InputBuffer.append(ch)
+    Backspace      → InputBuffer.backspace()
+    Space / Enter  → InputBuffer.submit()
+    Escape         → InputBuffer.cancel() then pass through so BaseTool
+                     keyPressEvent also fires (returns False)
+
+All other keys (arrows, F-keys, Tab, modifiers) pass through in both modes.
+Ctrl and Alt combinations always pass through (QGIS / OS shortcuts).
+Modal dialogs (attribute forms, save dialogs) always pass through.
+"""
+
+from qgis.PyQt.QtCore import QObject, QEvent, Qt
+from qgis.PyQt.QtWidgets import QApplication
+
+
+class GlobalKeyFilter(QObject):
+    """
+    Install on the map canvas; removed on plugin unload.
+
+    Parameters
+    ----------
+    tool_manager : ToolManager
+    input_buffer : InputBuffer
+    cmd_widget_getter : callable -> CommandLineWidget | None
+        Zero-argument callable; called lazily so the widget doesn't need to
+        exist at construction time.  May also be None.
+    """
+
+    def __init__(self, tool_manager, input_buffer, cmd_widget_getter=None):
+        super().__init__()
+        self._tool_mgr  = tool_manager
+        self._buffer    = input_buffer
+        self._get_cmd   = cmd_widget_getter  # () -> CommandLineWidget
+        print("[UgSurv] GlobalKeyFilter created — canvas-level key capture")
+
+    # ── Qt entry point ─────────────────────────────────────────────────────
+
+    def eventFilter(self, obj, event) -> bool:
+        try:
+            return self._filter(event)
+        except Exception as exc:
+            import traceback
+            print(f"[UgSurv GlobalKeyFilter] exception: {exc}")
+            traceback.print_exc()
+            return False
+
+    # ── routing ────────────────────────────────────────────────────────────
+
+    def _filter(self, event) -> bool:
+        # Only process key-press events
+        if event.type() != QEvent.KeyPress:
+            return False
+
+        # Never steal from modal dialogs (attribute forms, file dialogs, …)
+        if QApplication.activeModalWidget() is not None:
+            return False
+
+        # Let Ctrl / Alt combos through — QGIS / OS shortcuts must work
+        mods = event.modifiers()
+        if mods & (Qt.ControlModifier | Qt.AltModifier):
+            return False
+
+        tool = self._tool_mgr.active_tool
+        home = getattr(self._tool_mgr, 'home_tool', None)
+
+        if tool is None or tool is home:
+            return self._idle(event)
+        return self._drawing(event, tool)
+
+    # ── idle mode (home / select tool) ─────────────────────────────────────
+
+    def _idle(self, event) -> bool:
+        """Type-anywhere: forward canvas keystrokes to the command-line input."""
+        cmd = self._get_cmd() if self._get_cmd else None
+        if cmd is None:
+            return False
+        inp = getattr(cmd, '_input', None)
+        if inp is None:
+            return False
+
+        key = event.key()
+
+        if key == Qt.Key_Escape:
+            inp.clear()
+            return True
+
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            cmd._on_enter()
+            return True
+
+        if key == Qt.Key_Backspace:
+            t = inp.text()
+            if t:
+                inp.setText(t[:-1])
+            return True
+
+        ch = event.text()
+        if ch and ch.isprintable() and ch != '\t':
+            inp.setText(inp.text() + ch)
+            return True
+
+        return False
+
+    # ── drawing mode (non-home tool active) ────────────────────────────────
+
+    def _drawing(self, event, tool) -> bool:
+        """Forward canvas keystrokes to the shared InputBuffer."""
+        key = event.key()
+
+        if key == Qt.Key_Backspace:
+            self._buffer.backspace()
+            return True
+
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self._buffer.submit()
+            return True
+
+        if key == Qt.Key_Escape:
+            self._buffer.cancel()
+            return False   # pass through → BaseTool.keyPressEvent handles it
+
+        ch = event.text()
+        if ch and ch.isprintable() and ch != '\t':
+            print(f"[UgSurv] key {ch!r}  tool={getattr(tool, '_tool_key', type(tool).__name__)}")
+            self._buffer.append(ch)
+            return True
+
+        return False

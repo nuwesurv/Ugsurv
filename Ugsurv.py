@@ -50,11 +50,13 @@ class Ugsurv:
         self._snap_dock     = None
         self._layers_dock   = None
         self._props_dock    = None
-        self._dyn_widget    = None
-        self._storage       = None
-        self._tool_context  = None
-        self._sel_overlay   = None
-        self._snap_action   = None
+        self._dyn_widget         = None
+        self._input_buffer       = None
+        self._global_key_filter  = None
+        self._storage            = None
+        self._tool_context       = None
+        self._sel_overlay        = None
+        self._snap_action        = None
         self._shortcuts              = []
         self._tool_changed_slot     = None
         self._tool_for_cmdline_slot = None
@@ -237,6 +239,25 @@ class Ugsurv:
 
         dyn = DynamicInputWidget(canvas, translator, canvas)
         self._dyn_widget = dyn
+        ctx.dyn_widget = dyn
+
+        # Shared input buffer — single source of truth for all typed text
+        from .core.input.input_buffer import InputBuffer
+        buf = InputBuffer()
+        self._input_buffer = buf
+
+        # Global keyboard interceptor — installed directly on the canvas so it
+        # fires before QgsMapCanvas.keyPressEvent (which handles QGIS's own
+        # snap 'S' shortcut).  QApplication-level filtering is unreliable in
+        # QGIS because QgsApplication.notify() can process events before
+        # application event filters see them.
+        from .core.input.global_key_filter import GlobalKeyFilter
+        _key_filter = GlobalKeyFilter(
+            tool_mgr, buf,
+            cmd_widget_getter=lambda: self._cmd_dock,
+        )
+        canvas.installEventFilter(_key_filter)
+        self._global_key_filter = _key_filter
 
         props = PropertiesPanel(sel, mw)
         iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, props)
@@ -280,22 +301,49 @@ class Ugsurv:
 
         cmd_dock.register_ui_command("HELP", "?", callback=_on_help)
 
-        # 5. Wire dynamic input to canvas XY ─────────────────────────────
+        # 5. Wire InputBuffer to both display widgets ─────────────────────
+        buf.textChanged.connect(dyn.on_buffer_text_changed)
+        buf.cancelled.connect(dyn.on_buffer_cancelled)
+        cmd_dock.connect_buffer(buf)
+
+        # Clear buffer on tool switch (e.g. Esc mid-type)
+        buf_ref = buf
+        tool_mgr.toolChanged.connect(lambda *_: buf_ref.clear())
+
+        # Update floating widget position on every canvas mouse-move
         def _on_canvas_xy(pt):
             dyn.update_position(pt)
-            dyn.show_for_tool(tool_mgr.active_tool is not None)
         canvas.xyCoordinates.connect(_on_canvas_xy)
         self._canvas_xy_slot = _on_canvas_xy
 
-        # wire command-line / dynamic-input text to active tool
+        # Route committed text to the active tool
         def _on_text_input(text: str):
             active = tool_mgr.active_tool
             if active and hasattr(active, '_dispatch') and hasattr(active, '_translator'):
-                sem = translator.translate_typed_text(text, None, ctx)
+                last_pt = getattr(active, '_last_input_ref', None)
+                sem = translator.translate_typed_text(text, last_pt, ctx)
                 if sem:
                     active._dispatch(sem)
         cmd_dock.textValueEntered.connect(_on_text_input)
-        dyn.valueEntered.connect(_on_text_input)
+
+        # wire tool's inputModeChanged → dynamic input widget
+        _dyn_prev_tool = [None]
+
+        def _on_tool_for_dyn(tool):
+            prev = _dyn_prev_tool[0]
+            if prev is not None and hasattr(prev, 'inputModeChanged'):
+                try:
+                    prev.inputModeChanged.disconnect(dyn.set_mode)
+                except Exception:
+                    pass
+            if tool is not None and hasattr(tool, 'inputModeChanged'):
+                tool.inputModeChanged.connect(dyn.set_mode)
+            else:
+                dyn.set_mode("xy", "")
+            _dyn_prev_tool[0] = tool
+
+        tool_mgr.toolChanged.connect(_on_tool_for_dyn)
+        self._tool_for_dyn_slot = _on_tool_for_dyn
 
         # unknown command → log
         _unknown_cmd = lambda t: cmd_dock.log(f"Unknown command: {t}", "#ff6666")
@@ -442,16 +490,24 @@ class Ugsurv:
                 self._cad_toolbar.deleteLater()
             self._cad_toolbar = None
 
+        if self._global_key_filter:
+            with contextlib.suppress(Exception):
+                self.canvas.removeEventFilter(self._global_key_filter)
+            self._global_key_filter = None
+
         if self._dyn_widget:
             with contextlib.suppress(Exception):
                 self._dyn_widget.hide()
                 self._dyn_widget.deleteLater()
             self._dyn_widget = None
+            if self._tool_context:
+                self._tool_context.dyn_widget = None
 
-        self._tool_manager = None
-        self._dispatcher   = None
-        self._storage      = None
-        self._tool_context = None
+        self._tool_manager  = None
+        self._dispatcher    = None
+        self._storage       = None
+        self._tool_context  = None
+        self._input_buffer  = None
 
 
 # ── Tool factory ──────────────────────────────────────────────────────────

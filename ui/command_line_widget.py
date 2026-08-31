@@ -108,6 +108,12 @@ class CommandLineWidget(QDockWidget):
         for alias in aliases:
             self._ui_commands[alias.upper()] = callback
 
+    def connect_buffer(self, buf):
+        """Wire an InputBuffer so the command line mirrors and responds to it."""
+        buf.textChanged.connect(self._on_buffer_text_changed)
+        buf.submitted.connect(self._on_buffer_submitted)
+        buf.cancelled.connect(self._on_buffer_cancelled)
+
     def set_mid_command(self, active: bool, prompt: str = ""):
         self._mid_command = active
         self._popup_hide()
@@ -131,6 +137,43 @@ class CommandLineWidget(QDockWidget):
         except Exception:
             pass
         return sorted(aliases)
+
+    # ── InputBuffer handlers ──────────────────────────────────────────────
+    def _on_buffer_text_changed(self, text: str):
+        """Mirror buffer content in the input field without triggering autocomplete."""
+        try:
+            self._input.blockSignals(True)
+            self._input.setText(text)
+            self._input.blockSignals(False)
+        except RuntimeError:
+            pass
+
+    def _on_buffer_submitted(self, text: str):
+        """Called when the user commits typed input via Enter/Space."""
+        text = text.strip()
+        if not text:
+            return
+        self._history.append(text)
+        self._hist_idx = -1
+        self.log(f"&gt; {text}", "#aaaaaa")
+        if self._mid_command:
+            self.textValueEntered.emit(text)
+        else:
+            ui_cb = self._ui_commands.get(text.upper())
+            if ui_cb is not None:
+                ui_cb()
+            else:
+                self.commandEntered.emit(text)
+                self._dispatcher.dispatch(text)
+
+    def _on_buffer_cancelled(self):
+        """Called when Esc clears the buffer."""
+        try:
+            self._input.blockSignals(True)
+            self._input.clear()
+            self._input.blockSignals(False)
+        except RuntimeError:
+            pass
 
     def _on_text_changed(self, text: str):
         if self._mid_command or not text.strip():

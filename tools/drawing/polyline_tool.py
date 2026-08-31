@@ -30,6 +30,7 @@ class PolylineTool(BaseTool):
         self._points.clear()
         self._arc_mode = False
         self._transition(ToolState.ACTING)
+        self._request_input("xy", "Specify start point:")
 
     # ── events ────────────────────────────────────────────────────────────
     def _on_event(self, sem: SemanticEvent):
@@ -52,7 +53,7 @@ class PolylineTool(BaseTool):
                 self._undo_last_vertex()
 
         elif sem.type == EventType.VALUE_ENTERED:
-            pass  # relative-distance entry handled via polar constraint
+            pass  # distance-only entry without angle: ignore (user should use polar fields)
 
     def _on_hover(self, sem: SemanticEvent):
         if self._points and sem.point:
@@ -64,6 +65,7 @@ class PolylineTool(BaseTool):
     # ── logic ─────────────────────────────────────────────────────────────
     def _add_point(self, pt: QgsPointXY):
         self._points.append(pt)
+        self._last_input_ref = pt
         for c in self._ctx.constraints:
             c.set_reference(pt)
         # update self-snap provider
@@ -71,6 +73,11 @@ class PolylineTool(BaseTool):
             for key, prov in self._ctx.snap_engine._providers.items():
                 if hasattr(prov, 'set_sketch_points'):
                     prov.set_sketch_points(self._points)
+        # After first point switch to polar mode (Dist + Angle fields)
+        if len(self._points) == 1:
+            self._request_input("polar", "Specify next point:")
+        elif len(self._points) > 1:
+            self._request_input("polar", "Specify next point [U=undo C=close]:")
 
     def _undo_last_vertex(self):
         if self._points:
@@ -116,6 +123,7 @@ class PolylineTool(BaseTool):
 
     def _reset(self):
         self._points.clear()
+        self._last_input_ref = None
         self._arc_mode = False
         self._clear_rubber_bands()
         self._preview_rb = None
@@ -123,6 +131,7 @@ class PolylineTool(BaseTool):
             for prov in self._ctx.snap_engine._providers.values():
                 if hasattr(prov, 'clear'):
                     prov.clear()
+        self._request_input("xy", "Specify start point:")
 
     def _on_cancel_hook(self):
         self._reset()

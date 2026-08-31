@@ -20,6 +20,7 @@ class PointTool(BaseTool):
     def activate(self):
         super().activate()
         self._transition(ToolState.ACTING)
+        self._request_input("xy", "Specify point:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:

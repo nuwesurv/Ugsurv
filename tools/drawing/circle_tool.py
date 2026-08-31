@@ -46,6 +46,7 @@ class CircleTool(BaseTool):
         super().activate()
         self._pts.clear()
         self._transition(ToolState.ACTING)
+        self._request_input("xy", "Specify center point:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
@@ -82,6 +83,10 @@ class CircleTool(BaseTool):
 
     def _handle_point(self, pt: QgsPointXY):
         self._pts.append(pt)
+        if self._mode == "center_radius" and len(self._pts) == 1:
+            # Center picked — now ask for radius
+            self._last_input_ref = pt
+            self._request_input("value", "Specify radius:")
         if self._mode == "center_radius" and len(self._pts) == 2:
             r = self._pts[0].distance(self._pts[1])
             self._commit_circle(self._pts[0], r)
@@ -124,8 +129,10 @@ class CircleTool(BaseTool):
 
     def _reset(self):
         self._pts.clear()
+        self._last_input_ref = None
         self._clear_rubber_bands()
         self._preview_rb = None
+        self._request_input("xy", "Specify center point:")
 
     def _on_cancel_hook(self):
         self._reset()

@@ -13,7 +13,7 @@ from enum import Enum, auto
 from abc import abstractmethod
 
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QCursor
 from qgis.core import QgsWkbTypes
 
@@ -34,15 +34,20 @@ class BaseTool(QgsMapTool):
     # Subclasses set this to give the cursor a distinct shape
     CURSOR = Qt.CursorShape.CrossCursor
 
+    # Emitted when the tool changes what kind of input it expects.
+    # args: (mode, prompt)  mode ∈ {"xy", "polar", "value"}
+    inputModeChanged = pyqtSignal(str, str)
+
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas)
-        self._ctx         = tool_context
-        self._translator  = input_translator
-        self._state       = ToolState.IDLE
-        self._pending      = None
-        self._rubber_bands = []
-        self._esc_count    = 0
+        self._ctx            = tool_context
+        self._translator     = input_translator
+        self._state          = ToolState.IDLE
+        self._pending        = None
+        self._rubber_bands   = []
+        self._esc_count      = 0
         self._snap_marker: QgsVertexMarker | None = None
+        self._last_input_ref = None   # last committed point; used for @rel / polar entry
         self.setCursor(self._get_cursor())
 
     # ── public read ──────────────────────────────────────────────────────
@@ -92,6 +97,9 @@ class BaseTool(QgsMapTool):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             event.accept()   # prevent QGIS canvas from unloading the tool on Esc
+        # Key routing to DynamicInputWidget is handled by GlobalKeyFilter
+        # (installed on QApplication), which fires before this method.
+        # Anything reaching here was intentionally passed through.
         sem = self._translator.translate_key(event, self._ctx)
         self._dispatch(sem)
 
@@ -203,6 +211,11 @@ class BaseTool(QgsMapTool):
         self._clear_rubber_bands()
         self._on_cancel_hook()
         self._transition(ToolState.IDLE)
+
+    # ── dynamic input ─────────────────────────────────────────────────────
+    def _request_input(self, mode: str, prompt: str = ""):
+        """Tell the DynamicInputWidget what fields to show next."""
+        self.inputModeChanged.emit(mode, prompt)
 
     # ── abstract interface for subclasses ─────────────────────────────────
     @abstractmethod

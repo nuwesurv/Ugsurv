@@ -1,96 +1,131 @@
 # -*- coding: utf-8 -*-
 """
-DynamicInputWidget — frameless floating widget near the cursor, showing
-live distance/angle/coordinate fields during ACTING.
+DynamicInputWidget — frameless floating prompt near the cursor.
 
-Tab cycles fields.  Values typed here are routed through InputTranslator
-as VALUE_ENTERED or COORDINATE_ENTERED events.
+Purely a display widget driven by InputBuffer.  No text-input fields.
 
-Reuses QgsAdvancedDigitizingDockWidget's coordinate-parsing API where
-available, or falls back to InputTranslator.translate_typed_text().
+Shows:
+  - A prompt label set by the active tool (_request_input → inputModeChanged)
+  - The current buffer text with a blinking underscore cursor
+
+Hidden by default.  Appears as soon as InputBuffer has content.
+Disappears when the buffer is cleared (submit or cancel).
+Follows the OS cursor on every canvas mouse-move.
 """
 
-from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QLabel
-from qgis.PyQt.QtCore import Qt, pyqtSignal, QPoint
-from qgis.PyQt.QtGui import QFont, QColor, QPalette, QCursor
-from qgis.core import QgsPointXY
+from qgis.PyQt.QtWidgets import QWidget, QVBoxLayout, QLabel
+from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtGui import QFont, QCursor
+
+
+_OUTER_CSS = (
+    "DynamicInputWidget { "
+    "background: rgba(20, 20, 28, 220); "
+    "border: 1px solid #3a3a5a; "
+    "border-radius: 4px; "
+    "}"
+)
+_PROMPT_CSS = "color: #7aaadd; background: transparent; padding: 0 2px;"
+_TEXT_CSS   = "color: #e8e8e8; background: transparent; padding: 0 2px;"
+_CURSOR_CH  = "_"
 
 
 class DynamicInputWidget(QWidget):
-    valueEntered = pyqtSignal(str)   # text committed by the user
+    """Floating input-echo widget — display only, no user interaction."""
 
-    def __init__(self, canvas, input_translator, parent=None):
-        super().__init__(parent, Qt.WindowType.Tool |
-                         Qt.WindowType.FramelessWindowHint |
-                         Qt.WindowType.WindowStaysOnTopHint)
-        self._canvas      = canvas
-        self._translator  = input_translator
-        self._last_pt     = None
-        self._fields: list[QLineEdit] = []
-        self._active_field = 0
+    def __init__(self, canvas, input_translator=None, parent=None):
+        super().__init__(
+            parent,
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self._canvas    = canvas
+        self._buf_text  = ""
+        self._cursor_on = True
 
         self._build_ui()
-        self.hide()
+        self._blink = QTimer(self)
+        self._blink.setInterval(530)
+        self._blink.timeout.connect(self._toggle_cursor)
+
+        self.setStyleSheet(_OUTER_CSS)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hide()
 
+    # ── construction ──────────────────────────────────────────────────────
     def _build_ui(self):
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 2, 4, 2)
-        lay.setSpacing(4)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 5, 8, 5)
+        lay.setSpacing(1)
 
-        font = QFont("Consolas", 9)
-        bg   = QColor(40, 40, 40, 220)
+        font_sm = QFont("Consolas", 9)
+        font_lg = QFont("Consolas", 10)
 
-        for field_name in ["X:", "Y:"]:
-            lbl = QLabel(field_name)
-            lbl.setFont(font)
-            lbl.setStyleSheet("color:#aaa")
-            lay.addWidget(lbl)
+        self._prompt_lbl = QLabel()
+        self._prompt_lbl.setFont(font_sm)
+        self._prompt_lbl.setStyleSheet(_PROMPT_CSS)
+        self._prompt_lbl.hide()
+        lay.addWidget(self._prompt_lbl)
 
-            ed = QLineEdit()
-            ed.setFont(font)
-            ed.setFixedWidth(90)
-            ed.setStyleSheet(
-                "background:#282828; color:#fff; border:1px solid #555; padding:1px;"
-            )
-            ed.returnPressed.connect(self._on_commit)
-            self._fields.append(ed)
-            lay.addWidget(ed)
+        self._text_lbl = QLabel()
+        self._text_lbl.setFont(font_lg)
+        self._text_lbl.setStyleSheet(_TEXT_CSS)
+        lay.addWidget(self._text_lbl)
 
-        self.setStyleSheet("background:rgba(40,40,40,200); border-radius:3px;")
-        self.adjustSize()
-
-    # ── public API ────────────────────────────────────────────────────────
-    def update_position(self, canvas_pt: QgsPointXY):
-        """Move widget near the canvas cursor position."""
-        self._last_pt = canvas_pt
-        cursor_screen = QCursor.pos()
-        self.move(cursor_screen.x() + 16, cursor_screen.y() + 16)
-        # Update X/Y display
-        if len(self._fields) >= 2:
-            if not self._fields[0].hasFocus():
-                self._fields[0].setText(f"{canvas_pt.x():.3f}")
-            if not self._fields[1].hasFocus():
-                self._fields[1].setText(f"{canvas_pt.y():.3f}")
-
-    def show_for_tool(self, tool_is_active: bool):
-        if tool_is_active:
-            self.show()
+    # ── InputBuffer slots (connected in Ugsurv.py) ────────────────────────
+    def on_buffer_text_changed(self, text: str):
+        self._buf_text = text
+        if text:
+            self._refresh_text()
+            self._reposition()
+            if not self.isVisible():
+                self.show()
+                self._blink.start()
         else:
             self.hide()
+            self._blink.stop()
+            self._cursor_on = True
 
-    # ── Tab cycling ──────────────────────────────────────────────────────
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Tab:
-            self._active_field = (self._active_field + 1) % len(self._fields)
-            self._fields[self._active_field].setFocus()
-            return
-        super().keyPressEvent(event)
+    def on_buffer_cancelled(self):
+        self._buf_text = ""
+        self.hide()
+        self._blink.stop()
+        self._cursor_on = True
 
-    def _on_commit(self):
-        vals = [f.text().strip() for f in self._fields]
-        text = ",".join(v for v in vals if v)
-        if text:
-            self.valueEntered.emit(text)
-            for f in self._fields:
-                f.clear()
+    # ── prompt ─────────────────────────────────────────────────────────────
+    def set_prompt(self, prompt: str):
+        if prompt:
+            self._prompt_lbl.setText(prompt)
+            self._prompt_lbl.show()
+        else:
+            self._prompt_lbl.hide()
+        self.adjustSize()
+
+    def set_mode(self, mode: str, prompt: str = ""):
+        """Compat shim — called via inputModeChanged signal from tools."""
+        self.set_prompt(prompt)
+
+    # ── position ──────────────────────────────────────────────────────────
+    def update_position(self, canvas_pt=None):
+        """Called on every canvas xyCoordinates event to follow the cursor."""
+        self._reposition()
+
+    def show_for_tool(self, tool_is_active: bool):
+        """Legacy compat — visibility is buffer-driven; just update position."""
+        self._reposition()
+
+    # ── internal ─────────────────────────────────────────────────────────
+    def _reposition(self):
+        pos = QCursor.pos()
+        self.move(pos.x() + 18, pos.y() + 18)
+
+    def _toggle_cursor(self):
+        self._cursor_on = not self._cursor_on
+        self._refresh_text()
+
+    def _refresh_text(self):
+        suffix = _CURSOR_CH if self._cursor_on else " "
+        self._text_lbl.setText(self._buf_text + suffix)
+        self.adjustSize()
