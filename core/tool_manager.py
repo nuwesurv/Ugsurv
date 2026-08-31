@@ -19,6 +19,7 @@ class ToolManager(QObject):
         super().__init__(parent)
         self._canvas        = canvas
         self._active        = None     # current BaseTool
+        self._home          = None     # permanent base tool (SelectTool)
         self._suspend_stack = []       # [(tool, snapshot)] for modal interrupts
 
     # ── primary API ──────────────────────────────────────────────────────
@@ -34,8 +35,22 @@ class ToolManager(QObject):
         self._canvas.setMapTool(tool)
         self.toolChanged.emit(tool)
 
+    def set_home(self, tool):
+        """Set the permanent base tool and activate it immediately."""
+        self._home = tool
+        self.activate_tool(tool)
+
+    def go_home(self):
+        """Return to the home tool. No-op if already there."""
+        if self._home is not None and self._active is not self._home:
+            self.activate_tool(self._home)
+
+    @property
+    def home_tool(self):
+        return self._home
+
     def deactivate(self):
-        """Deactivate the active tool without activating another."""
+        """Deactivate the active tool without activating another (teardown only)."""
         if self._active is not None:
             self._active.deactivate()
             self._canvas.unsetMapTool(self._active)

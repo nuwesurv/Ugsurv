@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-SelectionModel — layer-independent selection set, independent of tools.
+SelectionModel — layer-independent selection set.
 
 Stores (layer_id, feature_id) tuples.  Persists across tool switches.
 Enforces CAD-layer lock: locked layers cannot be added to the selection.
 Emits selectionChanged when the set changes.
+
+Visual highlighting is handled externally by SelectionOverlay (rubber bands).
+Native QGIS layer.selectByIds() is intentionally NOT called here.
 """
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
@@ -12,12 +15,12 @@ from qgis.core import QgsProject
 
 
 class SelectionModel(QObject):
-    selectionChanged = pyqtSignal()   # emitted whenever the set changes
+    selectionChanged = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._items: set = set()          # {(layer_id, fid)}
-        self._locked_cad_layers: set = set()  # names of locked CAD layers
+        self._items: set = set()               # {(layer_id, fid)}
+        self._locked_cad_layers: set = set()
 
     # ── lock enforcement ─────────────────────────────────────────────────
     def set_locked_cad_layers(self, names: set):
@@ -40,6 +43,18 @@ class SelectionModel(QObject):
         item = (layer_id, fid)
         if item not in self._items:
             self._items.add(item)
+            self.selectionChanged.emit()
+
+    def add_batch(self, items):
+        """Add multiple (layer_id, fid) pairs with a single selectionChanged emit."""
+        changed = False
+        for lid, fid in items:
+            if not self._is_locked(lid, fid):
+                item = (lid, fid)
+                if item not in self._items:
+                    self._items.add(item)
+                    changed = True
+        if changed:
             self.selectionChanged.emit()
 
     def remove(self, layer_id: str, fid: int):

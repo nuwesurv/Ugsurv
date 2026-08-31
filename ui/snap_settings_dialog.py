@@ -14,14 +14,15 @@ from qgis.PyQt.QtCore import Qt
 
 
 _PROVIDERS = [
-    ("vertex",        "Vertex"),
+    ("vertex",        "Endpoint  (line/polygon vertex)"),
+    ("point",         "Point  (point feature)"),
     ("midpoint",      "Midpoint"),
     ("center",        "Center"),
     ("intersection",  "Intersection"),
     ("perpendicular", "Perpendicular"),
     ("extension",     "Extension"),
     ("grid",          "Grid"),
-    ("self",          "Self (in-progress)"),
+    ("self",          "Self  (in-progress geometry)"),
 ]
 
 

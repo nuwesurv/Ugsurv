@@ -38,7 +38,7 @@ class Grip:
 
 
 class GripEditTool(BaseTool):
-    CURSOR = Qt.CursorShape.ArrowCursor
+    CURSOR = Qt.CursorShape.CrossCursor
 
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas, tool_context, input_translator)
@@ -150,7 +150,7 @@ class GripEditTool(BaseTool):
         geom = QgsGeometry.fromWkt(wkt)
         moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
         rb = self._new_rubber_band(
-            int(QgsWkbTypes.geometryType(moved.wkbType())),
+            moved.type(),
             _style.PREVIEW_GRIP, 1
         )
         rb.setToGeometry(moved)

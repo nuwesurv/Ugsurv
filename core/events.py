@@ -22,7 +22,8 @@ class EventType(Enum):
 
 class SnapType(Enum):
     NONE         = "none"
-    VERTEX       = "vertex"
+    VERTEX       = "vertex"       # endpoint / node of a line or polygon edge
+    POINT        = "point"        # standalone point feature
     MIDPOINT     = "midpoint"
     CENTER       = "center"
     INTERSECTION = "intersection"

@@ -2,19 +2,31 @@
 """
 _ModifyBase — shared logic for modify tools that operate on a selection.
 
-Lifecycle: SELECTING (Enter confirms) → ACTING → commit → IDLE.
-Subclasses provide _on_base_point() and _on_destination().
+Lifecycle:
+  If selection non-empty on activate  → ACTING immediately (noun-verb).
+  If selection empty on activate      → SELECTING (verb-noun):
+      click = pick one feature
+      drag  = window/crossing box (auto-transitions to ACTING when done)
+      Enter = confirm selection → ACTING
+  ACTING: click base point → click destination → commit → IDLE.
+
+Subclasses override _commit_transform() and _update_preview().
 """
 
 import math
 from qgis.PyQt.QtCore import Qt
-from qgis.core import QgsPointXY, QgsGeometry, QgsProject, QgsWkbTypes
-from qgis.gui import QgsVertexMarker
+from qgis.core import (
+    QgsPointXY, QgsGeometry, QgsRectangle, QgsProject,
+    QgsWkbTypes, QgsFeatureRequest,
+)
+from qgis.gui import QgsRubberBand, QgsVertexMarker
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 from ...core import style as _style
 
+
+# ── geometry helpers (used by subclasses) ─────────────────────────────────────
 
 def _translate_geom(geom: QgsGeometry, dx: float, dy: float) -> QgsGeometry:
     g = QgsGeometry(geom)
@@ -32,19 +44,17 @@ def _rotate_geom(geom: QgsGeometry, center: QgsPointXY,
 def _scale_geom(geom: QgsGeometry, center: QgsPointXY,
                 sx: float, sy: float) -> QgsGeometry:
     g = QgsGeometry(geom)
-    # Scale each vertex manually since QgsGeometry has no scale()
     verts = [(v.x(), v.y()) for v in g.vertices()]
     if not verts:
         return g
-    # rebuild
     new_verts = [QgsPointXY(
         center.x() + (x - center.x()) * sx,
         center.y() + (y - center.y()) * sy,
     ) for x, y in verts]
     wtype = int(QgsWkbTypes.geometryType(g.wkbType()))
-    if wtype == 1:   # Line
+    if wtype == 1:
         return QgsGeometry.fromPolylineXY(new_verts)
-    if wtype == 2:   # Polygon
+    if wtype == 2:
         return QgsGeometry.fromPolygonXY([new_verts])
     return QgsGeometry.fromMultiPointXY(new_verts)
 
@@ -60,32 +70,68 @@ def selected_features(ctx):
                 yield layer, feat
 
 
+# ── base class ─────────────────────────────────────────────────────────────────
+
 class _ModifyBase(BaseTool):
-    CURSOR = Qt.CursorShape.SizeAllCursor
+    CURSOR = Qt.CursorShape.CrossCursor
 
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas, tool_context, input_translator)
         self._base_pt: QgsPointXY | None = None
         self._preview_rbs = []
         self._base_marker: QgsVertexMarker | None = None
+        # for SELECTING-state drag box
+        self._sel_drag_start: QgsPointXY | None = None
+        self._sel_drag_rb: QgsRubberBand | None  = None
 
     def activate(self):
         super().activate()
         self._base_pt = None
-        # if selection is non-empty, skip SELECTING → go straight to ACTING
-        if self._ctx.selection_model and not self._ctx.selection_model.is_empty():
+        sel = self._ctx.selection_model
+        if sel and not sel.is_empty():
             self._transition(ToolState.ACTING)
         else:
             self._transition(ToolState.SELECTING)
 
+    # ── canvas overrides for SELECTING drag ──────────────────────────────
+    def canvasPressEvent(self, event):
+        if (self._state == ToolState.SELECTING
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._sel_drag_start = self._translator._canvas_point(event, self._ctx)
+        super().canvasPressEvent(event)
+
+    def canvasReleaseEvent(self, event):
+        if (self._state == ToolState.SELECTING
+                and event.button() == Qt.MouseButton.LeftButton
+                and self._sel_drag_start is not None):
+            end = self._translator._canvas_point(event, self._ctx)
+            dx = abs(end.x() - self._sel_drag_start.x())
+            dy = abs(end.y() - self._sel_drag_start.y())
+            if dx > 1e-6 or dy > 1e-6:
+                shift = bool(int(event.modifiers()) &
+                             Qt.KeyboardModifier.ShiftModifier)
+                self._finish_sel_drag(self._sel_drag_start, end, shift)
+            self._sel_drag_start = None
+            if self._sel_drag_rb:
+                self._sel_drag_rb.reset()
+                self._sel_drag_rb = None
+
+    def canvasMoveEvent(self, event):
+        if self._state == ToolState.SELECTING and self._sel_drag_start:
+            end = self._translator._canvas_point(event, self._ctx)
+            self._update_sel_drag_preview(self._sel_drag_start, end)
+        super().canvasMoveEvent(event)
+
+    # ── semantic event handler ────────────────────────────────────────────
     def _on_event(self, sem: SemanticEvent):
         if self._state == ToolState.SELECTING:
-            if sem.type == EventType.CONFIRM:
+            if sem.type == EventType.POINT_PICKED:
+                self._pick_at_point(sem.point, shift=False)
+            elif sem.type == EventType.SHIFT_CLICK:
+                self._pick_at_point(sem.point, shift=True)
+            elif sem.type == EventType.CONFIRM:
                 if not self._ctx.selection_model.is_empty():
                     self._transition(ToolState.ACTING)
-            elif sem.type in (EventType.POINT_PICKED, EventType.SHIFT_CLICK):
-                # delegate to select tool behaviour (minimal: just pick)
-                pass
 
         elif self._state == ToolState.ACTING:
             if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
@@ -105,18 +151,84 @@ class _ModifyBase(BaseTool):
             self._clear_base_marker()
 
     def _handle_act_value(self, value: float):
-        pass   # subclasses may override for typed distance/angle
+        pass
 
     def _commit_transform(self, dest_pt: QgsPointXY):
-        pass   # overridden by each modify tool
+        pass
 
     def _on_hover(self, sem: SemanticEvent):
         if self._state == ToolState.ACTING and self._base_pt and sem.point:
             self._update_preview(sem.point)
 
     def _update_preview(self, cursor_pt: QgsPointXY):
-        pass   # overridden
+        pass
 
+    # ── SELECTING state — feature picking ────────────────────────────────
+    def _pick_at_point(self, pt: QgsPointXY, shift: bool):
+        if pt is None:
+            return
+        sel = self._ctx.selection_model
+        if not shift:
+            sel.clear()
+        tol = (self._ctx.snap_engine._px_to_map_units(5, self._ctx.canvas)
+               if self._ctx.snap_engine else 0.001)
+        rect = QgsRectangle(pt.x() - tol, pt.y() - tol,
+                            pt.x() + tol, pt.y() + tol)
+        for layer_id, layer in self._all_geometry_layers():
+            for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
+                if shift:
+                    sel.toggle(layer_id, feat.id())
+                else:
+                    sel.add(layer_id, feat.id())
+                return  # one feature per click
+
+    def _finish_sel_drag(self, start: QgsPointXY, end: QgsPointXY, shift: bool):
+        is_window = end.x() >= start.x()
+        rect = QgsRectangle(
+            min(start.x(), end.x()), min(start.y(), end.y()),
+            max(start.x(), end.x()), max(start.y(), end.y()),
+        )
+        sel = self._ctx.selection_model
+        if not shift:
+            sel.clear()
+        hits = []
+        for layer_id, layer in self._all_geometry_layers():
+            for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
+                geom = feat.geometry()
+                if is_window:
+                    if rect.contains(geom.boundingBox()):
+                        hits.append((layer_id, feat.id()))
+                else:
+                    if geom.intersects(QgsGeometry.fromRect(rect)):
+                        hits.append((layer_id, feat.id()))
+        if hits:
+            sel.add_batch(hits)
+            # auto-transition: drawn the box, got features → go straight to ACTING
+            self._transition(ToolState.ACTING)
+
+    def _update_sel_drag_preview(self, start: QgsPointXY, end: QgsPointXY):
+        if self._sel_drag_rb is None:
+            self._sel_drag_rb = QgsRubberBand(self.canvas(), QgsWkbTypes.PolygonGeometry)
+            self._sel_drag_rb.setWidth(1)
+        is_window = end.x() >= start.x()
+        self._sel_drag_rb.setColor(
+            _style.SELECT_WIN_BORDER if is_window else _style.SELECT_CROSS_BORDER
+        )
+        self._sel_drag_rb.setFillColor(
+            _style.SELECT_WIN_FILL if is_window else _style.SELECT_CROSS_FILL
+        )
+        self._sel_drag_rb.setToGeometry(QgsGeometry.fromRect(QgsRectangle(start, end)))
+
+    def _all_geometry_layers(self):
+        sm = self._ctx.storage_manager
+        result = []
+        for attr in ("points_layer", "lines_layer", "polygons_layer"):
+            lyr = getattr(sm, attr, None)
+            if lyr and lyr.isValid():
+                result.append((lyr.id(), lyr))
+        return result
+
+    # ── base-point marker ────────────────────────────────────────────────
     def _show_base_marker(self, pt: QgsPointXY):
         if self._base_marker is None:
             self._base_marker = QgsVertexMarker(self.canvas())
@@ -137,3 +249,10 @@ class _ModifyBase(BaseTool):
     def _on_cancel_hook(self):
         self._clear_base_marker()
         self._base_pt = None
+        self._sel_drag_start = None
+        if self._sel_drag_rb:
+            try:
+                self._sel_drag_rb.reset()
+            except Exception:
+                pass
+            self._sel_drag_rb = None

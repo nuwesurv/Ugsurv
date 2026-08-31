@@ -90,6 +90,8 @@ class BaseTool(QgsMapTool):
         pass  # most tools act on press; subclasses may override
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            event.accept()   # prevent QGIS canvas from unloading the tool on Esc
         sem = self._translator.translate_key(event, self._ctx)
         self._dispatch(sem)
 
@@ -110,13 +112,14 @@ class BaseTool(QgsMapTool):
 
     def _handle_esc(self):
         self._esc_count += 1
-        if self._esc_count == 1:
-            # first Esc: cancel the current step only
-            self._do_cancel()
-        else:
-            # second Esc: full abort back to IDLE
-            self._do_cancel()
+        self._do_cancel()
+        if self._esc_count >= 2:
             self._transition(ToolState.IDLE)
+        # Return to the permanent home tool (SelectTool) after this event cycle
+        go_home = getattr(self._ctx, 'go_home', None)
+        if go_home and callable(go_home):
+            from qgis.PyQt.QtCore import QTimer
+            QTimer.singleShot(0, go_home)
 
     # ── rubber-band helpers ───────────────────────────────────────────────
     def _new_rubber_band(self, geom_type, color=None, width=1):
@@ -129,16 +132,22 @@ class BaseTool(QgsMapTool):
         return rb
 
     def _clear_rubber_bands(self):
+        scene = self.canvas().scene()
         for rb in self._rubber_bands:
             try:
-                rb.reset()
+                scene.removeItem(rb)
             except Exception:
-                pass
+                try:
+                    rb.reset()
+                    rb.hide()
+                except Exception:
+                    pass
         self._rubber_bands.clear()
 
     # ── snap marker ───────────────────────────────────────────────────────
     _SNAP_STYLES = {
         SnapType.VERTEX:        (_style.SNAP_ICON['endpoint'],     _style._CC_COLOR),
+        SnapType.POINT:         (_style.SNAP_ICON['point'],        _style._CC_COLOR),
         SnapType.MIDPOINT:      (_style.SNAP_ICON['midpoint'],     _style._CC_COLOR),
         SnapType.CENTER:        (_style.SNAP_ICON['center'],       _style._CC_COLOR),
         SnapType.INTERSECTION:  (_style.SNAP_ICON['intersection'], _style._CC_COLOR),

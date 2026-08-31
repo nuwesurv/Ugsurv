@@ -17,7 +17,7 @@ from ...core.events import SemanticEvent, EventType
 
 
 class TextTool(BaseTool):
-    CURSOR = Qt.CursorShape.IBeamCursor
+    CURSOR = Qt.CursorShape.CrossCursor
 
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas, tool_context, input_translator)

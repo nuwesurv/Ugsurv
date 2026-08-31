@@ -15,7 +15,7 @@ from ...core.pending_action import PendingAction
 
 
 class EraseTool(BaseTool):
-    CURSOR = Qt.CursorShape.ForbiddenCursor
+    CURSOR = Qt.CursorShape.CrossCursor
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.DELETE, EventType.CONFIRM):

@@ -11,6 +11,8 @@ class ToolContext:
         self.constraints = []                      # active constraint objects
         self.storage_manager = None                # set by plugin_main
         self.selection_model = None                # set by plugin_main
+        self.selection_overlay = None              # SelectionOverlay, set by plugin_main
+        self.go_home = None                        # callable: return to SelectTool
         self.canvas = None                         # QgsMapCanvas, set by plugin_main
         self.iface = None                          # QgsInterface, set by plugin_main
 

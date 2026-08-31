@@ -53,6 +53,8 @@ class Ugsurv:
         self._dyn_widget    = None
         self._storage       = None
         self._tool_context  = None
+        self._sel_overlay   = None
+        self._snap_action   = None
         self._shortcuts              = []
         self._tool_changed_slot     = None
         self._tool_for_cmdline_slot = None
@@ -121,14 +123,15 @@ class Ugsurv:
 
         from .core.snapping.snap_settings              import SnapSettings
         from .core.snapping.snap_engine                import SnapEngine
-        from .core.snapping.providers.vertex_provider       import VertexProvider
-        from .core.snapping.providers.midpoint_provider     import MidpointProvider
-        from .core.snapping.providers.center_provider       import CenterProvider
-        from .core.snapping.providers.intersection_provider import IntersectionProvider
+        from .core.snapping.providers.vertex_provider        import VertexProvider
+        from .core.snapping.providers.point_provider         import PointProvider
+        from .core.snapping.providers.midpoint_provider      import MidpointProvider
+        from .core.snapping.providers.center_provider        import CenterProvider
+        from .core.snapping.providers.intersection_provider  import IntersectionProvider
         from .core.snapping.providers.perpendicular_provider import PerpendicularProvider
-        from .core.snapping.providers.extension_provider    import ExtensionProvider
-        from .core.snapping.providers.grid_provider         import GridProvider
-        from .core.snapping.providers.self_snap_provider    import SelfSnapProvider
+        from .core.snapping.providers.extension_provider     import ExtensionProvider
+        from .core.snapping.providers.grid_provider          import GridProvider
+        from .core.snapping.providers.self_snap_provider     import SelfSnapProvider
 
         from .core.constraints.ortho_constraint import OrthoConstraint
         from .core.constraints.polar_constraint import PolarConstraint
@@ -149,10 +152,15 @@ class Ugsurv:
         sel = SelectionModel()
         ctx.selection_model = sel
 
+        from .core.selection_overlay import SelectionOverlay
+        self._sel_overlay = SelectionOverlay(canvas, sel)
+        ctx.selection_overlay = self._sel_overlay
+
         snap_settings = SnapSettings()
         snap_engine   = SnapEngine(snap_settings, None)
         for key, ProviderClass in [
             ("vertex",        VertexProvider),
+            ("point",         PointProvider),
             ("midpoint",      MidpointProvider),
             ("center",        CenterProvider),
             ("intersection",  IntersectionProvider),
@@ -241,9 +249,13 @@ class Ugsurv:
         snap_dialog = SnapSettingsDialog(snap_settings, snap_engine, mw)
         self._snap_dock = snap_dialog  # reuse attr so teardown loop still works
 
-        # Toolbar snap button
-        snap_icon = os.path.join(icon_dir, "snap.png")
-        cad_toolbar.add_snap_button(snap_dialog.open_or_raise, snap_icon)
+        # Add snap button to QGIS's Plugins toolbar, right next to the UgSurv icon
+        from .core import style as _cstyle
+        snap_act = QAction(_cstyle.snap_toolbar_icon(), "Snap Settings", mw)
+        snap_act.setToolTip("Snap Settings  (SNAP / OS)")
+        snap_act.triggered.connect(snap_dialog.open_or_raise)
+        iface.addToolBarIcon(snap_act)
+        self._snap_action = snap_act
 
         # Command-line aliases: SNAP / OS / OSNAP
         cmd_dock.register_ui_command("SNAP", "OS", "OSNAP",
@@ -291,12 +303,15 @@ class Ugsurv:
         self._unknown_cmd_slot = _unknown_cmd
 
         # mid-command flag on cmd_dock
+        # SelectTool is the idle/default state — command line stays open for
+        # new commands.  Every other active tool is "mid-command" so typed
+        # input is routed to that tool rather than dispatched as a new command.
         def _on_tool_for_cmdline(tool):
-            if tool:
-                name = getattr(tool, '_tool_key', '').upper()
-                cmd_dock.set_mid_command(True, name)
-            else:
+            key = getattr(tool, '_tool_key', '') if tool else ''
+            if not tool or key == 'select':
                 cmd_dock.set_mid_command(False)
+            else:
+                cmd_dock.set_mid_command(True, key.upper())
         tool_mgr.toolChanged.connect(_on_tool_for_cmdline)
         self._tool_for_cmdline_slot = _on_tool_for_cmdline
 
@@ -336,6 +351,13 @@ class Ugsurv:
                 )
         storage.gatingChanged.connect(_reload_cad_layers)
         self._reload_layers_slot = _reload_cad_layers
+
+        # 9. SelectTool is the permanent home — one instance, never via factory
+        from .tools.selection.select_tool import SelectTool as _SelectTool
+        _home = _SelectTool(canvas, ctx, translator)
+        _home._tool_key = 'select'
+        tool_mgr.set_home(_home)
+        ctx.go_home = tool_mgr.go_home
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
@@ -387,6 +409,17 @@ class Ugsurv:
         self._tool_for_cmdline_slot = None
         self._unknown_cmd_slot      = None
         self._reload_layers_slot    = None
+
+        if self._snap_action:
+            with contextlib.suppress(Exception):
+                self.iface.removeToolBarIcon(self._snap_action)
+                self._snap_action.deleteLater()
+            self._snap_action = None
+
+        if self._sel_overlay:
+            with contextlib.suppress(Exception):
+                self._sel_overlay.destroy()
+            self._sel_overlay = None
 
         for dock_attr in ("_cmd_dock", "_layers_dock", "_props_dock"):
             dock = getattr(self, dock_attr, None)
@@ -441,7 +474,6 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.modify.extend_tool        import ExtendTool
     from .tools.modify.fillet_tool        import FilletTool
     from .tools.modify.array_tool         import ArrayTool
-    from .tools.selection.select_tool     import SelectTool
     from .tools.selection.erase_tool      import EraseTool
     from .tools.selection.stretch_tool    import StretchTool
     from .tools.vertex_edit.grip_edit_tool     import GripEditTool
@@ -462,7 +494,7 @@ def _make_tool(key: str, canvas, ctx, translator):
         "mirror":        MirrorTool,      "offset":        OffsetTool,
         "trim":          TrimTool,        "extend":        ExtendTool,
         "fillet":        FilletTool,      "array":         ArrayTool,
-        "select":        SelectTool,      "erase":         EraseTool,
+        "erase":         EraseTool,
         "stretch":       StretchTool,
         "grip_edit":     GripEditTool,    "add_vertex":    AddVertexTool,
         "remove_vertex": RemoveVertexTool,"break":         BreakTool,
@@ -497,7 +529,6 @@ def _register_commands(registry):
         ("extend",        "EXTEND",  "EX"),
         ("fillet",        "FILLET",  "F"),
         ("array",         "ARRAY",   "AR"),
-        ("select",        "SELECT",  "SS"),
         ("erase",         "ERASE",   "E", "DEL"),
         ("stretch",       "STRETCH", "S"),
         ("grip_edit",     "GRIPS",   "V"),
@@ -530,9 +561,15 @@ def _install_shortcuts(canvas, ortho, polar, snap_settings, tool_mgr):
                         for k in ["vertex", "midpoint", "center"]])
     def _do_escape():
         t = tool_mgr.active_tool
-        if t and hasattr(t, 'cancel'):
-            t.cancel()
-        tool_mgr.deactivate()
+        if t is tool_mgr.home_tool:
+            # Already home: let SelectTool clear selection/grips
+            if hasattr(t, '_handle_esc'):
+                t._handle_esc()
+        elif t is not None:
+            # Cancel current command and return home (deferred so tool's
+            # keyPressEvent processes Esc before the tool is deactivated)
+            from qgis.PyQt.QtCore import QTimer
+            QTimer.singleShot(0, tool_mgr.go_home)
 
     _sc("Escape", _do_escape)
     return shortcuts

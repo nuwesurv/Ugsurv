@@ -20,7 +20,7 @@ from ...core import style as _style
 
 
 class StretchTool(BaseTool):
-    CURSOR = Qt.CursorShape.SizeAllCursor
+    CURSOR = Qt.CursorShape.CrossCursor
 
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas, tool_context, input_translator)
@@ -105,7 +105,7 @@ class StretchTool(BaseTool):
                     pts[i] = QgsPointXY(pts[i].x() + dx, pts[i].y() + dy)
             new_geom = self._rebuild_geometry(orig_geom, pts)
             rb = self._new_rubber_band(
-                int(QgsWkbTypes.geometryType(new_geom.wkbType())),
+                new_geom.type(),
                 _style.PREVIEW_STRETCH, 1
             )
             rb.setToGeometry(new_geom)

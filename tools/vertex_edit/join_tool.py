@@ -14,7 +14,7 @@ from ...core.events import SemanticEvent, EventType
 
 
 class JoinTool(BaseTool):
-    CURSOR = Qt.CursorShape.ArrowCursor
+    CURSOR = Qt.CursorShape.CrossCursor
 
     def activate(self):
         super().activate()

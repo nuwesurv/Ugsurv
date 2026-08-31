@@ -11,7 +11,7 @@ Never scatter raw QColor literals across tool files — add a constant here
 and reference it.
 """
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
+from qgis.PyQt.QtGui import QColor, QCursor, QIcon, QPainter, QPen, QPixmap
 from qgis.gui import QgsVertexMarker
 
 
@@ -30,7 +30,8 @@ _ICON_TRIANGLE = getattr(QgsVertexMarker, 'ICON_TRIANGLE',
 
 # Icon shape per snap type — used by base_tool._SNAP_STYLES
 SNAP_ICON = {
-    'endpoint':     QgsVertexMarker.ICON_BOX,
+    'endpoint':     QgsVertexMarker.ICON_BOX,           # vertex of line/polygon
+    'point':        QgsVertexMarker.ICON_CIRCLE,        # point feature
     'center':       QgsVertexMarker.ICON_CROSS,
     'midpoint':     _ICON_TRIANGLE,
     'intersection': QgsVertexMarker.ICON_X,
@@ -63,13 +64,35 @@ STRETCH_CROSS_FILL   = QColor(  0, 200,   0,  50)
 STRETCH_CROSS_BORDER = QColor(  0, 200,   0, 200)
 
 
+# ══ Selection rubber-band overlay ════════════════════════════════════════════
+SELECT_OVERLAY        = QColor(255, 180,   0, 220)   # amber outline
+SELECT_OVERLAY_FILL   = QColor(255, 180,   0,  30)   # faint amber fill
+
 # ══ Vertex / grip markers ═════════════════════════════════════════════════════
 GRIP_COLOR    = QColor(  0, 120, 255)   # blue boxes on selected features
+MIDGRIP_COLOR = QColor(100, 220,  80)   # green plus signs at edge midpoints
 BASE_PT_COLOR = QColor(255, 165,   0)   # orange crosshair (transform base point)
 
 
 # ══ CAD cursor ════════════════════════════════════════════════════════════════
 _cad_cursor: "QCursor | None" = None
+
+
+def snap_toolbar_icon() -> QIcon:
+    """Blue crosshair-with-box icon for the snap settings toolbar button."""
+    size, c, gap, box = 18, 8, 2, 2
+    px = QPixmap(size, size)
+    px.fill(Qt.transparent)
+    p = QPainter(px)
+    p.setPen(QPen(_CC_COLOR, 2))
+    p.drawLine(0, c, c - gap - box, c)
+    p.drawLine(c + gap + box, c, size - 1, c)
+    p.drawLine(c, 0, c, c - gap - box)
+    p.drawLine(c, c + gap + box, c, size - 1)
+    p.setPen(QPen(_CC_COLOR, 1))
+    p.drawRect(c - box, c - box, box * 2, box * 2)
+    p.end()
+    return QIcon(px)
 
 
 def cad_crosshair_cursor() -> QCursor:
