@@ -67,7 +67,15 @@ class GlobalKeyFilter(QObject):
     # ── routing ────────────────────────────────────────────────────────────
 
     def _filter(self, event) -> bool:
-        # Only process key-press events
+        # ── ShortcutOverride ──────────────────────────────────────────────
+        # Qt sends ShortcutOverride BEFORE KeyPress to decide whether a
+        # registered QAction shortcut (like QGIS's 'S' snap toggle) should
+        # fire.  If we accept() it here, Qt skips shortcut matching and
+        # delivers the normal KeyPress instead — which our filter then owns.
+        if event.type() == QEvent.ShortcutOverride:
+            return self._claim_shortcut(event)
+
+        # Only process key-press events from here on
         if event.type() != QEvent.KeyPress:
             return False
 
@@ -87,6 +95,32 @@ class GlobalKeyFilter(QObject):
             return self._idle(event)
         return self._drawing(event, tool)
 
+    def _claim_shortcut(self, event) -> bool:
+        """Accept ShortcutOverride for every key we handle.
+
+        Accepting tells Qt "this widget owns the key — do not fire any
+        registered shortcut for it."  The matching KeyPress is then delivered
+        normally and caught by _idle / _drawing.
+
+        We claim in both idle and drawing modes so that QGIS shortcuts like
+        'S' (snap toggle) never fire while the plugin canvas is active.
+        """
+        if QApplication.activeModalWidget() is not None:
+            return False
+        mods = event.modifiers()
+        if mods & (Qt.ControlModifier | Qt.AltModifier):
+            return False
+        if self._tool_mgr.active_tool is None:
+            return False
+
+        key = event.key()
+        ch  = event.text()
+        if (key in (Qt.Key_Backspace, Qt.Key_Return, Qt.Key_Enter,
+                    Qt.Key_Space, Qt.Key_Escape)
+                or (ch and ch.isprintable() and ch != '\t')):
+            event.accept()   # block QGIS shortcut; KeyPress still follows
+        return False         # do not consume — let the event reach the canvas
+
     # ── idle mode (home / select tool) ─────────────────────────────────────
 
     def _idle(self, event) -> bool:
@@ -101,8 +135,10 @@ class GlobalKeyFilter(QObject):
         key = event.key()
 
         if key == Qt.Key_Escape:
-            inp.clear()
-            return True
+            if inp.text():
+                inp.clear()
+                return True
+            return False   # nothing to clear — let QGIS / SelectTool handle it
 
         if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             cmd._on_enter()

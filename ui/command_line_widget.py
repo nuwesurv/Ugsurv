@@ -267,10 +267,14 @@ class CommandLineWidget(QDockWidget):
                     self._popup_complete()
                 return True
 
-            # Escape → close popup first; second Esc passes through to tool
+            # Escape → hide popup and clear any typed text.
+            # If input is already empty, pass through so QGIS / SelectTool
+            # can handle it (e.g. deselect features).
             if key == Qt.Key.Key_Escape:
                 if self._popup.isVisible():
                     self._popup_hide()
+                if self._input.text():
+                    self._input.clear()
                     return True
 
             # Up → popup navigation if open, else history
