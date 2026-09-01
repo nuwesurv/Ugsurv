@@ -6,7 +6,6 @@ Produces a closed LineString stored in the lines layer.
 """
 
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QColor
 from qgis.core import (
     QgsPointXY, QgsGeometry, QgsRectangle,
     QgsWkbTypes, QgsFeature,
@@ -14,6 +13,7 @@ from qgis.core import (
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
+from ...core import style as _style
 
 
 class RectangleTool(BaseTool):
@@ -56,8 +56,9 @@ class RectangleTool(BaseTool):
     def _update_preview(self, c1: QgsPointXY, c2: QgsPointXY):
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.PolygonGeometry, QColor(255, 165, 0, 150), 1
+                QgsWkbTypes.PolygonGeometry, _style.RB_DRAW, _style.RB_WIDTH
             )
+            self._preview_rb.setFillColor(_style.RB_DRAW_FILL)
         geom = QgsGeometry.fromRect(QgsRectangle(c1, c2))
         self._preview_rb.setToGeometry(geom)
 
@@ -65,15 +66,7 @@ class RectangleTool(BaseTool):
         poly_geom = QgsGeometry.fromRect(QgsRectangle(c1, c2))
         ring = poly_geom.asPolygon()[0]   # exterior ring (closed, last == first)
         geom = QgsGeometry.fromPolylineXY(ring)
-        layer = self._ctx.storage_manager.lines_layer
-        if layer is None:
-            return
-        if not layer.isEditable():
-            layer.startEditing()
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(geom)
-        feat["cad_layer"] = self._ctx.active_cad_layer
-        layer.addFeature(feat)
+        self._ctx.storage_manager.add_line(geom, self._ctx.active_cad_layer)
 
     def _on_cancel_hook(self):
         self._corner1 = None

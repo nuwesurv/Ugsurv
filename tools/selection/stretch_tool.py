@@ -92,7 +92,7 @@ class StretchTool(BaseTool):
             self._crossing_rb = QgsRubberBand(self.canvas(), QgsWkbTypes.PolygonGeometry)
             self._crossing_rb.setColor(_style.STRETCH_CROSS_BORDER)
             self._crossing_rb.setFillColor(_style.STRETCH_CROSS_FILL)
-            self._crossing_rb.setWidth(1)
+            self._crossing_rb.setWidth(_style.RB_WIDTH_SELECT)
         rect_geom = QgsGeometry.fromRect(QgsRectangle(start, end))
         self._crossing_rb.setToGeometry(rect_geom)
 

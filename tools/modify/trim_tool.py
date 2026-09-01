@@ -23,15 +23,14 @@ from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
-from qgis.PyQt.QtGui import QColor
 
 from ...core.events import EventType
+from ...core import style as _style
 
-
-_C_EDGE     = QColor(  0, 210, 210, 220)
-_C_PREVIEW  = QColor(255, 140,   0, 220)
-_C_SELECTED = QColor(220,   0,   0, 255)
-_C_HOVER    = QColor(255, 200,   0, 180)
+_C_EDGE     = _style.RB_EDGE
+_C_PREVIEW  = _style.RB_PREVIEW
+_C_SELECTED = _style.RB_DESTROY
+_C_HOVER    = _style.RB_HOVER
 
 _ST_SELECT = 0
 _ST_TRIM   = 1
@@ -45,8 +44,8 @@ _HINT_STYLE = (
 )
 
 _HINT = {
-    _ST_SELECT: "Click cutting edges  (Enter=confirm  |  Enter empty=use ALL)",
-    _ST_TRIM:   "Click segment to mark for trim  (Enter/RMB=apply)",
+    _ST_SELECT: "Click cutting edges",
+    _ST_TRIM:   "Click segment to mark for trim",
 }
 
 
@@ -64,9 +63,9 @@ class TrimTool(QgsMapTool):
         self._cutting_bands   = []
         self._modified_layers = set()
 
-        self._preview_band = self._make_band(_C_PREVIEW, width=3, dashed=True)
+        self._preview_band = self._make_band(_C_PREVIEW, width=_style.RB_WIDTH, dashed=True)
         self._preview_band.setVisible(False)
-        self._hover_band   = self._make_band(_C_HOVER,   width=3, dashed=True)
+        self._hover_band   = self._make_band(_C_HOVER,   width=_style.RB_WIDTH, dashed=True)
         self._hover_band.setVisible(False)
 
         self._pending_trims  = []
@@ -98,12 +97,11 @@ class TrimTool(QgsMapTool):
         self._hint.show()
         self._hint.raise_()
 
-    def _make_band(self, color, width=2, dashed=False):
+    def _make_band(self, color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, QgsWkbTypes.GeometryType.LineGeometry)
         band.setColor(color)
         band.setWidth(width)
-        if dashed:
-            band.setLineStyle(Qt.PenStyle.DashLine)
+        band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
     def _rm(self, item):
@@ -238,13 +236,13 @@ class TrimTool(QgsMapTool):
         else:
             if key not in keys:
                 self._cutting_edges.append((layer, feat.id()))
-                band = self._make_band(_C_EDGE, width=3)
+                band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
                 band.setToGeometry(feat.geometry(), layer)
                 self._cutting_bands.append(band)
                 self._log(f"  Cutting edge: '{layer.name()}' fid {feat.id()}"
                           f"  ({len(self._cutting_edges)} selected)")
             else:
-                self._log(f"  Already selected — Shift+click to deselect")
+                self._log(f"  Already selected")
 
     def _update_mark(self, layer, feat, click_pt, shift=False):
         line_geom = feat.geometry()
@@ -276,14 +274,14 @@ class TrimTool(QgsMapTool):
                 self._log(f"  Deselected segment  ({len(self._pending_trims)} marked)")
         else:
             if key in existing_keys:
-                self._log(f"  Segment already marked — Shift+click to deselect")
+                self._log(f"  Segment already marked")
             else:
                 d_a, d_b = boundaries[trim_idx], boundaries[trim_idx + 1]
                 sub = self._sub_line(line_geom, d_a, d_b)
                 if sub is None:
                     return
                 self._pending_trims.append((layer, feat.id(), line_geom, boundaries, trim_idx))
-                band = self._make_band(_C_SELECTED, width=4)
+                band = self._make_band(_C_SELECTED, width=_style.RB_WIDTH_THICK)
                 band.setToGeometry(sub, layer)
                 self._selected_bands.append(band)
                 n = len(self._pending_trims)
@@ -397,7 +395,7 @@ class TrimTool(QgsMapTool):
                     if feat.geometry().isEmpty():
                         continue
                     self._cutting_edges.append((lyr, feat.id()))
-                    band = self._make_band(_C_EDGE, width=2)
+                    band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
                     band.setToGeometry(feat.geometry(), lyr)
                     self._cutting_bands.append(band)
             self._log(f"  All lines as cutting edges ({len(self._cutting_edges)} features)")
@@ -405,7 +403,7 @@ class TrimTool(QgsMapTool):
             self._log(f"  {len(self._cutting_edges)} cutting edge(s) confirmed")
 
         self._state = _ST_TRIM
-        self._log("  Click segments to mark for removal — Enter/RMB to apply  (Esc=cancel)", "#88ccff")
+        self._log("  Click segments to mark for removal", "#88ccff")
 
     def _finish(self):
         self._confirm_all_trims()
@@ -417,7 +415,7 @@ class TrimTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("TRIM  ──  click cutting edges, Enter to confirm  (Esc=exit)", "#aaddff")
+        self._log("TRIM  ──  click cutting edges", "#aaddff")
 
     def deactivate(self):
         for band in self._cutting_bands:

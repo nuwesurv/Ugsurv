@@ -18,15 +18,14 @@ from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
-from qgis.PyQt.QtGui import QColor
 
 from ...core.events import EventType
+from ...core import style as _style
 
-
-_C_EDGE     = QColor(  0, 210, 210, 220)
-_C_PREVIEW  = QColor(255, 140,   0, 180)
-_C_SELECTED = QColor(  0, 180, 255, 255)
-_C_HOVER    = QColor(255, 200,   0, 180)
+_C_EDGE     = _style.RB_EDGE
+_C_PREVIEW  = _style.RB_PREVIEW
+_C_SELECTED = _style.RB_EXTEND
+_C_HOVER    = _style.RB_HOVER
 
 _ST_SELECT = 0
 _ST_EXTEND = 1
@@ -41,8 +40,8 @@ _HINT_STYLE = (
 )
 
 _HINT = {
-    _ST_SELECT: "Click boundary edges  (Enter=confirm  |  Enter empty=use ALL)",
-    _ST_EXTEND: "Click line end to mark for extension  (Enter/RMB=apply)",
+    _ST_SELECT: "Click boundary edges",
+    _ST_EXTEND: "Click line end to mark for extension",
 }
 
 
@@ -60,9 +59,9 @@ class ExtendTool(QgsMapTool):
         self._boundary_bands  = []
         self._modified_layers = set()
 
-        self._preview_band = self._make_band(_C_PREVIEW, width=3, dashed=True)
+        self._preview_band = self._make_band(_C_PREVIEW, width=_style.RB_WIDTH, dashed=True)
         self._preview_band.setVisible(False)
-        self._hover_band   = self._make_band(_C_HOVER,   width=3, dashed=True)
+        self._hover_band   = self._make_band(_C_HOVER,   width=_style.RB_WIDTH, dashed=True)
         self._hover_band.setVisible(False)
 
         self._pending       = []
@@ -94,12 +93,11 @@ class ExtendTool(QgsMapTool):
         self._hint.show()
         self._hint.raise_()
 
-    def _make_band(self, color, width=2, dashed=False):
+    def _make_band(self, color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, QgsWkbTypes.GeometryType.LineGeometry)
         band.setColor(color)
         band.setWidth(width)
-        if dashed:
-            band.setLineStyle(Qt.PenStyle.DashLine)
+        band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
     def _rm(self, item):
@@ -223,13 +221,13 @@ class ExtendTool(QgsMapTool):
         else:
             if key not in keys:
                 self._boundary_edges.append((layer, feat.id()))
-                band = self._make_band(_C_EDGE, width=3)
+                band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
                 band.setToGeometry(feat.geometry(), layer)
                 self._boundary_bands.append(band)
                 self._log(f"  Boundary edge: '{layer.name()}' fid {feat.id()}"
                           f"  ({len(self._boundary_edges)} selected)")
             else:
-                self._log("  Already selected — Shift+click to deselect")
+                self._log("  Already selected")
 
     def _pending_key(self, layer, fid, ep_idx):
         return (id(layer), fid, ep_idx)
@@ -261,11 +259,11 @@ class ExtendTool(QgsMapTool):
                 self._log(f"  Deselected extension  ({len(self._pending)} marked)")
         else:
             if key in existing:
-                self._log("  Extension already marked — Shift+click to deselect")
+                self._log("  Extension already marked")
             else:
                 ext_geom = QgsGeometry.fromPolylineXY([ep, ext_pt])
                 self._pending.append((layer, feat.id(), ep_idx, ep, ext_pt))
-                band = self._make_band(_C_SELECTED, width=3, dashed=True)
+                band = self._make_band(_C_SELECTED, width=_style.RB_WIDTH, dashed=True)
                 band.setToGeometry(ext_geom, layer)
                 self._pending_bands.append(band)
                 n = len(self._pending)
@@ -352,7 +350,7 @@ class ExtendTool(QgsMapTool):
                     if feat.geometry().isEmpty():
                         continue
                     self._boundary_edges.append((lyr, feat.id()))
-                    band = self._make_band(_C_EDGE, width=2)
+                    band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
                     band.setToGeometry(feat.geometry(), lyr)
                     self._boundary_bands.append(band)
             self._log(f"  All lines as boundaries ({len(self._boundary_edges)} features)")
@@ -360,7 +358,7 @@ class ExtendTool(QgsMapTool):
             self._log(f"  {len(self._boundary_edges)} boundary edge(s) confirmed")
 
         self._state = _ST_EXTEND
-        self._log("  Click line ends to mark — Enter/RMB to apply  (Esc=cancel)", "#88ccff")
+        self._log("  Click line ends to mark", "#88ccff")
 
     def _finish(self):
         self._confirm_all_extends()
@@ -372,7 +370,7 @@ class ExtendTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("EXTEND  ──  click boundary edges, Enter to confirm  (Esc=exit)", "#aaddff")
+        self._log("EXTEND  ──  click boundary edges", "#aaddff")
 
     def deactivate(self):
         for band in self._boundary_bands:

@@ -42,17 +42,46 @@ SNAP_ICON = {
 SNAP_GRID_COLOR      = QColor(160, 160, 160)   # grid stays gray (distinct category)
 
 
-# ══ Rubber-band preview colors ════════════════════════════════════════════════
-PREVIEW_DEFAULT  = QColor(255, 100,   0, 180)   # BaseTool fallback
-PREVIEW_DRAW     = QColor(255, 165,   0, 200)   # drawing tools (line / polyline / circle …)
-PREVIEW_MOVE     = QColor(255, 165,   0, 130)   # move
-PREVIEW_COPY     = QColor(100, 200, 255, 130)   # copy
-PREVIEW_ROTATE   = QColor(255, 200,   0, 130)   # rotate
-PREVIEW_SCALE    = QColor(200, 255, 100, 130)   # scale
-PREVIEW_MIRROR   = QColor(  0, 200, 200, 130)   # mirror geometry ghost
-PREVIEW_STRETCH  = QColor(255, 140,   0, 180)   # stretch vertices
-PREVIEW_GRIP     = QColor(255, 165,   0, 180)   # grip-edit vertex drag
-MIRROR_AXIS      = QColor(200, 200, 200, 220)   # mirror axis line
+# ══ Rubber-band standards ════════════════════════════════════════════════════
+# All rubber bands use exactly 3 colors, dashed style, width 1.
+# Never scatter raw QColor literals — add a semantic alias below instead.
+
+# The 3 base colors
+RB_RED    = QColor(220,  30,  30, 220)   # red    — hover / destructive
+RB_ORANGE = QColor(255, 140,   0, 220)   # orange — drawing preview / ghost
+RB_GREEN  = QColor(  0, 200,  80, 220)   # green  — source selection / reference
+
+# Faint fills for polygon-type rubber bands (same hue, very low alpha)
+RB_RED_FILL    = QColor(220,  30,  30,  18)
+RB_ORANGE_FILL = QColor(255, 140,   0,  18)
+RB_GREEN_FILL  = QColor(  0, 200,  80,  18)
+
+# Line style and widths
+RB_LINE_STYLE   = Qt.PenStyle.DashLine
+RB_WIDTH        = 1    # standard — thin but visible
+RB_WIDTH_THICK  = 2    # for destructive-op indicators (trim target)
+RB_WIDTH_SELECT = 1    # drag-selection window box
+
+# ── Semantic aliases ──────────────────────────────────────────────────────────
+RB_DRAW         = RB_ORANGE          # live drawing preview (vertices being placed)
+RB_DRAW_FILL    = RB_ORANGE_FILL
+RB_HOVER        = RB_RED             # cursor hovering over a candidate feature
+RB_SOURCE       = RB_GREEN           # geometry selected as input for an operation
+RB_SOURCE_FILL  = RB_GREEN_FILL
+RB_PREVIEW      = RB_ORANGE          # ghost showing destination / result
+RB_PREVIEW_FILL = RB_ORANGE_FILL
+RB_EDGE         = RB_GREEN           # confirmed reference / cutting edges
+RB_DESTROY      = RB_RED             # segment that will be removed (trim, break)
+RB_EXTEND       = RB_GREEN           # extension boundary
+RB_OFFSET_GUIDE = RB_ORANGE          # perpendicular measurement guide
+RB_ANGLE_ARC    = RB_ORANGE          # angle arc / reference line (polyline)
+RB_MIRROR_AXIS  = RB_RED             # mirror axis line
+RB_MIRROR       = RB_ORANGE          # mirrored geometry ghost
+
+# Aliases kept for backward compatibility
+PREVIEW_DRAW   = RB_DRAW
+MIRROR_AXIS    = RB_MIRROR_AXIS
+PREVIEW_MIRROR = RB_MIRROR
 
 
 # ══ Selection rubber-bands ════════════════════════════════════════════════════

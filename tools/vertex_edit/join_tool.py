@@ -28,14 +28,12 @@ from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
-from qgis.PyQt.QtGui import QColor
-
 from ...core.events import EventType
+from ...core import style as _style
 from ..layer_utils import polyline_attrs
 
-
-_C_SEL   = QColor(  0, 200,  80, 220)
-_C_HOVER = QColor(255, 200,   0, 200)
+_C_SEL   = _style.RB_SOURCE
+_C_HOVER = _style.RB_HOVER
 
 _HIT_PX    = 10
 _TOUCH_TOL = 1e-3
@@ -92,12 +90,13 @@ class JoinTool(QgsMapTool):
             from qgis.PyQt.QtCore import QTimer
             QTimer.singleShot(0, go)
 
-    def _make_band(self, geom, color, width=3):
+    def _make_band(self, geom, color, width=_style.RB_WIDTH):
         gt = (QgsWkbTypes.geometryType(geom.wkbType())
               if not geom.isEmpty() else QgsWkbTypes.GeometryType.LineGeometry)
         band = QgsRubberBand(self._canvas, gt)
         band.setColor(color)
         band.setWidth(width)
+        band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
     def _rm_band(self, band):
@@ -149,7 +148,7 @@ class JoinTool(QgsMapTool):
         geom = feat.geometry()
         if geom.isEmpty():
             return
-        band = self._make_band(geom, _C_SEL, width=3)
+        band = self._make_band(geom, _C_SEL, width=_style.RB_WIDTH)
         band.setToGeometry(geom, layer)
         self._sel_bands[(id(layer), fid)] = band
         self._selected.append((layer, fid))
@@ -268,7 +267,7 @@ class JoinTool(QgsMapTool):
         self._log(msg, "#88ff88")
 
         self._clear_all()
-        self._log("  JOIN: click polylines to select, Enter to join")
+        self._log("  JOIN: click polylines to select")
 
     def _dispatch(self, sem):
         pass
@@ -276,7 +275,7 @@ class JoinTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("JOIN  ──  click polylines to select, Enter/RMB to join  (Esc=exit)", "#aaddff")
+        self._log("JOIN  ──  click polylines to select", "#aaddff")
 
     def deactivate(self):
         self._clear_all()
@@ -296,7 +295,7 @@ class JoinTool(QgsMapTool):
                     feat = lyr.getFeature(fid)
                     geom = feat.geometry()
                     if not geom.isEmpty():
-                        band = self._make_band(geom, _C_HOVER, width=2)
+                        band = self._make_band(geom, _C_HOVER, width=_style.RB_WIDTH)
                         band.setToGeometry(geom, lyr)
                         self._hover_band = band
                         self._hover_key  = key
@@ -307,9 +306,9 @@ class JoinTool(QgsMapTool):
 
         n = len(self._selected)
         if n >= 2:
-            self._show_hint(event.pos(), f"{n} selected — Enter to join")
+            self._show_hint(event.pos(), f"{n} selected")
         elif n == 1:
-            self._show_hint(event.pos(), "Select 1 more polyline, then Enter")
+            self._show_hint(event.pos(), "Select 1 more polyline")
         else:
             self._show_hint(event.pos(), "Click polylines to select")
 

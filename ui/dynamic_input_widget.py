@@ -1,37 +1,73 @@
 # -*- coding: utf-8 -*-
 """
-DynamicInputWidget — frameless floating prompt near the cursor.
+DynamicInputWidget — floating interactive input prompt near the cursor.
 
-Purely a display widget driven by InputBuffer.  No text-input fields.
+Modes (set by tool.inputModeChanged signal):
+  "xy"    – two fields: X, Y  (absolute coordinates)
+  "polar" – two fields: Dist, Angle°
+  "value" – one field:  single numeric value
+  ""      – hidden / no active tool
 
-Shows:
-  - A prompt label set by the active tool (_request_input → inputModeChanged)
-  - The current buffer text with a blinking underscore cursor
+All key input is routed here from GlobalKeyFilter via handle_key().
+The canvas never loses focus — the widget has NoFocus / WA_TransparentForMouseEvents.
 
-Hidden by default.  Appears as soon as InputBuffer has content.
-Disappears when the buffer is cleared (submit or cancel).
-Follows the OS cursor on every canvas mouse-move.
+Signals:
+  coordinateEntered(x, y)  – emitted in "xy" mode with absolute X, Y
+  polarEntered(dist, angle) – emitted in "polar" mode with dist and angle°
+  valueEntered(v)           – emitted in "value" mode
 """
 
-from qgis.PyQt.QtWidgets import QWidget, QVBoxLayout, QLabel
-from qgis.PyQt.QtCore import Qt, QTimer
-from qgis.PyQt.QtGui import QFont, QCursor
+import re as _re
+
+from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QLabel, QLineEdit
+from qgis.PyQt.QtCore import Qt, pyqtSignal
+from qgis.PyQt.QtGui import QCursor, QFont
 
 
-_OUTER_CSS = (
-    "DynamicInputWidget { "
-    "background: rgba(20, 20, 28, 220); "
-    "border: 1px solid #3a3a5a; "
-    "border-radius: 4px; "
-    "}"
+_OUTER = (
+    "DynamicInputWidget{"
+    "background:rgba(18,18,28,240);"
+    "border:1px solid #3a3a5a;"
+    "border-radius:4px;}"
 )
-_PROMPT_CSS = "color: #7aaadd; background: transparent; padding: 0 2px;"
-_TEXT_CSS   = "color: #e8e8e8; background: transparent; padding: 0 2px;"
-_CURSOR_CH  = "_"
+_PROMPT = (
+    "color:#8aabdd;background:transparent;"
+    "padding:2px 8px 2px 6px;font-size:9pt;"
+)
+_FIELD_IDLE = (
+    "QLineEdit{background:#1e2030;color:#9999bb;"
+    "border:1px solid #444466;border-radius:2px;"
+    "padding:1px 5px;font-family:Consolas;font-size:9pt;"
+    "min-width:75px;max-width:120px;}"
+)
+_FIELD_ACTIVE = (
+    "QLineEdit{background:#122040;color:#ffffff;"
+    "border:1px solid #4488cc;border-radius:2px;"
+    "padding:1px 5px;font-family:Consolas;font-size:9pt;"
+    "min-width:75px;max-width:120px;}"
+)
+_LBL = (
+    "color:#556688;background:transparent;"
+    "padding:0 1px 0 3px;font-size:8pt;"
+)
+_CRS_LBL = (
+    "color:#4a9a8a;background:rgba(20,50,45,180);"
+    "border:1px solid #2a6a5a;border-radius:2px;"
+    "padding:1px 6px;font-size:7pt;font-family:Consolas;"
+)
+
+# (field_label, placeholder) lists per mode
+_CONFIGS = {
+    "xy":    [("X",     "0.000"), ("Y",    "0.000")],
+    "polar": [("Dist",  "0.000"), ("Brg",  "0.0°" )],
+    "value": [("Value", "0.000")],
+}
 
 
 class DynamicInputWidget(QWidget):
-    """Floating input-echo widget — display only, no user interaction."""
+    coordinateEntered = pyqtSignal(float, float)   # absolute X, Y
+    polarEntered      = pyqtSignal(float, float)   # dist, angle°
+    valueEntered      = pyqtSignal(float)
 
     def __init__(self, canvas, input_translator=None, parent=None):
         super().__init__(
@@ -40,92 +76,219 @@ class DynamicInputWidget(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint,
         )
-        self._canvas    = canvas
-        self._buf_text  = ""
-        self._cursor_on = True
+        self._canvas        = canvas
+        self._mode          = ""
+        self._texts         = ["", ""]   # typed text per field
+        self._active        = 0          # index of active (highlighted) field
+        self._fields        = []         # QLineEdit list (rebuilt on mode change)
+        self._field_widgets = []         # all added widgets (labels + fields)
+        self._live          = [0.0, 0.0] # live cursor values (dist/angle or x/y)
 
-        self._build_ui()
-        self._blink = QTimer(self)
-        self._blink.setInterval(530)
-        self._blink.timeout.connect(self._toggle_cursor)
-
-        self.setStyleSheet(_OUTER_CSS)
+        self.setStyleSheet(_OUTER)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._build_ui()
         self.hide()
 
     # ── construction ──────────────────────────────────────────────────────
     def _build_ui(self):
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 5, 8, 5)
-        lay.setSpacing(1)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(6, 4, 6, 4)
+        self._layout.setSpacing(2)
 
-        font_sm = QFont("Consolas", 9)
-        font_lg = QFont("Consolas", 10)
+        self._crs_badge = QLabel("WGS84 36N")
+        self._crs_badge.setStyleSheet(_CRS_LBL)
+        self._layout.addWidget(self._crs_badge)
 
         self._prompt_lbl = QLabel()
-        self._prompt_lbl.setFont(font_sm)
-        self._prompt_lbl.setStyleSheet(_PROMPT_CSS)
+        self._prompt_lbl.setStyleSheet(_PROMPT)
         self._prompt_lbl.hide()
-        lay.addWidget(self._prompt_lbl)
+        self._layout.addWidget(self._prompt_lbl)
 
-        self._text_lbl = QLabel()
-        self._text_lbl.setFont(font_lg)
-        self._text_lbl.setStyleSheet(_TEXT_CSS)
-        lay.addWidget(self._text_lbl)
+    def _rebuild_fields(self, config):
+        for w in self._field_widgets:
+            self._layout.removeWidget(w)
+            w.deleteLater()
+        self._field_widgets = []
+        self._fields = []
+        self._texts  = [""] * len(config)
 
-    # ── InputBuffer slots (connected in Ugsurv.py) ────────────────────────
-    def on_buffer_text_changed(self, text: str):
-        self._buf_text = text
-        if text:
-            self._refresh_text()
-            self._reposition()
-            if not self.isVisible():
-                self.show()
-                self._blink.start()
-        else:
+        for i, (label_text, placeholder) in enumerate(config):
+            if i > 0:
+                sep = QLabel("|")
+                sep.setStyleSheet("color:#333355;background:transparent;padding:0 3px;")
+                self._layout.addWidget(sep)
+                self._field_widgets.append(sep)
+
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(_LBL)
+            self._layout.addWidget(lbl)
+            self._field_widgets.append(lbl)
+
+            field = QLineEdit()
+            field.setPlaceholderText(placeholder)
+            field.setReadOnly(True)
+            field.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            field.setStyleSheet(_FIELD_IDLE)
+            self._layout.addWidget(field)
+            self._field_widgets.append(field)
+            self._fields.append(field)
+
+    # ── public API ────────────────────────────────────────────────────────
+    def set_crs_label(self, text: str):
+        """Update the CRS badge (e.g. 'WGS84 36N') shown in the widget."""
+        self._crs_badge.setText(text)
+
+    def set_mode(self, mode: str, prompt: str = ""):
+        """Called by tool's inputModeChanged signal."""
+        self._mode   = mode
+        self._active = 0
+
+        if not mode or mode not in _CONFIGS:
             self.hide()
-            self._blink.stop()
-            self._cursor_on = True
+            return
 
-    def on_buffer_cancelled(self):
-        self._buf_text = ""
-        self.hide()
-        self._blink.stop()
-        self._cursor_on = True
-
-    # ── prompt ─────────────────────────────────────────────────────────────
-    def set_prompt(self, prompt: str):
-        if prompt:
-            self._prompt_lbl.setText(prompt)
+        # Strip key-hint blocks like [U=undo C=close] — those belong in the
+        # command line only; the cursor-side prompt stays concise.
+        display_prompt = _re.sub(r'\s*\[[^\]]+\]', '', prompt).strip()
+        if display_prompt:
+            self._prompt_lbl.setText(display_prompt)
             self._prompt_lbl.show()
         else:
             self._prompt_lbl.hide()
+
+        self._rebuild_fields(_CONFIGS[mode])
+        self._refresh_fields()
+        self.adjustSize()
+        self._reposition()
+        self.show()
+
+    def set_live_polar(self, dist: float, angle_deg: float):
+        """Update live cursor values used as fallbacks when a polar field is empty."""
+        self._live = [dist, angle_deg]
+
+    def update_position(self, canvas_pt=None):
+        """Called on every canvas xyCoordinates event — follow the cursor."""
+        if self.isVisible():
+            self._reposition()
+
+    # ── InputBuffer compat slots (no-op: interactive widget owns its text) ─
+    def on_buffer_text_changed(self, text: str):
+        pass
+
+    def on_buffer_cancelled(self):
+        if self._mode and self._fields:
+            self._texts  = [""] * len(self._fields)
+            self._active = 0
+            self._refresh_fields()
+
+    # kept for wiring compatibility
+    def show_for_tool(self, tool_is_active: bool):
+        self._reposition()
+
+    # ── Key routing (called by GlobalKeyFilter._drawing) ──────────────────
+    def handle_key(self, event) -> bool:
+        """
+        Process one key event for the active field.
+        Returns True if consumed, False to let the caller fall through.
+        """
+        if not self._mode or not self._fields:
+            return False
+
+        key = event.key()
+        ch  = event.text()
+
+        # Submit all fields
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return self._submit()
+
+        # Cycle to next field — Tab or comma
+        if key == Qt.Key.Key_Tab or ch == ',':
+            self._cycle_field()
+            return True
+
+        # Backspace — remove last char from active field
+        if key == Qt.Key.Key_Backspace:
+            t = self._texts[self._active]
+            if t:
+                self._texts[self._active] = t[:-1]
+                self._refresh_fields()
+                return True
+            return False   # empty — let Esc/tool handle it
+
+        # Escape — pass through so BaseTool/_handle_esc fires
+        if key == Qt.Key.Key_Escape:
+            return False
+
+        # Printable character (excluding comma which is handled above).
+        # In numeric modes only digits, '.', and '-' are absorbed; letters
+        # fall through so single-key commands (C=close, U=undo, A=arc…)
+        # still reach the tool even while fields have content.
+        if ch and ch.isprintable() and ch not in ('\t', ','):
+            if self._mode in ('polar', 'xy', 'value') and not (ch.isdigit() or ch in '.-'):
+                return False
+            self._texts[self._active] += ch
+            self._refresh_fields()
+            return True
+
+        return False
+
+    # ── internal ──────────────────────────────────────────────────────────
+    def _submit(self) -> bool:
+        mode = self._mode
+
+        if mode == "xy":
+            try:
+                x = float(self._texts[0].strip())
+                y = float(self._texts[1].strip())
+            except (ValueError, IndexError):
+                return False
+            self.coordinateEntered.emit(x, y)
+            self._clear()
+            return True
+
+        if mode == "polar":
+            t0 = self._texts[0].strip()
+            t1 = self._texts[1].strip()
+            if not t0 and not t1:
+                return False  # nothing typed — let Enter pass through to tool (confirm/end)
+            try:
+                dist  = float(t0) if t0 else self._live[0]
+                angle = float(t1) if t1 else self._live[1]
+            except (ValueError, IndexError):
+                return False
+            self.polarEntered.emit(dist, angle)
+            self._clear()
+            return True
+
+        if mode == "value":
+            try:
+                v = float(self._texts[0].strip())
+            except (ValueError, IndexError):
+                return False
+            self.valueEntered.emit(v)
+            self._clear()
+            return True
+
+        return False
+
+    def _cycle_field(self):
+        n = len(self._fields)
+        if n > 1:
+            self._active = (self._active + 1) % n
+            self._refresh_fields()
+
+    def _clear(self):
+        self._texts  = [""] * len(self._fields)
+        self._active = 0
+        self._refresh_fields()
+
+    def _refresh_fields(self):
+        for i, field in enumerate(self._fields):
+            field.setText(self._texts[i] if i < len(self._texts) else "")
+            field.setStyleSheet(_FIELD_ACTIVE if i == self._active else _FIELD_IDLE)
         self.adjustSize()
 
-    def set_mode(self, mode: str, prompt: str = ""):
-        """Compat shim — called via inputModeChanged signal from tools."""
-        self.set_prompt(prompt)
-
-    # ── position ──────────────────────────────────────────────────────────
-    def update_position(self, canvas_pt=None):
-        """Called on every canvas xyCoordinates event to follow the cursor."""
-        self._reposition()
-
-    def show_for_tool(self, tool_is_active: bool):
-        """Legacy compat — visibility is buffer-driven; just update position."""
-        self._reposition()
-
-    # ── internal ─────────────────────────────────────────────────────────
     def _reposition(self):
         pos = QCursor.pos()
         self.move(pos.x() + 18, pos.y() + 18)
-
-    def _toggle_cursor(self):
-        self._cursor_on = not self._cursor_on
-        self._refresh_text()
-
-    def _refresh_text(self):
-        suffix = _CURSOR_CH if self._cursor_on else " "
-        self._text_lbl.setText(self._buf_text + suffix)
-        self.adjustSize()

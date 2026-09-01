@@ -40,7 +40,8 @@ class SelectionOverlay:
             rb.setToGeometry(geom)
             rb.setColor(_style.SELECT_OVERLAY)
             rb.setFillColor(_style.SELECT_OVERLAY_FILL)
-            rb.setWidth(2)
+            rb.setWidth(_style.RB_WIDTH)
+            rb.setLineStyle(_style.RB_LINE_STYLE)
             self._bands.append(rb)
 
     def _clear(self):

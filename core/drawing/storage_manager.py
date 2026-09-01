@@ -26,6 +26,8 @@ from qgis.core import (
     QgsWkbTypes, QgsCoordinateReferenceSystem,
     QgsVectorFileWriter, QgsFeature, QgsGeometry, QgsPointXY,
 )
+
+_LAYER_EPSG = 32636   # WGS 84 / UTM Zone 36N — all geometry stored here
 from qgis.PyQt.QtCore import QVariant
 
 
@@ -40,6 +42,7 @@ class StorageManager(QObject):
         self._lines_layer   = None
         self._cad_lyr_layer = None   # non-spatial QgsVectorLayer
         self._toolbar_ref   = None   # set by plugin_main
+        self._crs_manager   = None   # set by plugin after CrsManager is created
 
         # Wire QGIS project signals
         QgsProject.instance().projectSaved.connect(self._on_project_saved)
@@ -96,6 +99,45 @@ class StorageManager(QObject):
     def set_toolbar(self, toolbar):
         self._toolbar_ref = toolbar
         self._apply_gating()
+
+    def set_crs_manager(self, mgr):
+        """Wire the CrsManager so that add_line/add_point can transform geometry."""
+        self._crs_manager = mgr
+
+    # ── CRS-aware feature writers ─────────────────────────────────────────
+    def add_line(self, geom: QgsGeometry, cad_layer: str) -> bool:
+        """
+        Add a line geometry (in current project CRS) to the lines layer.
+        The geometry is transformed to EPSG:32636 (layer CRS) if needed.
+        """
+        layer = self.lines_layer
+        if layer is None or not self._enabled:
+            return False
+        if self._crs_manager is not None:
+            geom = self._crs_manager.transform_geom_to_layer(geom)
+        if not layer.isEditable():
+            layer.startEditing()
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(geom)
+        feat["cad_layer"] = cad_layer
+        return layer.addFeature(feat)
+
+    def add_point(self, geom: QgsGeometry, cad_layer: str) -> bool:
+        """
+        Add a point geometry (in current project CRS) to the points layer.
+        The geometry is transformed to EPSG:32636 (layer CRS) if needed.
+        """
+        layer = self.points_layer
+        if layer is None or not self._enabled:
+            return False
+        if self._crs_manager is not None:
+            geom = self._crs_manager.transform_geom_to_layer(geom)
+        if not layer.isEditable():
+            layer.startEditing()
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(geom)
+        feat["cad_layer"] = cad_layer
+        return layer.addFeature(feat)
 
     def unload(self):
         with _suppress():
@@ -159,9 +201,7 @@ class StorageManager(QObject):
         self._load_layers(path)
 
     def _create_gpkg(self, path: str):
-        crs = QgsProject.instance().crs()
-        if not crs.isValid():
-            crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        crs = QgsCoordinateReferenceSystem(f"EPSG:{_LAYER_EPSG}")
 
         # Common geometry-table fields
         geom_fields = QgsFields()
@@ -221,9 +261,17 @@ class StorageManager(QObject):
             tmp2, path, QgsProject.instance().transformContext(), opts2
         )
 
+    def _get_or_create_group(self):
+        root = QgsProject.instance().layerTreeRoot()
+        group = root.findGroup("Ugsurv geoms")
+        if group is None:
+            group = root.insertGroup(0, "Ugsurv geoms")
+        return group
+
     def _load_layers(self, path: str):
         # Normalise path for case-insensitive comparison on Windows.
         norm_path = os.path.normcase(os.path.normpath(path))
+        group = self._get_or_create_group()
 
         def _find_existing(name):
             """Return an already-loaded layer from the same gpkg table, or None."""
@@ -245,7 +293,11 @@ class StorageManager(QObject):
             uri = f"{path}|layername={name}"
             lyr = QgsVectorLayer(uri, name, "ogr")
             if lyr.isValid():
-                QgsProject.instance().addMapLayer(lyr, add_to_tree)
+                if add_to_tree:
+                    QgsProject.instance().addMapLayer(lyr, False)
+                    group.addLayer(lyr)
+                else:
+                    QgsProject.instance().addMapLayer(lyr, False)
             return lyr if lyr.isValid() else None
 
         self._points_layer  = open_layer("points",   add_to_tree=True)
@@ -311,7 +363,8 @@ class StorageManager(QObject):
         # Open and register the migrated layer
         new_lyr = QgsVectorLayer(f"{path}|layername=lines", "lines", "ogr")
         if new_lyr.isValid():
-            QgsProject.instance().addMapLayer(new_lyr, True)
+            QgsProject.instance().addMapLayer(new_lyr, False)
+            self._get_or_create_group().addLayer(new_lyr)
             return new_lyr
         return None
 

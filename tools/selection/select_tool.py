@@ -67,6 +67,8 @@ class SelectTool(BaseTool):
         self._last_snap_pt:  QgsPointXY | None = None  # last snapped point during grip drag
         self._drag_start:    QgsPointXY | None = None
         self._drag_rb:       QgsRubberBand | None = None
+        self._hover_rb:      QgsRubberBand | None = None
+        self._hover_key:     tuple | None  = None  # (layer_id, fid) currently hovered
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     def activate(self):
@@ -80,6 +82,13 @@ class SelectTool(BaseTool):
         except Exception:
             pass
         self._clear_grips()
+        if self._hover_rb is not None:
+            try:
+                self.canvas().scene().removeItem(self._hover_rb)
+            except Exception:
+                pass
+            self._hover_rb = None
+        self._hover_key = None
         super().deactivate()
 
     # ── canvas events ──────────────────────────────────────────────────────
@@ -133,15 +142,21 @@ class SelectTool(BaseTool):
 
     def canvasMoveEvent(self, event):
         if self._hot_grip:
-            # Grip armed: rubber-band and snap marker both follow the snapped point
             sem = self._translator.translate_move(event, self._ctx)
             self._update_snap_marker(sem)
             self._move_grip_preview(self._hot_grip, sem.point)
             self._last_snap_pt = sem.point
+            self._hide_hover_band()
             return
         if self._drag_start:
             raw = self._translator._canvas_point(event, self._ctx)
             self._update_drag_preview(self._drag_start, raw)
+            self._hide_hover_band()
+            super().canvasMoveEvent(event)
+            return
+        # Idle: show hover preview of whichever feature is under the cursor
+        raw = self._translator._canvas_point(event, self._ctx)
+        self._update_hover_band(raw)
         super().canvasMoveEvent(event)
 
     def canvasReleaseEvent(self, event):
@@ -243,6 +258,50 @@ class SelectTool(BaseTool):
     def _on_hover(self, sem: SemanticEvent):
         pass
 
+    # ── hover rubber-band (live feature preview) ───────────────────────────
+    _HOVER_TOL_PX = 8
+
+    def _find_hover_feature(self, map_pt: QgsPointXY):
+        tol  = self._HOVER_TOL_PX * self.canvas().mapUnitsPerPixel()
+        rect = QgsRectangle(map_pt.x() - tol, map_pt.y() - tol,
+                            map_pt.x() + tol, map_pt.y() + tol)
+        pt_geom  = QgsGeometry.fromPointXY(map_pt)
+        best_layer, best_feat, best_d = None, None, float('inf')
+        for _lid, layer in self._all_geometry_layers():
+            for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
+                geom = feat.geometry()
+                if geom.isEmpty():
+                    continue
+                d = geom.distance(pt_geom)
+                if d < best_d:
+                    best_d, best_layer, best_feat = d, layer, feat
+        return (best_layer, best_feat) if best_layer else None
+
+    def _update_hover_band(self, map_pt: QgsPointXY):
+        result = self._find_hover_feature(map_pt)
+        if result:
+            layer, feat = result
+            key = (layer.id(), feat.id())
+            geom = feat.geometry()
+            if self._hover_key != key:
+                self._hover_key = key
+                if self._hover_rb is None:
+                    self._hover_rb = QgsRubberBand(self.canvas(), geom.type())
+                    self._hover_rb.setColor(_style.RB_HOVER)
+                    self._hover_rb.setWidth(_style.RB_WIDTH)
+                    self._hover_rb.setLineStyle(_style.RB_LINE_STYLE)
+                else:
+                    self._hover_rb.reset(geom.type())
+                self._hover_rb.setToGeometry(geom, layer)
+                self._hover_rb.setVisible(True)
+        else:
+            self._hide_hover_band()
+
+    def _hide_hover_band(self):
+        self._hover_key = None
+        if self._hover_rb is not None:
+            self._hover_rb.setVisible(False)
+
     # ── grip / midgrip building ────────────────────────────────────────────
     def _rebuild_grips(self):
         self._clear_grips()
@@ -343,7 +402,7 @@ class SelectTool(BaseTool):
             return
         geom  = QgsGeometry.fromWkt(self._drag_geom_wkt)
         moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
-        rb    = self._new_rubber_band(moved.type(), _style.PREVIEW_GRIP, 2)
+        rb    = self._new_rubber_band(moved.type(), _style.RB_DRAW)
         if int(QgsWkbTypes.geometryType(moved.wkbType())) == 0:  # point: make preview visible
             rb.setIconSize(12)
             rb.setIcon(QgsRubberBand.ICON_BOX)
@@ -386,7 +445,7 @@ class SelectTool(BaseTool):
     def _update_drag_preview(self, start: QgsPointXY, end: QgsPointXY):
         if self._drag_rb is None:
             self._drag_rb = QgsRubberBand(self.canvas(), QgsWkbTypes.PolygonGeometry)
-            self._drag_rb.setWidth(1)
+            self._drag_rb.setWidth(_style.RB_WIDTH_SELECT)
         is_window = end.x() >= start.x()
         self._drag_rb.setColor(_style.SELECT_WIN_BORDER if is_window
                                else _style.SELECT_CROSS_BORDER)

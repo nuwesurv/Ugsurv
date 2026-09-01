@@ -65,6 +65,7 @@ class Ugsurv:
         self._extra_docks           = []
         self._revert_tool           = None
         self._tfix_tool             = None
+        self._crs_mgr               = None
 
     # ── Qt i18n helper ────────────────────────────────────────────────────
     def tr(self, message: str) -> str:
@@ -154,6 +155,13 @@ class Ugsurv:
         ctx.iface  = iface
         self._tool_context = ctx
 
+        # CRS enforcement — must happen before storage or tools touch any layer
+        from .core.crs_manager import CrsManager
+        crs_mgr = CrsManager(iface)
+        crs_mgr.enforce_project_crs()
+        self._crs_mgr = crs_mgr
+        ctx.crs_manager = crs_mgr
+
         sel = SelectionModel()
         ctx.selection_model = sel
 
@@ -185,6 +193,7 @@ class Ugsurv:
         self._translator = translator
 
         storage = StorageManager()
+        storage.set_crs_manager(crs_mgr)
         ctx.storage_manager = storage
         self._storage       = storage
         snap_engine._storage = storage
@@ -244,6 +253,9 @@ class Ugsurv:
         dyn = DynamicInputWidget(canvas, translator, canvas)
         self._dyn_widget = dyn
         ctx.dyn_widget = dyn
+        # Sync CRS label now and keep it live on every project CRS change
+        dyn.set_crs_label(crs_mgr.short_label)
+        crs_mgr.crsLabelChanged.connect(dyn.set_crs_label)
 
         # Shared input buffer — single source of truth for all typed text
         from .core.input.input_buffer import InputBuffer
@@ -259,6 +271,7 @@ class Ugsurv:
         _key_filter = GlobalKeyFilter(
             tool_mgr, buf,
             cmd_widget_getter=lambda: self._cmd_dock,
+            dyn_getter=lambda: self._dyn_widget,
         )
         canvas.installEventFilter(_key_filter)
         self._global_key_filter = _key_filter
@@ -339,11 +352,47 @@ class Ugsurv:
             cmd_dock.log("  snap_settings      SNAP  OS  OSNAP", "#aaddff")
             cmd_dock.log("  help               HELP  ?", "#aaddff")
             cmd_dock.log("  clear log          CLS  CLEAR", "#aaddff")
+            cmd_dock.log("  zoom extents       ZE  ZA  ZOOMEXTENTS", "#aaddff")
             cmd_dock.log("─" * 44, "#4488cc")
 
         cmd_dock.register_ui_command("HELP", "?", callback=_on_help)
 
         cmd_dock.register_ui_command("CLS", "CLEAR", callback=cmd_dock.clear_log)
+
+        def _zoom_extents():
+            from qgis.core import (QgsProject, QgsRectangle,
+                                   QgsCoordinateTransform, QgsVectorLayer,
+                                   QgsWkbTypes)
+            canvas_crs = canvas.mapSettings().destinationCrs()
+            extent = QgsRectangle()
+            _GEOM = {QgsWkbTypes.GeometryType.PointGeometry,
+                     QgsWkbTypes.GeometryType.LineGeometry,
+                     QgsWkbTypes.GeometryType.PolygonGeometry}
+            for layer in QgsProject.instance().mapLayers().values():
+                if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+                    continue
+                if QgsWkbTypes.geometryType(layer.wkbType()) not in _GEOM:
+                    continue
+                try:
+                    lyr_ext = layer.extent()
+                    if lyr_ext.isNull() or lyr_ext.isEmpty():
+                        continue
+                    xform = QgsCoordinateTransform(
+                        layer.crs(), canvas_crs, QgsProject.instance()
+                    )
+                    extent.combineExtentWith(
+                        xform.transformBoundingBox(lyr_ext)
+                    )
+                except Exception:
+                    continue
+            if not extent.isNull() and not extent.isEmpty():
+                canvas.setExtent(extent)
+                canvas.refresh()
+
+        cmd_dock.register_ui_command(
+            "ZOOMEXTENTS", "ZE", "ZA",
+            callback=_zoom_extents,
+        )
 
         # 5. Wire InputBuffer to both display widgets ─────────────────────
         buf.textChanged.connect(dyn.on_buffer_text_changed)
@@ -370,24 +419,75 @@ class Ugsurv:
                     active._dispatch(sem)
         cmd_dock.textValueEntered.connect(_on_text_input)
 
-        # wire tool's inputModeChanged → dynamic input widget
+        # wire tool's inputModeChanged → dynamic input widget + command-line hint
         _dyn_prev_tool = [None]
+
+        def _on_mode_hint(_, prompt: str):
+            cmd_dock.log_hint(prompt)
 
         def _on_tool_for_dyn(tool):
             prev = _dyn_prev_tool[0]
             if prev is not None and hasattr(prev, 'inputModeChanged'):
-                try:
+                with contextlib.suppress(Exception):
                     prev.inputModeChanged.disconnect(dyn.set_mode)
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception):
+                    prev.inputModeChanged.disconnect(_on_mode_hint)
             if tool is not None and hasattr(tool, 'inputModeChanged'):
                 tool.inputModeChanged.connect(dyn.set_mode)
+                tool.inputModeChanged.connect(_on_mode_hint)
+                # Re-sync: activate() fires inputModeChanged BEFORE toolChanged
+                # connects the signal, so the widget missed it — replay it now.
+                mode   = getattr(tool, '_last_input_mode',   "")
+                prompt = getattr(tool, '_last_input_prompt', "")
+                dyn.set_mode(mode, prompt)
+                cmd_dock.log_hint(prompt)
             else:
-                dyn.set_mode("xy", "")
+                dyn.set_mode("", "")   # hide when no tool / select tool
+                cmd_dock.clear_hint()
             _dyn_prev_tool[0] = tool
 
         tool_mgr.toolChanged.connect(_on_tool_for_dyn)
         self._tool_for_dyn_slot = _on_tool_for_dyn
+
+        # Wire DynamicInputWidget coordinate/value output → active tool dispatch
+        from .core.events import SemanticEvent, EventType
+        from qgis.core import QgsPointXY
+        import math as _math
+
+        def _on_dyn_xy(x: float, y: float):
+            active = tool_mgr.active_tool
+            if active is None or not hasattr(active, '_dispatch'):
+                return
+            sem = SemanticEvent(EventType.COORDINATE_ENTERED,
+                                point=QgsPointXY(x, y), value=f"{x},{y}")
+            active._dispatch(sem)
+
+        def _on_dyn_polar(dist: float, bearing_deg: float):
+            # bearing_deg: 0=North, clockwise → dx=sin(b)*dist, dy=cos(b)*dist
+            active = tool_mgr.active_tool
+            if active is None or not hasattr(active, '_dispatch'):
+                return
+            last_pt = getattr(active, '_last_input_ref', None)
+            if last_pt:
+                b   = _math.radians(bearing_deg)
+                pt  = QgsPointXY(last_pt.x() + dist * _math.sin(b),
+                                 last_pt.y() + dist * _math.cos(b))
+            else:
+                pt = QgsPointXY(0.0, dist)   # default: dist northward
+            sem = SemanticEvent(EventType.COORDINATE_ENTERED, point=pt,
+                                value=f"@{dist}<{bearing_deg}")
+            active._dispatch(sem)
+
+        def _on_dyn_value(v: float):
+            active = tool_mgr.active_tool
+            if active is None or not hasattr(active, '_dispatch'):
+                return
+            sem = SemanticEvent(EventType.VALUE_ENTERED, value=v)
+            active._dispatch(sem)
+
+        dyn.coordinateEntered.connect(_on_dyn_xy)
+        dyn.polarEntered.connect(_on_dyn_polar)
+        dyn.valueEntered.connect(_on_dyn_value)
 
         # unknown command → log
         _unknown_cmd = lambda t: cmd_dock.log(f"Unknown command: {t}", "#ff6666")
@@ -556,6 +656,11 @@ class Ugsurv:
             if slot:
                 self.canvas.xyCoordinates.disconnect(slot)
         self._canvas_xy_slot = None
+
+        with contextlib.suppress(Exception):
+            if self._crs_mgr:
+                self._crs_mgr.unload()
+        self._crs_mgr = None
 
         with contextlib.suppress(Exception):
             if self._storage:

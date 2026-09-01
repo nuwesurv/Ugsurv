@@ -15,7 +15,6 @@ import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
@@ -23,9 +22,9 @@ from qgis.core import (
 )
 
 from ...core.events import EventType
+from ...core import style as _style
 
-
-_C_HOVER = QColor(255, 200, 0, 180)
+_C_HOVER = _style.RB_HOVER
 
 _HIT_PX = 10
 
@@ -47,7 +46,8 @@ class ExplodeTool(QgsMapTool):
 
         self._hover_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
         self._hover_band.setColor(_C_HOVER)
-        self._hover_band.setWidth(3)
+        self._hover_band.setWidth(_style.RB_WIDTH)
+        self._hover_band.setLineStyle(_style.RB_LINE_STYLE)
         self._hover_band.setVisible(False)
 
         self._hint = QLabel(canvas)
@@ -75,7 +75,7 @@ class ExplodeTool(QgsMapTool):
             QTimer.singleShot(0, go)
 
     def _show_hint(self, screen_pos):
-        self._hint.setText("Click feature to explode  (Enter / RMB = exit)")
+        self._hint.setText("Click feature to explode")
         self._hint.adjustSize()
         pos = screen_pos + QPoint(10, 14)
         if pos.x() + self._hint.width() > self._canvas.width():
@@ -192,7 +192,7 @@ class ExplodeTool(QgsMapTool):
         self._canvas.setFocus()
         self._log(
             "EXPLODE  ──  click a feature to break it apart"
-            "  (multipart → parts | polyline → segments)  (Esc=exit)", "#aaddff"
+            "  (multipart → parts | polyline → segments)", "#aaddff"
         )
 
     def deactivate(self):

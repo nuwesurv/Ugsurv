@@ -10,11 +10,11 @@ Default: inscribed (circumradius).  'I' key toggles to edge-midpoint
 
 import math
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QColor
 from qgis.core import QgsPointXY, QgsGeometry, QgsWkbTypes, QgsFeature
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
+from ...core import style as _style
 
 
 def _regular_polygon_ring(center: QgsPointXY, radius: float, sides: int,
@@ -94,8 +94,9 @@ class PolygonTool(BaseTool):
             r = self._center.distance(sem.point)
             if self._preview_rb is None:
                 self._preview_rb = self._new_rubber_band(
-                    QgsWkbTypes.PolygonGeometry, QColor(255, 165, 0, 150), 1
+                    QgsWkbTypes.PolygonGeometry, _style.RB_DRAW, _style.RB_WIDTH
                 )
+                self._preview_rb.setFillColor(_style.RB_DRAW_FILL)
             geom = _regular_polygon(self._center, r, self._sides, self._inscribed)
             self._preview_rb.setToGeometry(geom)
 
@@ -103,15 +104,7 @@ class PolygonTool(BaseTool):
         if radius <= 0:
             return
         geom = _regular_polygon_ring(center, radius, self._sides, self._inscribed)
-        layer = self._ctx.storage_manager.lines_layer
-        if layer is None:
-            return
-        if not layer.isEditable():
-            layer.startEditing()
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(geom)
-        feat["cad_layer"] = self._ctx.active_cad_layer
-        layer.addFeature(feat)
+        self._ctx.storage_manager.add_line(geom, self._ctx.active_cad_layer)
 
     def _on_cancel_hook(self):
         self._center = None

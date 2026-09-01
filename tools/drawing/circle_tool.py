@@ -119,8 +119,9 @@ class CircleTool(BaseTool):
     def _draw_preview(self, center: QgsPointXY, radius: float):
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.PolygonGeometry, _style.PREVIEW_DRAW, 1
+                QgsWkbTypes.PolygonGeometry, _style.RB_DRAW, _style.RB_WIDTH
             )
+            self._preview_rb.setFillColor(_style.RB_DRAW_FILL)
         geom = _circle_polygon(center, radius)
         self._preview_rb.setToGeometry(geom)
 
@@ -128,15 +129,7 @@ class CircleTool(BaseTool):
         if radius <= 0:
             return
         geom = _circle_ring(center, radius)
-        layer = self._ctx.storage_manager.lines_layer
-        if layer is None:
-            return
-        if not layer.isEditable():
-            layer.startEditing()
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(geom)
-        feat["cad_layer"] = self._ctx.active_cad_layer
-        layer.addFeature(feat)
+        self._ctx.storage_manager.add_line(geom, self._ctx.active_cad_layer)
 
     def _reset(self):
         self._pts.clear()

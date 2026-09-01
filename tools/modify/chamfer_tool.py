@@ -21,7 +21,6 @@ import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
@@ -29,11 +28,11 @@ from qgis.core import (
 )
 
 from ...core.events import EventType
+from ...core import style as _style
 from ..layer_utils import polyline_attrs
 
-
-_C_LINE1  = QColor(  0, 210, 210, 220)
-_C_HOVER  = QColor( 66, 135, 245, 200)
+_C_LINE1  = _style.RB_SOURCE
+_C_HOVER  = _style.RB_HOVER
 
 _HIT_PX = 10
 
@@ -48,7 +47,7 @@ _ST_LINE2 = 1
 
 _HINT = {
     _ST_LINE1: "Click first line — near the corner end  (type d1,d2 to set distances)",
-    _ST_LINE2: "Click second line — near the corner end  (RMB=reselect)",
+    _ST_LINE2: "Click second line — near the corner end",
 }
 
 
@@ -75,12 +74,14 @@ class ChamferTool(QgsMapTool):
 
         self._line1_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
         self._line1_band.setColor(_C_LINE1)
-        self._line1_band.setWidth(3)
+        self._line1_band.setWidth(_style.RB_WIDTH)
+        self._line1_band.setLineStyle(_style.RB_LINE_STYLE)
         self._line1_band.setVisible(False)
 
         self._hover_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
         self._hover_band.setColor(_C_HOVER)
-        self._hover_band.setWidth(2)
+        self._hover_band.setWidth(_style.RB_WIDTH)
+        self._hover_band.setLineStyle(_style.RB_LINE_STYLE)
         self._hover_band.setVisible(False)
 
         self._hint = QLabel(canvas)
@@ -400,8 +401,8 @@ class ChamferTool(QgsMapTool):
         super().activate()
         self._canvas.setFocus()
         self._log(
-            "CHAMFER  ──  type d1 or d1,d2 + Enter, then click two lines at their corner ends"
-            "  (d1=d2=0 → sharp corner)  (Esc=exit)", "#aaddff"
+            "CHAMFER  ──  type d1 or d1,d2, then click two lines at their corner ends"
+            "  (d1=d2=0 → sharp corner)", "#aaddff"
         )
         self._log(f"  Current distances: d1={self._dist1:.3f}  d2={self._dist2:.3f}")
 

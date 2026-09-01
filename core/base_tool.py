@@ -130,12 +130,15 @@ class BaseTool(QgsMapTool):
             QTimer.singleShot(0, go_home)
 
     # ── rubber-band helpers ───────────────────────────────────────────────
-    def _new_rubber_band(self, geom_type, color=None, width=1):
+    def _new_rubber_band(self, geom_type, color=None, width=None):
         rb = QgsRubberBand(self.canvas(), geom_type)
         if color is None:
-            color = _style.PREVIEW_DEFAULT
+            color = _style.RB_DRAW
+        if width is None:
+            width = _style.RB_WIDTH
         rb.setColor(color)
         rb.setWidth(width)
+        rb.setLineStyle(_style.RB_LINE_STYLE)
         self._rubber_bands.append(rb)
         return rb
 
@@ -222,6 +225,8 @@ class BaseTool(QgsMapTool):
     # ── dynamic input ─────────────────────────────────────────────────────
     def _request_input(self, mode: str, prompt: str = ""):
         """Tell the DynamicInputWidget what fields to show next."""
+        self._last_input_mode   = mode
+        self._last_input_prompt = prompt
         self.inputModeChanged.emit(mode, prompt)
 
     # ── abstract interface for subclasses ─────────────────────────────────

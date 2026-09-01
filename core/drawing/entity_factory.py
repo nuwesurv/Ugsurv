@@ -22,26 +22,37 @@ class EntityFactory:
     def commit(self, geometry: QgsGeometry, cad_layer: str,
                extra_attrs: dict = None) -> bool:
         """
-        Write geometry into the correct edit-buffer.
+        Write geometry (in project CRS) into the correct edit-buffer.
+        StorageManager.add_line/add_point handle the CRS transformation to
+        the layer's fixed CRS (EPSG:32636) automatically.
         Returns True on success.
         """
-        layer = self._pick_layer(geometry)
-        if layer is None:
-            return False
         if not self._storage.enabled:
             return False
 
-        if not layer.isEditable():
-            layer.startEditing()
+        gtype = int(geometry.type())
 
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(geometry)
-        feat["cad_layer"] = cad_layer
-        if extra_attrs:
-            for k, v in extra_attrs.items():
-                feat[k] = v
-        layer.addFeature(feat)
-        return True
+        if gtype == 0:    # Point
+            ok = self._storage.add_point(geometry, cad_layer)
+        elif gtype in (1, 2):   # Line or Polygon boundary → lines layer
+            ok = self._storage.add_line(geometry, cad_layer)
+        else:
+            return False
+
+        if ok and extra_attrs:
+            # Extra attributes are rare; write them via the layer directly.
+            # The feature was just appended so we query it back by last fid.
+            layer = (self._storage.points_layer if gtype == 0
+                     else self._storage.lines_layer)
+            if layer:
+                fids = sorted(f.id() for f in layer.getFeatures())
+                if fids:
+                    layer.changeAttributeValues(
+                        fids[-1],
+                        {layer.fields().indexFromName(k): v
+                         for k, v in extra_attrs.items()},
+                    )
+        return ok
 
     # ── routing ───────────────────────────────────────────────────────────
     def _pick_layer(self, geometry: QgsGeometry) -> QgsVectorLayer | None:

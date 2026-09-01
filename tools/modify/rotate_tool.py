@@ -16,7 +16,6 @@ import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
@@ -24,12 +23,12 @@ from qgis.core import (
 )
 
 from ...core.events import EventType
+from ...core import style as _style
 
-
-_C_HIGHLIGHT = QColor(0, 200, 80, 220)
-_C_HL_FILL   = QColor(0, 200, 80, 20)
-_C_PREVIEW   = QColor(255, 130, 0, 220)
-_C_PREV_FILL = QColor(255, 130, 0, 30)
+_C_HIGHLIGHT = _style.RB_SOURCE
+_C_HL_FILL   = _style.RB_SOURCE_FILL
+_C_PREVIEW   = _style.RB_PREVIEW
+_C_PREV_FILL = _style.RB_PREVIEW_FILL
 
 _ST_SELECT = 0
 _ST_BASE   = 1
@@ -38,9 +37,9 @@ _ST_ANGLE  = 2
 _HIT_PX = 10
 
 _HINT = {
-    _ST_SELECT: "Click features  (Shift=deselect | Enter=confirm)",
+    _ST_SELECT: "Select features",
     _ST_BASE:   "Click rotation centre",
-    _ST_ANGLE:  "Click to set angle  or  type degrees + Enter",
+    _ST_ANGLE:  "Click to set angle  or  type degrees",
 }
 
 _HINT_STYLE = (
@@ -160,13 +159,12 @@ class RotateTool(QgsMapTool):
                     best = (lyr, feat.id(), QgsGeometry(geom))
         return best
 
-    def _make_band(self, geom_type, color, fill_color, width=2, dashed=False):
+    def _make_band(self, geom_type, color, fill_color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, geom_type)
         band.setColor(color)
         band.setFillColor(fill_color)
         band.setWidth(width)
-        if dashed:
-            band.setLineStyle(Qt.PenStyle.DashLine)
+        band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
     def _rm(self, item):
@@ -232,7 +230,7 @@ class RotateTool(QgsMapTool):
         for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
             band.setToGeometry(geom, layer)
             band.setVisible(True)
-        self._log("  Click or type angle in degrees (CCW from east)  (Esc=cancel)", "#88ccff")
+        self._log("  Click or type angle in degrees (CCW from east)", "#88ccff")
 
     def _update_preview(self, map_pt: QgsPointXY):
         if self._state != _ST_ANGLE or not self._base_pt:
@@ -283,7 +281,7 @@ class RotateTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("ROTATE  ──  click features to select, Enter to confirm  (Esc=exit)", "#aaddff")
+        self._log("ROTATE  ──  select features to rotate", "#aaddff")
 
     def deactivate(self):
         self._clear_selection()

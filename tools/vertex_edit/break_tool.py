@@ -15,7 +15,6 @@ import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
@@ -23,10 +22,10 @@ from qgis.core import (
 )
 
 from ...core.events import EventType
+from ...core import style as _style
 
-
-_C_HOVER  = QColor(255, 200,  0, 180)
-_C_BREAK  = QColor(220,   0,  0, 255)
+_C_HOVER  = _style.RB_HOVER
+_C_BREAK  = _style.RB_DESTROY
 
 _HIT_PX = 10
 
@@ -48,7 +47,8 @@ class BreakTool(QgsMapTool):
 
         self._hover_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
         self._hover_band.setColor(_C_HOVER)
-        self._hover_band.setWidth(3)
+        self._hover_band.setWidth(_style.RB_WIDTH)
+        self._hover_band.setLineStyle(_style.RB_LINE_STYLE)
         self._hover_band.setVisible(False)
 
         self._pt_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.PointGeometry)
@@ -104,7 +104,7 @@ class BreakTool(QgsMapTool):
             QTimer.singleShot(0, go)
 
     def _show_hint(self, screen_pos):
-        self._hint.setText("Click line to break  (Enter / Esc = exit)")
+        self._hint.setText("Click line to break")
         self._hint.adjustSize()
         pos = screen_pos + QPoint(10, 14)
         if pos.x() + self._hint.width() > self._canvas.width():
@@ -189,7 +189,7 @@ class BreakTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("BREAK  ──  click any line to split it  (both halves kept)  (Esc=exit)", "#aaddff")
+        self._log("BREAK  ──  click any line to split it  (both halves kept)", "#aaddff")
 
     def deactivate(self):
         self._rm(self._hover_band)

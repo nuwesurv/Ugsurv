@@ -46,11 +46,13 @@ class GlobalKeyFilter(QObject):
         exist at construction time.  May also be None.
     """
 
-    def __init__(self, tool_manager, input_buffer, cmd_widget_getter=None):
+    def __init__(self, tool_manager, input_buffer,
+                 cmd_widget_getter=None, dyn_getter=None):
         super().__init__()
         self._tool_mgr  = tool_manager
         self._buffer    = input_buffer
         self._get_cmd   = cmd_widget_getter  # () -> CommandLineWidget
+        self._get_dyn   = dyn_getter         # () -> DynamicInputWidget
         print("[UgSurv] GlobalKeyFilter created — canvas-level key capture")
 
     # ── Qt entry point ─────────────────────────────────────────────────────
@@ -116,7 +118,7 @@ class GlobalKeyFilter(QObject):
         key = event.key()
         ch  = event.text()
         if (key in (Qt.Key_Backspace, Qt.Key_Return, Qt.Key_Enter,
-                    Qt.Key_Space, Qt.Key_Escape)
+                    Qt.Key_Space, Qt.Key_Escape, Qt.Key_Tab)
                 or (ch and ch.isprintable() and ch != '\t')):
             event.accept()   # block QGIS shortcut; KeyPress still follows
         return False         # do not consume — let the event reach the canvas
@@ -161,7 +163,13 @@ class GlobalKeyFilter(QObject):
     # ── drawing mode (non-home tool active) ────────────────────────────────
 
     def _drawing(self, event, tool) -> bool:
-        """Forward canvas keystrokes to the shared InputBuffer."""
+        """Forward canvas keystrokes to the DynamicInputWidget, then InputBuffer."""
+        # DynamicInputWidget gets first refusal: interactive fields for X/Y/value entry
+        dyn = self._get_dyn() if self._get_dyn else None
+        if dyn is not None and dyn.handle_key(event):
+            return True
+
+        # Fall back: route to shared InputBuffer (legacy / non-interactive modes)
         key = event.key()
 
         if key == Qt.Key_Backspace:
@@ -182,7 +190,6 @@ class GlobalKeyFilter(QObject):
 
         ch = event.text()
         if ch and ch.isprintable() and ch != '\t':
-            print(f"[UgSurv] key {ch!r}  tool={getattr(tool, '_tool_key', type(tool).__name__)}")
             self._buffer.append(ch)
             return True
 

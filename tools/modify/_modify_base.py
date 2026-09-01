@@ -207,7 +207,7 @@ class _ModifyBase(BaseTool):
     def _update_sel_drag_preview(self, start: QgsPointXY, end: QgsPointXY):
         if self._sel_drag_rb is None:
             self._sel_drag_rb = QgsRubberBand(self.canvas(), QgsWkbTypes.PolygonGeometry)
-            self._sel_drag_rb.setWidth(1)
+            self._sel_drag_rb.setWidth(_style.RB_WIDTH_SELECT)
         is_window = end.x() >= start.x()
         self._sel_drag_rb.setColor(
             _style.SELECT_WIN_BORDER if is_window else _style.SELECT_CROSS_BORDER

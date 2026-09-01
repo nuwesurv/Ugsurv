@@ -41,13 +41,5 @@ class PointTool(BaseTool):
             ef.commit(geom, self._ctx.active_cad_layer)
             return
 
-        # fallback: write directly to storage points layer
-        layer = self._ctx.storage_manager.points_layer
-        if not layer:
-            return
-        if not layer.isEditable():
-            layer.startEditing()
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(geom)
-        feat["cad_layer"] = self._ctx.active_cad_layer
-        layer.addFeature(feat)
+        # fallback: write via storage (handles CRS transformation)
+        self._ctx.storage_manager.add_point(geom, self._ctx.active_cad_layer)

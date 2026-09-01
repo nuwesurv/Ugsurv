@@ -3,17 +3,26 @@
 PolylineTool — collects N points into a single MultiLineString entity.
 
 Lifecycle: ACTING loops collecting points.  Enter/right-click commits.
-C = close (add closing segment back to start).  Ctrl+Z = undo last vertex.
-Sub-modes (A=arc, W=width) are toggled mid-ACTING via keypress.
+C = close (add closing segment back to start).  U = undo last vertex.
+Sub-modes (A=arc) are toggled mid-ACTING via keypress.
 """
 
 import math
 from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtGui import QColor, QFont
+from qgis.PyQt.QtWidgets import QGraphicsTextItem
 from qgis.core import QgsPointXY, QgsGeometry, QgsWkbTypes, QgsFeature
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 from ...core import style as _style
+
+_ARC_PX      = 48    # angle-arc radius in screen pixels
+_REF_PX      = 60    # horizontal reference line length in screen pixels
+_LBL_PAD_PX  = 16    # extra gap past arc for angle-label
+
+_DIST_CLR  = QColor(140, 230, 140)   # soft green  — distance
+_ANGLE_CLR = QColor(255, 205, 55)    # golden yellow — angle arc / label
 
 
 class PolylineTool(BaseTool):
@@ -23,7 +32,12 @@ class PolylineTool(BaseTool):
         super().__init__(canvas, tool_context, input_translator)
         self._points: list[QgsPointXY] = []
         self._preview_rb = None
-        self._arc_mode = False
+        self._arc_mode   = False
+        # dimensional-indicator graphics (created lazily, cleared on reset)
+        self._arc_rb    = None   # QgsRubberBand  — angle arc
+        self._ref_rb    = None   # QgsRubberBand  — horizontal reference line
+        self._dist_item = None   # QGraphicsTextItem — distance label
+        self._angle_item = None  # QGraphicsTextItem — angle label
 
     def activate(self):
         super().activate()
@@ -53,7 +67,7 @@ class PolylineTool(BaseTool):
                 self._undo_last_vertex()
 
         elif sem.type == EventType.VALUE_ENTERED:
-            pass  # distance-only entry without angle: ignore (user should use polar fields)
+            pass
 
     def _on_hover(self, sem: SemanticEvent):
         if self._points and sem.point:
@@ -68,12 +82,10 @@ class PolylineTool(BaseTool):
         self._last_input_ref = pt
         for c in self._ctx.constraints:
             c.set_reference(pt)
-        # update self-snap provider
         if self._ctx.snap_engine:
-            for key, prov in self._ctx.snap_engine._providers.items():
+            for prov in self._ctx.snap_engine._providers.values():
                 if hasattr(prov, 'set_sketch_points'):
                     prov.set_sketch_points(self._points)
-        # After first point switch to polar mode (Dist + Angle fields)
         if len(self._points) == 1:
             self._request_input("polar", "Specify next point:")
         elif len(self._points) > 1:
@@ -82,12 +94,12 @@ class PolylineTool(BaseTool):
     def _undo_last_vertex(self):
         if self._points:
             self._points.pop()
-            self._update_preview(None)
+        self._update_preview(None)
 
     def _update_preview(self, cursor_pt: QgsPointXY | None):
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.PREVIEW_DRAW, 1
+                QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH
             )
         self._preview_rb.reset(QgsWkbTypes.LineGeometry)
         pts = list(self._points)
@@ -96,6 +108,113 @@ class PolylineTool(BaseTool):
         for i, p in enumerate(pts):
             self._preview_rb.addPoint(p, i == len(pts) - 1)
 
+        if cursor_pt and len(self._points) >= 1:
+            self._draw_dim_indicators(self._points[-1], cursor_pt)
+        else:
+            self._hide_dim_indicators()
+
+    # ── dimensional indicators ────────────────────────────────────────────
+    def _draw_dim_indicators(self, ref_pt: QgsPointXY, cur_pt: QgsPointXY):
+        canvas = self.canvas()
+        mup    = canvas.mapUnitsPerPixel()
+
+        dx   = cur_pt.x() - ref_pt.x()
+        dy   = cur_pt.y() - ref_pt.y()
+        dist = math.hypot(dx, dy)
+        if dist < 1e-10:
+            self._hide_dim_indicators()
+            return
+
+        # Convert to bearing: 0=North, clockwise, 0-360°
+        math_angle_deg = math.degrees(math.atan2(dy, dx))
+        bearing        = (90.0 - math_angle_deg) % 360.0
+        bearing_rad    = math.radians(bearing)
+
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn is not None:
+            dyn.set_live_polar(dist, bearing)
+
+        # ── distance label — at midpoint, offset perpendicular to segment ─
+        math_angle_rad = math.radians(math_angle_deg)
+        mid_pt   = QgsPointXY((ref_pt.x() + cur_pt.x()) / 2,
+                               (ref_pt.y() + cur_pt.y()) / 2)
+        perp     = math_angle_rad + math.pi / 2
+        off      = 14 * mup
+        dist_pos = QgsPointXY(mid_pt.x() + off * math.cos(perp),
+                              mid_pt.y() + off * math.sin(perp))
+        self._set_label('_dist_item', f"{dist:.3f}", dist_pos, _DIST_CLR)
+
+        # ── North reference line (12-o'clock) at ref_pt ───────────────────
+        ref_len = _REF_PX * mup
+        if self._ref_rb is None:
+            self._ref_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _ANGLE_CLR, _style.RB_WIDTH
+            )
+        self._ref_rb.reset(QgsWkbTypes.LineGeometry)
+        self._ref_rb.addPoint(ref_pt, False)
+        self._ref_rb.addPoint(QgsPointXY(ref_pt.x(), ref_pt.y() + ref_len), True)
+
+        # ── arc from North clockwise to bearing ───────────────────────────
+        arc_r   = _ARC_PX * mup
+        n_steps = max(4, int(bearing / 4))
+
+        if self._arc_rb is None:
+            self._arc_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _ANGLE_CLR, _style.RB_WIDTH
+            )
+        self._arc_rb.reset(QgsWkbTypes.LineGeometry)
+        for i in range(n_steps + 1):
+            b = (i / n_steps) * bearing_rad
+            p = QgsPointXY(ref_pt.x() + arc_r * math.sin(b),
+                           ref_pt.y() + arc_r * math.cos(b))
+            self._arc_rb.addPoint(p, i == n_steps)
+
+        # ── bearing label — near mid-arc ───────────────────────────────────
+        mid_b     = bearing_rad / 2
+        lbl_r     = (_ARC_PX + _LBL_PAD_PX) * mup
+        angle_pos = QgsPointXY(ref_pt.x() + lbl_r * math.sin(mid_b),
+                               ref_pt.y() + lbl_r * math.cos(mid_b))
+        self._set_label('_angle_item', f"{bearing:.1f}°", angle_pos, _ANGLE_CLR)
+
+    def _set_label(self, attr: str, text: str, map_pt: QgsPointXY, color: QColor):
+        canvas = self.canvas()
+        item   = getattr(self, attr)
+        if item is None:
+            item = QGraphicsTextItem()
+            item.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            item.setZValue(100)
+            canvas.scene().addItem(item)
+            setattr(self, attr, item)
+        item.setDefaultTextColor(color)
+        item.setPlainText(text)
+        sp = canvas.mapSettings().mapToPixel().transform(map_pt)
+        item.setPos(sp.x(), sp.y())
+        item.show()
+
+    def _hide_dim_indicators(self):
+        for attr in ('_dist_item', '_angle_item'):
+            item = getattr(self, attr)
+            if item:
+                item.hide()
+        for rb in (self._arc_rb, self._ref_rb):
+            if rb:
+                rb.reset(QgsWkbTypes.LineGeometry)
+
+    def _clear_dim_indicators(self):
+        scene = self.canvas().scene()
+        for attr in ('_dist_item', '_angle_item'):
+            item = getattr(self, attr)
+            if item:
+                try:
+                    scene.removeItem(item)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        # rubber bands are removed by _clear_rubber_bands(); just clear refs
+        self._arc_rb = None
+        self._ref_rb = None
+
+    # ── commit ────────────────────────────────────────────────────────────
     def _commit(self):
         if len(self._points) < 2:
             return
@@ -109,20 +228,13 @@ class PolylineTool(BaseTool):
         self._go_home()
 
     def _write_feature(self, geom: QgsGeometry):
-        layer = self._ctx.storage_manager.lines_layer
-        if layer is None:
-            return
-        if not layer.isEditable():
-            layer.startEditing()
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(geom)
-        feat["cad_layer"] = self._ctx.active_cad_layer
-        layer.addFeature(feat)
+        self._ctx.storage_manager.add_line(geom, self._ctx.active_cad_layer)
 
     def _reset(self):
         self._points.clear()
         self._last_input_ref = None
         self._arc_mode = False
+        self._clear_dim_indicators()
         self._clear_rubber_bands()
         self._preview_rb = None
         if self._ctx.snap_engine:

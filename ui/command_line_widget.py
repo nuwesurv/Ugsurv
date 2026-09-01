@@ -10,6 +10,8 @@ command window.
   not treated as a new command
 """
 
+import re as _re
+
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QTextEdit, QLabel, QListWidget, QListWidgetItem,
@@ -17,6 +19,26 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.PyQt.QtCore import Qt, pyqtSignal, QEvent
 from qgis.PyQt.QtGui import QFont, QColor, QPalette, QCursor
+
+
+def _format_hint_html(text: str) -> str:
+    """Convert [K=desc ...] bracket notation to HTML with bold+underlined key chars."""
+    parts = []
+    last  = 0
+    for m in _re.finditer(r'\[([^\]]+)\]', text):
+        chunk = text[last:m.start()]
+        parts.append(chunk.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+        tokens = []
+        for tok in m.group(1).split():
+            if '=' in tok:
+                k, d = tok.split('=', 1)
+                tokens.append(f'<b><u>{k}</u></b>={d}')
+            else:
+                tokens.append(tok)
+        parts.append('[' + ' '.join(tokens) + ']')
+        last = m.end()
+    parts.append(text[last:].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+    return ''.join(parts)
 
 
 _POPUP_STYLE = """
@@ -45,12 +67,16 @@ class CommandLineWidget(QDockWidget):
         self.setObjectName("UgsurvCommandLine")
         self.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea |
                              Qt.DockWidgetArea.TopDockWidgetArea)
-        self._dispatcher  = dispatcher
-        self._translator  = input_translator
+        self._dispatcher    = dispatcher
+        self._translator    = input_translator
         self._history: list = []
         self._hist_idx: int = -1
-        self._mid_command = False
+        self._mid_command   = False
         self._ui_commands: dict[str, object] = {}  # alias.upper() → callable
+
+        # log state: permanent entries + one volatile hint
+        self._log_entries: list[tuple[str, str]] = []  # (text, color)
+        self._current_hint: str | None = None           # formatted HTML hint
 
         self._build_ui()
         self._build_popup()
@@ -128,18 +154,49 @@ class CommandLineWidget(QDockWidget):
         self._popup_hide()
         try:
             self._prompt.setText(prompt + ": " if prompt else "Command: ")
+            if not active:
+                self.clear_hint()
         except RuntimeError:
             pass
+
+    def log_hint(self, text: str):
+        """Show a formatted tool hint as the last line of the log (temporary — not saved)."""
+        self._current_hint = _format_hint_html(text) if text else None
+        self._rebuild_log()
+
+    def clear_hint(self):
+        if self._current_hint is not None:
+            self._current_hint = None
+            self._rebuild_log()
 
     def log(self, text: str, color: str = "#cccccc"):
-        try:
-            self._log.append(f'<span style="color:{color}">{text}</span>')
-        except RuntimeError:
-            pass
+        self._log_entries.append((text, color))
+        self._rebuild_log()
 
     def clear_log(self):
+        self._log_entries.clear()
+        self._current_hint = None
+        self._rebuild_log()
+
+    # ── internal log rendering ────────────────────────────────────────────
+    def _rebuild_log(self):
         try:
+            sb = self._log.verticalScrollBar()
+            at_bottom = sb.value() >= sb.maximum() - 4
+
+            self._log.blockSignals(True)
             self._log.clear()
+            for text, color in self._log_entries:
+                self._log.append(f'<span style="color:{color}">{text}</span>')
+            if self._current_hint:
+                self._log.append(
+                    f'<span style="color:#7a9ec0;font-style:italic">'
+                    f'{self._current_hint}</span>'
+                )
+            self._log.blockSignals(False)
+
+            if at_bottom:
+                sb.setValue(sb.maximum())
         except RuntimeError:
             pass
 

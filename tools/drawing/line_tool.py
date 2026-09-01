@@ -71,7 +71,7 @@ class LineTool(BaseTool):
             return
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.PREVIEW_DRAW, 1
+                QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH
             )
         self._preview_rb.reset(QgsWkbTypes.LineGeometry)
         self._preview_rb.addPoint(self._start_pt)
@@ -86,15 +86,7 @@ class LineTool(BaseTool):
         if ef:
             ef.commit(geom, self._ctx.active_cad_layer)
         else:
-            layer = factory.lines_layer
-            if layer:
-                if not layer.isEditable():
-                    layer.startEditing()
-                from qgis.core import QgsFeature
-                feat = QgsFeature(layer.fields())
-                feat.setGeometry(geom)
-                feat["cad_layer"] = self._ctx.active_cad_layer
-                layer.addFeature(feat)
+            factory.add_line(geom, self._ctx.active_cad_layer)
 
     def _on_cancel_hook(self):
         self._start_pt = None

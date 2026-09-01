@@ -16,7 +16,6 @@ import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
@@ -24,12 +23,12 @@ from qgis.core import (
 )
 
 from ...core.events import EventType
+from ...core import style as _style
 
-
-_C_HIGHLIGHT = QColor(0, 200, 80, 220)
-_C_HL_FILL   = QColor(0, 200, 80, 20)
-_C_PREVIEW   = QColor(255, 130, 0, 220)
-_C_PREV_FILL = QColor(255, 130, 0, 30)
+_C_HIGHLIGHT = _style.RB_SOURCE
+_C_HL_FILL   = _style.RB_SOURCE_FILL
+_C_PREVIEW   = _style.RB_PREVIEW
+_C_PREV_FILL = _style.RB_PREVIEW_FILL
 
 _ST_SELECT = 0
 _ST_BASE   = 1
@@ -38,9 +37,9 @@ _ST_PLACE  = 2
 _HIT_PX = 10
 
 _HINT = {
-    _ST_SELECT: "Click features  (Shift=deselect | Enter=confirm)",
+    _ST_SELECT: "Select features",
     _ST_BASE:   "Click base point",
-    _ST_PLACE:  'Click destination  or  type "@dx,dy" + Enter',
+    _ST_PLACE:  'Click destination  or  type "@dx,dy"',
 }
 
 _HINT_STYLE = (
@@ -118,13 +117,12 @@ class MoveTool(QgsMapTool):
                     best = (lyr, feat.id(), QgsGeometry(geom))
         return best
 
-    def _make_band(self, geom_type, color, fill_color, width=2, dashed=False):
+    def _make_band(self, geom_type, color, fill_color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, geom_type)
         band.setColor(color)
         band.setFillColor(fill_color)
         band.setWidth(width)
-        if dashed:
-            band.setLineStyle(Qt.PenStyle.DashLine)
+        band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
     def _rm(self, item):
@@ -186,7 +184,7 @@ class MoveTool(QgsMapTool):
             b.setVisible(False)
         self._state = _ST_BASE
         n = len(self._sel_features)
-        self._log(f"  {n} feature(s) selected  →  click base point  (Esc=cancel)", "#88ccff")
+        self._log(f"  {n} feature(s) selected  →  click base point", "#88ccff")
 
     def _enter_place(self, base_pt: QgsPointXY):
         self._base_pt = base_pt
@@ -198,7 +196,7 @@ class MoveTool(QgsMapTool):
         for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
             band.setToGeometry(geom, layer)
             band.setVisible(True)
-        self._log('  Click destination  or  type "@dx,dy" + Enter  (Esc=cancel)', "#88ccff")
+        self._log('  Click destination  or  type "@dx,dy"', "#88ccff")
 
     def _update_preview(self, map_pt: QgsPointXY):
         if self._state != _ST_PLACE or not self._base_pt:
@@ -213,8 +211,15 @@ class MoveTool(QgsMapTool):
     def _apply_move(self, dest_pt: QgsPointXY):
         if not self._base_pt:
             return
-        dx = dest_pt.x() - self._base_pt.x()
-        dy = dest_pt.y() - self._base_pt.y()
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        if crs_mgr:
+            base_l = crs_mgr.project_to_layer(self._base_pt)
+            dest_l = crs_mgr.project_to_layer(dest_pt)
+            dx = dest_l.x() - base_l.x()
+            dy = dest_l.y() - base_l.y()
+        else:
+            dx = dest_pt.x() - self._base_pt.x()
+            dy = dest_pt.y() - self._base_pt.y()
         modified = set()
         for layer, fid, geom in self._sel_features:
             new_geom = QgsGeometry(geom)
@@ -251,7 +256,7 @@ class MoveTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("MOVE  ──  click features to select, Enter to confirm  (Esc=exit)", "#aaddff")
+        self._log("MOVE  ──  select features to move", "#aaddff")
 
     def deactivate(self):
         self._clear_selection()
@@ -300,8 +305,7 @@ class MoveTool(QgsMapTool):
                         self._log(f"  Selected '{layer.name()}' fid {fid}"
                                   f"  ({len(self._sel_features)} selected)")
                     else:
-                        self._log(f"  Already selected  ({len(self._sel_features)} selected)"
-                                  "  — Shift+click to deselect")
+                        self._log(f"  Already selected  ({len(self._sel_features)} selected)")
             else:
                 self._log("  No feature found near click")
 

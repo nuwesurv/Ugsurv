@@ -23,16 +23,15 @@ from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
-from qgis.PyQt.QtGui import QColor
 
 from ...core.events import EventType
+from ...core import style as _style
 from ..layer_utils import polyline_attrs
 
-
-_C_PREVIEW  = QColor(255, 140,  0, 200)
-_C_HOVER    = QColor(255, 200,  0, 160)
-_C_SELECTED = QColor( 50, 210, 80,  220)
-_C_PERP     = QColor(180, 220, 255, 200)
+_C_PREVIEW  = _style.RB_PREVIEW
+_C_HOVER    = _style.RB_HOVER
+_C_SELECTED = _style.RB_SOURCE
+_C_PERP     = _style.RB_OFFSET_GUIDE
 
 _HIT_PX = 10
 
@@ -46,8 +45,8 @@ _ST_SELECT    = 0
 _ST_PICK_DIST = 1
 
 _HINT = {
-    _ST_SELECT:    "Click a line to select  (Esc=exit)",
-    _ST_PICK_DIST: "Click to offset  |  type distance + Enter  (RMB=reselect)",
+    _ST_SELECT:    "Click a line to select",
+    _ST_PICK_DIST: "Click to offset  |  type distance",
 }
 
 
@@ -65,13 +64,13 @@ class OffsetTool(QgsMapTool):
         self._sel_geom    = None
         self._last_map_pt = None
 
-        self._hover_band   = self._make_band(_C_HOVER,    width=2)
+        self._hover_band   = self._make_band(_C_HOVER,    width=_style.RB_WIDTH)
         self._hover_band.setVisible(False)
-        self._sel_band     = self._make_band(_C_SELECTED, width=3)
+        self._sel_band     = self._make_band(_C_SELECTED, width=_style.RB_WIDTH)
         self._sel_band.setVisible(False)
-        self._preview_band = self._make_band(_C_PREVIEW,  width=2, dashed=True)
+        self._preview_band = self._make_band(_C_PREVIEW,  width=_style.RB_WIDTH, dashed=True)
         self._preview_band.setVisible(False)
-        self._perp_band    = self._make_band(_C_PERP,     width=1, dashed=True)
+        self._perp_band    = self._make_band(_C_PERP,     width=_style.RB_WIDTH, dashed=True)
         self._perp_band.setVisible(False)
 
         self._hint = QLabel(canvas)
@@ -100,12 +99,11 @@ class OffsetTool(QgsMapTool):
         self._hint.show()
         self._hint.raise_()
 
-    def _make_band(self, color, width=2, dashed=False):
+    def _make_band(self, color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, QgsWkbTypes.GeometryType.LineGeometry)
         band.setColor(color)
         band.setWidth(width)
-        if dashed:
-            band.setLineStyle(Qt.PenStyle.DashLine)
+        band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
     def _rm(self, item):
@@ -276,7 +274,7 @@ class OffsetTool(QgsMapTool):
         self._sel_band.setVisible(True)
         self._hover_band.setVisible(False)
         self._state = _ST_PICK_DIST
-        self._log(f"  Selected '{lyr.name()}'  —  move cursor to set distance, click or type + Enter",
+        self._log(f"  Selected '{lyr.name()}'  —  move cursor to set distance, or click",
                   "#88ccff")
 
     def _deselect(self):
@@ -332,7 +330,7 @@ class OffsetTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("OFFSET  ──  click a line, then move cursor or type distance + Enter  (Esc=exit)",
+        self._log("OFFSET  ──  click a line, then move cursor or type distance",
                   "#aaddff")
 
     def deactivate(self):

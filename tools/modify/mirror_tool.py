@@ -93,13 +93,13 @@ class MirrorTool(_ModifyBase):
             return
         # axis line
         axis_rb = self._new_rubber_band(
-            QgsWkbTypes.LineGeometry, _style.MIRROR_AXIS, 1
+            QgsWkbTypes.LineGeometry, _style.RB_MIRROR_AXIS, _style.RB_WIDTH
         )
         axis_rb.addPoint(p1)
         axis_rb.addPoint(p2)
         for layer, feat in selected_features(self._ctx):
             rb = self._new_rubber_band(
-                feat.geometry().type(), _style.PREVIEW_MIRROR, 1
+                feat.geometry().type(), _style.RB_MIRROR, _style.RB_WIDTH
             )
             rb.setToGeometry(_mirror_geometry(feat.geometry(), p1, p2))
 
