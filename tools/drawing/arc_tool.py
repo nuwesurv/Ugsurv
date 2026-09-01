@@ -82,7 +82,7 @@ class ArcTool(BaseTool):
                 ctr, r, sa, ea = result
                 pts = _arc_points(ctr, r, sa, ea)
                 self._write_arc(pts)
-            self._reset()
+            self._go_home()
 
         elif self._mode == "center_angle" and len(self._pts) == 3:
             center = self._pts[0]
@@ -93,7 +93,7 @@ class ArcTool(BaseTool):
                             self._pts[2].x() - center.x())
             pts = _arc_points(center, r, sa, ea)
             self._write_arc(pts)
-            self._reset()
+            self._go_home()
 
     def _update_preview(self, cursor_pt: QgsPointXY):
         if self._preview_rb is None:

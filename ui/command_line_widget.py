@@ -16,7 +16,7 @@ from qgis.PyQt.QtWidgets import (
     QApplication,
 )
 from qgis.PyQt.QtCore import Qt, pyqtSignal, QEvent
-from qgis.PyQt.QtGui import QFont, QColor, QPalette
+from qgis.PyQt.QtGui import QFont, QColor, QPalette, QCursor
 
 
 _POPUP_STYLE = """
@@ -208,14 +208,21 @@ class CommandLineWidget(QDockWidget):
             self._popup.addItem(m)
         self._popup.blockSignals(False)
 
-        # position: above the input field, left-aligned
-        item_h   = self._popup.sizeHintForRow(0) + 2
-        height   = min(len(matches) * item_h + 6, 200)
-        fm       = self._popup.fontMetrics()
-        width    = max(fm.horizontalAdvance(m) for m in matches) + 28
-        gpos     = self._input.mapToGlobal(self._input.rect().topLeft())
+        item_h = self._popup.sizeHintForRow(0) + 2
+        height = min(len(matches) * item_h + 6, 200)
+        fm     = self._popup.fontMetrics()
+        width  = max(fm.horizontalAdvance(m) for m in matches) + 28
         self._popup.setFixedSize(width, height)
-        self._popup.move(gpos.x(), gpos.y() - height)
+
+        if self._input.hasFocus():
+            # command line focused: show above the input field
+            gpos = self._input.mapToGlobal(self._input.rect().topLeft())
+            self._popup.move(gpos.x(), gpos.y() - height)
+        else:
+            # type-anywhere from canvas: show below-right of the mouse cursor
+            cursor_pos = QCursor.pos()
+            self._popup.move(cursor_pos.x() + 16, cursor_pos.y() + 16)
+
         self._popup.show()
         self._popup.setCurrentRow(0)
 
@@ -273,6 +280,15 @@ class CommandLineWidget(QDockWidget):
                 self._dispatcher.dispatch(text)
 
     def eventFilter(self, obj, event):
+        # Track cursor movement so the popup follows the mouse
+        if (event.type() == QEvent.Type.MouseMove
+                and self._popup.isVisible()
+                and not self._input.hasFocus()
+                and obj is not self._popup):
+            cursor_pos = QCursor.pos()
+            self._popup.move(cursor_pos.x() + 16, cursor_pos.y() + 16)
+            return False
+
         if event.type() == QEvent.Type.KeyPress:
             key = event.key()
 

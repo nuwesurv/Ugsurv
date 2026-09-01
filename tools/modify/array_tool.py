@@ -55,7 +55,7 @@ class ArrayTool(_ModifyBase):
             self._exec_polar()
         self._ctx.selection_model.clear()
         self._clear_rubber_bands()
-        self._transition(ToolState.IDLE)
+        self._go_home()
 
     def _exec_rect(self):
         for layer, feat in selected_features(self._ctx):

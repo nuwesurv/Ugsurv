@@ -92,7 +92,7 @@ class DimensionTool(BaseTool):
             feat["cad_layer"] = self._ctx.active_cad_layer
             layer.addFeature(feat)
 
-        self._reset()
+        self._go_home()
 
     def _reset(self):
         self._pts.clear()

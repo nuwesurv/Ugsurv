@@ -204,6 +204,13 @@ class BaseTool(QgsMapTool):
         """Public cancel — used by ToolManager and keyboard shortcuts."""
         self._handle_esc()
 
+    def _go_home(self):
+        """Return to the home (select) tool after a command finishes."""
+        go_home = getattr(self._ctx, 'go_home', None)
+        if go_home and callable(go_home):
+            from qgis.PyQt.QtCore import QTimer
+            QTimer.singleShot(0, go_home)
+
     def _do_cancel(self):
         if self._pending is not None:
             self._pending.cancel()

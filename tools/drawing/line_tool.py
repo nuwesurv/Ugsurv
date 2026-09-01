@@ -35,10 +35,10 @@ class LineTool(BaseTool):
         elif sem.type == EventType.POINT_PICKED and sem.point:
             self._handle_point(sem.point)
         elif sem.type == EventType.CONFIRM:
-            # Enter ends the command
             self._start_pt = None
             self._clear_rubber_bands()
             self._transition(ToolState.IDLE)
+            self._go_home()
         elif sem.type == EventType.VALUE_ENTERED and self._start_pt:
             # typed length → extend from start in current direction
             pass  # direction not known without cursor; handled via polar/ortho

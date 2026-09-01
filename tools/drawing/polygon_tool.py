@@ -79,6 +79,7 @@ class PolygonTool(BaseTool):
                 self._center = None
                 self._clear_rubber_bands()
                 self._preview_rb = None
+                self._go_home()
 
         elif sem.type == EventType.KEY_CHAR and sem.char == 'I':
             self._inscribed = not self._inscribed

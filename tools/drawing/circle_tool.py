@@ -68,7 +68,7 @@ class CircleTool(BaseTool):
             # typed radius in center_radius mode
             radius = float(sem.value)
             self._commit_circle(self._pts[0], radius)
-            self._reset()
+            self._go_home()
 
         elif sem.type == EventType.KEY_CHAR:
             if sem.char == '2':
@@ -101,7 +101,7 @@ class CircleTool(BaseTool):
         if self._mode == "center_radius" and len(self._pts) == 2:
             r = self._pts[0].distance(self._pts[1])
             self._commit_circle(self._pts[0], r)
-            self._reset()
+            self._go_home()
         elif self._mode == "2pt" and len(self._pts) == 2:
             ctr = QgsPointXY(
                 (self._pts[0].x() + self._pts[1].x()) / 2,
@@ -109,12 +109,12 @@ class CircleTool(BaseTool):
             )
             r = self._pts[0].distance(self._pts[1]) / 2
             self._commit_circle(ctr, r)
-            self._reset()
+            self._go_home()
         elif self._mode == "3pt" and len(self._pts) == 3:
             ctr, r = _circle_from_3pts(*self._pts)
             if ctr and r:
                 self._commit_circle(ctr, r)
-            self._reset()
+            self._go_home()
 
     def _draw_preview(self, center: QgsPointXY, radius: float):
         if self._preview_rb is None:

@@ -35,4 +35,4 @@ class EraseTool(BaseTool):
             layer.deleteFeature(fid)
 
         sel.clear()
-        self._transition(ToolState.IDLE)
+        self._go_home()

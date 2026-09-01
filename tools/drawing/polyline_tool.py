@@ -41,7 +41,7 @@ class PolylineTool(BaseTool):
         elif sem.type == EventType.CONFIRM:
             if len(self._points) >= 2:
                 self._commit()
-            self._reset()
+            self._go_home()
 
         elif sem.type == EventType.KEY_CHAR:
             ch = sem.char
@@ -106,7 +106,7 @@ class PolylineTool(BaseTool):
         pts = list(self._points) + [self._points[0]]
         geom = QgsGeometry.fromPolylineXY(pts)
         self._write_feature(geom)
-        self._reset()
+        self._go_home()
 
     def _write_feature(self, geom: QgsGeometry):
         layer = self._ctx.storage_manager.lines_layer

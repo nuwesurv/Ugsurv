@@ -42,6 +42,7 @@ class RectangleTool(BaseTool):
                 self._corner1 = None
                 self._clear_rubber_bands()
                 self._preview_rb = None
+                self._go_home()
 
         elif sem.type == EventType.CONFIRM:
             self._corner1 = None

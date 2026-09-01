@@ -83,7 +83,7 @@ class MirrorTool(_ModifyBase):
         self._ctx.selection_model.clear()
         self._clear_rubber_bands()
         self._mirror_p1 = self._mirror_p2 = None
-        self._transition(ToolState.IDLE)
+        self._go_home()
 
     def _update_preview(self, cursor_pt: QgsPointXY):
         self._clear_rubber_bands()
