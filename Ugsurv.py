@@ -62,6 +62,9 @@ class Ugsurv:
         self._tool_for_cmdline_slot = None
         self._unknown_cmd_slot      = None
         self._reload_layers_slot    = None
+        self._extra_docks           = []
+        self._revert_tool           = None
+        self._tfix_tool             = None
 
     # ── Qt i18n helper ────────────────────────────────────────────────────
     def tr(self, message: str) -> str:
@@ -261,10 +264,12 @@ class Ugsurv:
 
         props = PropertiesPanel(sel, mw)
         iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, props)
+        props.hide()   # hidden by default; open with PROPS / PR
         self._props_dock = props
 
         layers_dock = CadLayersDock(cad_lyr_mgr, sel, storage, mw)
         iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, layers_dock)
+        layers_dock.hide()   # hidden by default; open with CADLAYERS / CL
         self._layers_dock = layers_dock
 
         snap_dialog = SnapSettingsDialog(snap_settings, snap_engine, mw)
@@ -282,19 +287,54 @@ class Ugsurv:
         cmd_dock.register_ui_command("SNAP", "OS", "OSNAP",
                                      callback=snap_dialog.open_or_raise)
 
+        # CAD Layers panel — hidden by default, toggle with CADLAYERS / CL
+        def _toggle_cad_layers():
+            if layers_dock.isVisible():
+                layers_dock.hide()
+            else:
+                layers_dock.show()
+                layers_dock.raise_()
+        cmd_dock.register_ui_command("CADLAYERS", "CL",
+                                     callback=_toggle_cad_layers)
+
+        # Properties panel — hidden by default, toggle with PROPS / PR
+        def _toggle_props():
+            if props.isVisible():
+                props.hide()
+            else:
+                props.show()
+                props.raise_()
+        cmd_dock.register_ui_command("PROPS", "PR", callback=_toggle_props)
+
         # HELP command — prints all available commands to the log
         def _on_help():
-            # group registry aliases by tool key
             inv: dict[str, list[str]] = {}
             for alias, key in registry._map.items():
                 inv.setdefault(key, []).append(alias)
 
             cmd_dock.log("─" * 44, "#4488cc")
-            cmd_dock.log("  Available commands", "#88ccff")
+            cmd_dock.log("  Drawing & Modify tools", "#88ccff")
             cmd_dock.log("─" * 44, "#4488cc")
             for key in sorted(inv):
                 tags = "  ".join(sorted(inv[key]))
                 cmd_dock.log(f"  {key:<18} {tags}", "#aaddff")
+
+            # Utility panels — read dynamically so new tools show automatically
+            _builtin_ui = {"SNAP", "OS", "OSNAP", "HELP", "?"}
+            ui_by_cb: dict[int, list[str]] = {}
+            for alias, cb in cmd_dock._ui_commands.items():
+                if alias not in _builtin_ui:
+                    ui_by_cb.setdefault(id(cb), []).append(alias)
+            if ui_by_cb:
+                cmd_dock.log("─" * 44, "#4488cc")
+                cmd_dock.log("  Utility panels & tools", "#88ccff")
+                cmd_dock.log("─" * 44, "#4488cc")
+                for aliases in sorted(ui_by_cb.values(), key=lambda a: sorted(a)[0]):
+                    cmd_dock.log(f"  {'  '.join(sorted(aliases))}", "#aaddff")
+
+            cmd_dock.log("─" * 44, "#4488cc")
+            cmd_dock.log("  Built-in", "#88ccff")
+            cmd_dock.log("─" * 44, "#4488cc")
             cmd_dock.log("  snap_settings      SNAP  OS  OSNAP", "#aaddff")
             cmd_dock.log("  help               HELP  ?", "#aaddff")
             cmd_dock.log("─" * 44, "#4488cc")
@@ -384,7 +424,10 @@ class Ugsurv:
                 level=0, duration=3
             )
 
-        # 8. Reload CAD layers from GeoPackage when available ────────────
+        # 8. Extra utility panels (docks & tools) ────────────────────────
+        self._register_extra_tools(cmd_dock, iface, canvas, mw)
+
+        # 9. Reload CAD layers from GeoPackage when available ─────────────
         def _reload_cad_layers(enabled: bool):
             if not enabled:
                 return
@@ -400,12 +443,99 @@ class Ugsurv:
         storage.gatingChanged.connect(_reload_cad_layers)
         self._reload_layers_slot = _reload_cad_layers
 
-        # 9. SelectTool is the permanent home — one instance, never via factory
+        # 10. SelectTool is the permanent home — one instance, never via factory
         from .tools.selection.select_tool import SelectTool as _SelectTool
         _home = _SelectTool(canvas, ctx, translator)
         _home._tool_key = 'select'
         tool_mgr.set_home(_home)
         ctx.go_home = tool_mgr.go_home
+
+    # ── extra utility panels ─────────────────────────────────────────────
+    def _register_extra_tools(self, cmd_dock, iface, canvas, mw):
+        """Lazily create and register the 8 utility docks/tools as UI commands."""
+        from qgis.PyQt.QtCore import Qt
+
+        def _make_toggle(factory):
+            state = [None]
+            def _toggle():
+                if state[0] is None:
+                    state[0] = factory()
+                    iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, state[0])
+                    # Tabify with the first extra dock so all panels share one
+                    # slot — prevents stacking from growing taller than the screen.
+                    if self._extra_docks:
+                        mw.tabifyDockWidget(self._extra_docks[0], state[0])
+                    self._extra_docks.append(state[0])
+                state[0].show()
+                state[0].raise_()
+            return _toggle
+
+        # 1. Append Geometry — copy selected features from one layer to another
+        from .module_wz_dialogs.append_geometry import GeometryAppenderDock
+        cmd_dock.register_ui_command("APPEND", "AG",
+            callback=_make_toggle(lambda: GeometryAppenderDock(mw)))
+
+        # 2. CRS Adjust — reproject selected features using a chosen CRS
+        from .module_wz_dialogs.crs_adjust import CrsAdjustDock
+        cmd_dock.register_ui_command("CRSADJ", "CRS",
+            callback=_make_toggle(lambda: CrsAdjustDock(mw)))
+
+        # 3. Feature Navigator — step through filtered features one by one
+        from .module_wz_dialogs.feature_navigator import FeatureNavigatorDock
+        cmd_dock.register_ui_command("NAV", "FN",
+            callback=_make_toggle(lambda: FeatureNavigatorDock(canvas, mw)))
+
+        # 4. Overlap Points — find and merge near-coincident vertices
+        from .module_wz_dialogs.overlap_points import OverlapPointsDock
+        cmd_dock.register_ui_command("OVERLAP", "OVP",
+            callback=_make_toggle(lambda: OverlapPointsDock(canvas, mw)))
+
+        # 5. Parcel Plotter — plot polygons from CSV/Excel coordinate tables
+        def _open_parcel_plotter():
+            from .module_wz_dialogs.parcel_plotter import ParcelPlotterDialog
+            dlg = ParcelPlotterDialog(mw)
+            dlg.exec()
+        cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
+
+        # 6. Revert Geometry — click features to restore their original_geometry WKT
+        def _activate_revert():
+            if self._revert_tool is None:
+                from .module_wz_dialogs.revert_geometry import RevertMapTool
+                self._revert_tool = RevertMapTool(canvas, iface, cmd_dock)
+            canvas.setMapTool(self._revert_tool)
+        cmd_dock.register_ui_command("REVERT", "REV", callback=_activate_revert)
+
+        # 7. Solve Topology — cut parcels against rivers, roads, waterbodies
+        from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
+        cmd_dock.register_ui_command("TOPO", "ST",
+            callback=_make_toggle(lambda: SolveTopologyDock(mw)))
+
+        # 8. Spiky Geometry — find sharp-angled vertices across polygon layers
+        from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
+        cmd_dock.register_ui_command("SPIKY", "SG",
+            callback=_make_toggle(lambda: SpikyGeomsDock(canvas, mw)))
+
+        # 9. Layout Importer — align a PDF/image raster to two GCP points
+        def _open_layout_importer():
+            from .module_wz_dialogs.layout_importer import ImportPrintDialog
+            dlg = ImportPrintDialog(cmd_dock=cmd_dock, parent=mw)
+            dlg.exec()
+        cmd_dock.register_ui_command("IMPORT", "LI", callback=_open_layout_importer)
+
+        # 10. Properties Dock — CAD feature properties editor
+        from .module_wz_dialogs.properties_panel import PropertiesDock
+        cmd_dock.register_ui_command("PROPSDOCK", "PD",
+            callback=_make_toggle(lambda: PropertiesDock(mw)))
+
+        # 11. Topology Fixer — interactive map tool: click to fix parcel topology
+        _tfix_ref = [None]
+        def _activate_tfix():
+            if _tfix_ref[0] is None:
+                from .module_wz_dialogs.topology_solver import TopologySolver
+                _tfix_ref[0] = TopologySolver(canvas, iface, cmd_dock)
+                self._tfix_tool = _tfix_ref[0]
+            canvas.setMapTool(_tfix_ref[0])
+        cmd_dock.register_ui_command("TFIX", "TF", callback=_activate_tfix)
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
@@ -468,6 +598,26 @@ class Ugsurv:
             with contextlib.suppress(Exception):
                 self._sel_overlay.destroy()
             self._sel_overlay = None
+
+        # Extra utility docks (lazily created by _register_extra_tools)
+        for dock in getattr(self, '_extra_docks', []):
+            with contextlib.suppress(Exception):
+                self.iface.removeDockWidget(dock)
+                dock.close()
+                dock.deleteLater()
+        self._extra_docks = []
+
+        # Revert map tool
+        if getattr(self, '_revert_tool', None) is not None:
+            with contextlib.suppress(Exception):
+                self.canvas.unsetMapTool(self._revert_tool)
+            self._revert_tool = None
+
+        # Topology fixer map tool
+        if getattr(self, '_tfix_tool', None) is not None:
+            with contextlib.suppress(Exception):
+                self.canvas.unsetMapTool(self._tfix_tool)
+            self._tfix_tool = None
 
         for dock_attr in ("_cmd_dock", "_layers_dock", "_props_dock"):
             dock = getattr(self, dock_attr, None)
