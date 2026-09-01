@@ -54,8 +54,6 @@ def _scale_geom(geom: QgsGeometry, center: QgsPointXY,
     wtype = int(QgsWkbTypes.geometryType(g.wkbType()))
     if wtype == 1:
         return QgsGeometry.fromPolylineXY(new_verts)
-    if wtype == 2:
-        return QgsGeometry.fromPolygonXY([new_verts])
     return QgsGeometry.fromMultiPointXY(new_verts)
 
 
@@ -222,7 +220,7 @@ class _ModifyBase(BaseTool):
     def _all_geometry_layers(self):
         sm = self._ctx.storage_manager
         result = []
-        for attr in ("points_layer", "lines_layer", "polygons_layer"):
+        for attr in ("points_layer", "lines_layer"):
             lyr = getattr(sm, attr, None)
             if lyr and lyr.isValid():
                 result.append((lyr.id(), lyr))

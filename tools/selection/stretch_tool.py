@@ -147,7 +147,7 @@ class StretchTool(BaseTool):
 
 def _geo_layers(sm):
     result = []
-    for attr in ("points_layer", "lines_layer", "polygons_layer"):
+    for attr in ("points_layer", "lines_layer"):
         lyr = getattr(sm, attr, None)
         if lyr and lyr.isValid():
             result.append(lyr)

@@ -1,49 +1,351 @@
 # -*- coding: utf-8 -*-
-"""ScaleTool — SELECTING → base point → live scale preview → click/type factor → commit."""
+"""
+AutoCAD-style SCALE tool.
 
+Workflow
+────────
+1. Click features to select.  Enter/RMB → confirm.
+2. Click scale origin.
+3. Click to set factor by cursor distance  or  type factor + Enter.
+"""
+
+import contextlib
 import math
-from qgis.core import QgsPointXY
 
-from ._modify_base import _ModifyBase, _scale_geom, selected_features
-from ...core.base_tool import ToolState
-from ...core import style as _style
+from qgis.gui import QgsMapTool, QgsRubberBand
+from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtWidgets import QLabel
+from qgis.core import (
+    QgsGeometry, QgsPointXY, QgsProject,
+    QgsRectangle, QgsVectorLayer, QgsWkbTypes,
+)
+
+from ...core.events import EventType
 
 
-class ScaleTool(_ModifyBase):
+_C_HIGHLIGHT = QColor(0, 200, 80, 220)
+_C_HL_FILL   = QColor(0, 200, 80, 20)
+_C_PREVIEW   = QColor(255, 130, 0, 220)
+_C_PREV_FILL = QColor(255, 130, 0, 30)
 
-    def _commit_transform(self, dest_pt: QgsPointXY):
-        if self._base_pt is None:
+_ST_SELECT = 0
+_ST_BASE   = 1
+_ST_SCALE  = 2
+
+_HIT_PX = 10
+
+_HINT = {
+    _ST_SELECT: "Click features  (Shift=deselect | Enter=confirm)",
+    _ST_BASE:   "Click scale origin",
+    _ST_SCALE:  "Click or type scale factor + Enter",
+}
+
+_HINT_STYLE = (
+    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
+    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
+    "padding:3px 8px;font-size:9pt;}"
+)
+
+
+def _scale_geom(geom, cx, cy, factor):
+    """Scale geometry around (cx, cy) by factor. Handles all geometry types."""
+    gt = QgsWkbTypes.geometryType(geom.wkbType())
+
+    def _sp(p):
+        return QgsPointXY(cx + (p.x() - cx) * factor,
+                          cy + (p.y() - cy) * factor)
+
+    if gt == QgsWkbTypes.GeometryType.PointGeometry:
+        if geom.isMultipart():
+            return QgsGeometry.fromMultiPointXY([_sp(p) for p in geom.asMultiPoint()])
+        p = geom.asPoint()
+        return QgsGeometry.fromPointXY(_sp(QgsPointXY(p.x(), p.y())))
+    elif gt == QgsWkbTypes.GeometryType.LineGeometry:
+        if geom.isMultipart():
+            parts = [[_sp(p) for p in part] for part in geom.asMultiPolyline()]
+            return QgsGeometry.fromMultiPolylineXY(parts)
+        return QgsGeometry.fromPolylineXY([_sp(p) for p in geom.asPolyline()])
+    elif gt == QgsWkbTypes.GeometryType.PolygonGeometry:
+        if geom.isMultipart():
+            parts = [[[_sp(p) for p in ring] for ring in poly]
+                     for poly in geom.asMultiPolygon()]
+            return QgsGeometry.fromMultiPolygonXY(parts)
+        rings = [[_sp(p) for p in ring] for ring in geom.asPolygon()]
+        return QgsGeometry.fromPolygonXY(rings)
+    return QgsGeometry(geom)
+
+
+class ScaleTool(QgsMapTool):
+    """Scale features — multi-select → origin → factor."""
+
+    def __init__(self, canvas, ctx, translator):
+        super().__init__(canvas)
+        self._canvas     = canvas
+        self._ctx        = ctx
+        self._translator = translator
+
+        self._state        = _ST_SELECT
+        self._sel_features = []
+        self._sel_bands    = []
+        self._prev_bands   = []
+        self._base_pt: QgsPointXY | None = None
+        self._ref_dist     = 1.0
+        self._last_factor  = 1.0
+
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
+    def _log(self, msg, color="#cccccc"):
+        dock = getattr(self._ctx, 'cmd_dock', None)
+        if dock:
+            dock.log(msg, color)
+
+    def _show_hint(self, screen_pos):
+        text = _HINT.get(self._state, "")
+        if not text:
+            self._hint.hide()
             return
-        ref_dist = self._base_pt.distance(dest_pt)
-        if ref_dist > 0:
-            self._apply_scale(ref_dist)
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self._canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self._canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
 
-    def _handle_act_value(self, value: float):
-        if self._base_pt and value > 0:
-            self._apply_scale(value)
+    def _hit_tol(self):
+        return _HIT_PX * self._canvas.mapUnitsPerPixel()
 
-    def _apply_scale(self, factor: float):
-        if self._base_pt is None:
+    def _find_feature_near(self, map_pt):
+        tol     = self._hit_tol()
+        pt_geom = QgsGeometry.fromPointXY(map_pt)
+        rect    = QgsRectangle(map_pt.x()-tol, map_pt.y()-tol,
+                               map_pt.x()+tol, map_pt.y()+tol)
+        best, best_d = None, tol
+        for lyr in QgsProject.instance().mapLayers().values():
+            if not isinstance(lyr, QgsVectorLayer) or not lyr.isSpatial():
+                continue
+            for feat in lyr.getFeatures(rect):
+                geom = feat.geometry()
+                if geom.isEmpty():
+                    continue
+                d = geom.distance(pt_geom)
+                if d < best_d:
+                    best_d = d
+                    best = (lyr, feat.id(), QgsGeometry(geom))
+        return best
+
+    def _make_band(self, geom_type, color, fill_color, width=2, dashed=False):
+        band = QgsRubberBand(self._canvas, geom_type)
+        band.setColor(color)
+        band.setFillColor(fill_color)
+        band.setWidth(width)
+        if dashed:
+            band.setLineStyle(Qt.PenStyle.DashLine)
+        return band
+
+    def _rm(self, item):
+        if item is not None:
+            with contextlib.suppress(Exception):
+                self._canvas.scene().removeItem(item)
+
+    def _go_home(self):
+        go = getattr(self._ctx, 'go_home', None)
+        if go and callable(go):
+            from qgis.PyQt.QtCore import QTimer
+            QTimer.singleShot(0, go)
+
+    def _sel_key(self, layer, fid):
+        return (id(layer), fid)
+
+    def _existing_keys(self):
+        return [self._sel_key(lyr, f) for lyr, f, _ in self._sel_features]
+
+    def _add_to_selection(self, layer, fid, geom):
+        if self._sel_key(layer, fid) in self._existing_keys():
+            return False
+        self._sel_features.append((layer, fid, QgsGeometry(geom)))
+        gt = QgsWkbTypes.geometryType(geom.wkbType())
+        hl = self._make_band(gt, _C_HIGHLIGHT, _C_HL_FILL, width=2)
+        hl.setToGeometry(geom, layer)
+        self._sel_bands.append(hl)
+        prev = self._make_band(gt, _C_PREVIEW, _C_PREV_FILL, width=2, dashed=True)
+        prev.setVisible(False)
+        self._prev_bands.append(prev)
+        return True
+
+    def _remove_from_selection(self, layer, fid):
+        key  = self._sel_key(layer, fid)
+        keys = self._existing_keys()
+        if key not in keys:
+            return False
+        idx = keys.index(key)
+        self._sel_features.pop(idx)
+        self._rm(self._sel_bands.pop(idx))
+        self._rm(self._prev_bands.pop(idx))
+        return True
+
+    def _clear_selection(self):
+        for b in self._sel_bands:
+            self._rm(b)
+        for b in self._prev_bands:
+            self._rm(b)
+        self._sel_features = []
+        self._sel_bands    = []
+        self._prev_bands   = []
+
+    def _enter_base(self):
+        for b in self._prev_bands:
+            b.setVisible(False)
+        self._state = _ST_BASE
+        n = len(self._sel_features)
+        self._log(f"  {n} feature(s) selected  →  click scale origin", "#88ccff")
+
+    def _enter_scale(self, base_pt: QgsPointXY):
+        self._base_pt = base_pt
+        self._state   = _ST_SCALE
+        # compute reference distance as average centroid distance
+        dists = []
+        for layer, fid, geom in self._sel_features:
+            c = geom.centroid().asPoint()
+            d = math.hypot(c.x() - base_pt.x(), c.y() - base_pt.y())
+            if d > 0:
+                dists.append(d)
+        self._ref_dist = sum(dists) / len(dists) if dists else 1.0
+        for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
+            band.setToGeometry(geom, layer)
+            band.setVisible(True)
+        self._log("  Click or type scale factor + Enter  (Esc=cancel)", "#88ccff")
+
+    def _update_preview(self, map_pt: QgsPointXY):
+        if self._state != _ST_SCALE or not self._base_pt:
             return
-        for layer, feat in selected_features(self._ctx):
-            new_geom = _scale_geom(feat.geometry(), self._base_pt, factor, factor)
-            if not layer.isEditable():
-                layer.startEditing()
-            layer.changeGeometry(feat.id(), new_geom)
-        self._ctx.selection_model.clear()
-        self._clear_rubber_bands()
-        self._base_pt = None
-        self._transition(ToolState.IDLE)
-
-    def _update_preview(self, cursor_pt: QgsPointXY):
-        self._clear_rubber_bands()
-        if self._base_pt is None:
-            return
-        factor = self._base_pt.distance(cursor_pt)
+        dist = math.hypot(map_pt.x() - self._base_pt.x(),
+                          map_pt.y() - self._base_pt.y())
+        factor = dist / self._ref_dist if self._ref_dist > 0 else 1.0
         if factor <= 0:
             return
-        for layer, feat in selected_features(self._ctx):
-            rb = self._new_rubber_band(
-                feat.geometry().type(), _style.PREVIEW_SCALE, 1
-            )
-            rb.setToGeometry(_scale_geom(feat.geometry(), self._base_pt, factor, factor))
+        self._last_factor = factor
+        cx, cy = self._base_pt.x(), self._base_pt.y()
+        for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
+            scaled = _scale_geom(geom, cx, cy, factor)
+            band.setToGeometry(scaled, layer)
+
+    def _apply_scale(self, factor: float):
+        if not self._base_pt or factor <= 0:
+            return
+        cx, cy = self._base_pt.x(), self._base_pt.y()
+        modified = set()
+        for layer, fid, geom in self._sel_features:
+            new_geom = _scale_geom(geom, cx, cy, factor)
+            if not layer.isEditable():
+                layer.startEditing()
+            layer.changeGeometry(fid, new_geom)
+            modified.add(layer)
+        for lyr in modified:
+            lyr.triggerRepaint()
+        n = len(self._sel_features)
+        self._log(f"  Scaled {n} feature(s)  ×{factor:.4f}", "#88ff88")
+        self._go_home()
+
+    def _reset(self):
+        self._clear_selection()
+        self._state   = _ST_SELECT
+        self._base_pt = None
+
+    def _dispatch(self, sem):
+        if self._state == _ST_SCALE:
+            if sem.type == EventType.VALUE_ENTERED and sem.value is not None:
+                self._apply_scale(float(sem.value))
+            elif sem.type == EventType.COORDINATE_ENTERED and sem.point and self._base_pt:
+                dist = math.hypot(sem.point.x() - self._base_pt.x(),
+                                  sem.point.y() - self._base_pt.y())
+                factor = dist / self._ref_dist if self._ref_dist > 0 else 1.0
+                if factor > 0:
+                    self._apply_scale(factor)
+
+    def activate(self):
+        super().activate()
+        self._canvas.setFocus()
+        self._log("SCALE  ──  click features to select, Enter to confirm  (Esc=exit)", "#aaddff")
+
+    def deactivate(self):
+        self._clear_selection()
+        self._hint.hide()
+        self._state   = _ST_SELECT
+        self._base_pt = None
+        super().deactivate()
+
+    def canvasMoveEvent(self, event):
+        map_pt = self.toMapCoordinates(event.pos())
+        self._update_preview(map_pt)
+        self._show_hint(event.pos())
+
+    def canvasPressEvent(self, event):
+        map_pt = self.toMapCoordinates(event.pos())
+        shift  = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        if event.button() == Qt.MouseButton.RightButton:
+            if self._state == _ST_SELECT:
+                if self._sel_features:
+                    self._enter_base()
+                else:
+                    self._go_home()
+            elif self._state == _ST_SCALE:
+                self._apply_scale(self._last_factor)
+            else:
+                self._reset()
+                self._log("  Scale cancelled", "#ffaaaa")
+            return
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        if self._state == _ST_SELECT:
+            result = self._find_feature_near(map_pt)
+            if result:
+                layer, fid, geom = result
+                if shift:
+                    if self._remove_from_selection(layer, fid):
+                        self._log(f"  Deselected  ({len(self._sel_features)} selected)")
+                else:
+                    if self._add_to_selection(layer, fid, geom):
+                        self._log(f"  Selected '{layer.name()}' fid {fid}"
+                                  f"  ({len(self._sel_features)} selected)")
+            else:
+                self._log("  No feature found near click")
+
+        elif self._state == _ST_BASE:
+            self._enter_scale(map_pt)
+
+        elif self._state == _ST_SCALE:
+            dist = math.hypot(map_pt.x() - self._base_pt.x(),
+                              map_pt.y() - self._base_pt.y())
+            factor = dist / self._ref_dist if self._ref_dist > 0 else 1.0
+            if factor > 0:
+                self._apply_scale(factor)
+
+        self._canvas.setFocus()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            if self._state != _ST_SELECT:
+                self._reset()
+                self._log("  Scale cancelled", "#ffaaaa")
+            else:
+                self._go_home()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if self._state == _ST_SELECT:
+                if self._sel_features:
+                    self._enter_base()
+                else:
+                    self._go_home()
+            elif self._state == _ST_SCALE:
+                self._apply_scale(self._last_factor)

@@ -10,10 +10,12 @@ Hard rules (§5):
   - Hooks cleared/readProject to re-evaluate gating state.
 
 GeoPackage schema (§4):
-  - points   (MultiPoint)      — cad_layer attribute
-  - lines    (MultiLineString) — cad_layer attribute
-  - polygons (MultiPolygon)    — cad_layer attribute
-  - cad_layers (non-spatial)   — name, color, linetype, visible, locked, sort_order
+  - points   (MultiPoint) — cad_layer attribute
+  - lines    (LineString) — cad_layer attribute
+  - cad_layers (non-spatial) — name, color, linetype, visible, locked, sort_order
+
+Legacy "polygons" table (MultiPolygon) is migrated to closed LineStrings in
+the lines table on first load of an older GeoPackage, then removed from the project.
 """
 
 import os
@@ -22,7 +24,7 @@ from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsField, QgsFields,
     QgsWkbTypes, QgsCoordinateReferenceSystem,
-    QgsVectorFileWriter, QgsFeature, QgsGeometry,
+    QgsVectorFileWriter, QgsFeature, QgsGeometry, QgsPointXY,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -36,7 +38,6 @@ class StorageManager(QObject):
         self._gpkg_path    = None
         self._points_layer  = None
         self._lines_layer   = None
-        self._poly_layer    = None
         self._cad_lyr_layer = None   # non-spatial QgsVectorLayer
         self._toolbar_ref   = None   # set by plugin_main
 
@@ -54,23 +55,43 @@ class StorageManager(QObject):
 
     @property
     def points_layer(self) -> QgsVectorLayer | None:
-        return self._points_layer
+        return self._live('_points_layer')
 
     @property
     def lines_layer(self) -> QgsVectorLayer | None:
-        return self._lines_layer
-
-    @property
-    def polygons_layer(self) -> QgsVectorLayer | None:
-        return self._poly_layer
+        return self._live('_lines_layer')
 
     @property
     def cad_layers_table(self) -> QgsVectorLayer | None:
-        return self._cad_lyr_layer
+        return self._live('_cad_lyr_layer')
 
     @property
     def gpkg_path(self) -> str | None:
         return self._gpkg_path
+
+    @staticmethod
+    def _layer_alive(lyr) -> bool:
+        """Return True only if lyr is a live, valid QgsVectorLayer."""
+        if lyr is None:
+            return False
+        try:
+            return lyr.isValid()
+        except RuntimeError:
+            return False
+
+    def _live(self, attr: str) -> QgsVectorLayer | None:
+        """Return the layer stored in *attr*, reloading from disk if stale."""
+        lyr = getattr(self, attr)
+        if self._layer_alive(lyr):
+            return lyr
+        # Stale or None — attempt reload if we know the GPKG path.
+        if self._gpkg_path and os.path.exists(self._gpkg_path):
+            self._points_layer  = None
+            self._lines_layer   = None
+            self._cad_lyr_layer = None
+            self._load_layers(self._gpkg_path)
+        lyr = getattr(self, attr)
+        return lyr if self._layer_alive(lyr) else None
 
     def set_toolbar(self, toolbar):
         self._toolbar_ref = toolbar
@@ -91,12 +112,18 @@ class StorageManager(QObject):
             self._create_or_load_gpkg()
 
     def _on_project_cleared(self):
-        self._gpkg_path    = None
+        self._gpkg_path     = None
         self._points_layer  = None
         self._lines_layer   = None
-        self._poly_layer    = None
         self._cad_lyr_layer = None
         self._evaluate_gating()
+
+    def _on_layer_deleted(self):
+        """Called when any relevant layer is removed; nulls stale references."""
+        for attr in ('_points_layer', '_lines_layer', '_cad_lyr_layer'):
+            lyr = getattr(self, attr)
+            if not self._layer_alive(lyr):
+                setattr(self, attr, None)
 
     def _on_project_read(self):
         self._evaluate_gating()
@@ -141,9 +168,8 @@ class StorageManager(QObject):
         geom_fields.append(QgsField("cad_layer", QVariant.String))
 
         tables = [
-            ("points",   QgsWkbTypes.MultiPoint),
-            ("lines",    QgsWkbTypes.MultiLineString),
-            ("polygons", QgsWkbTypes.MultiPolygon),
+            ("points", QgsWkbTypes.MultiPoint),
+            ("lines",  QgsWkbTypes.LineString),
         ]
         opts = QgsVectorFileWriter.SaveVectorOptions()
         opts.driverName = "GPKG"
@@ -224,8 +250,107 @@ class StorageManager(QObject):
 
         self._points_layer  = open_layer("points",   add_to_tree=True)
         self._lines_layer   = open_layer("lines",    add_to_tree=True)
-        self._poly_layer    = open_layer("polygons", add_to_tree=True)
         self._cad_lyr_layer = open_layer("cad_layers", add_to_tree=False)
+
+        # Migrate legacy MultiLineString → LineString if needed
+        if self._lines_layer and QgsWkbTypes.isMultiType(self._lines_layer.wkbType()):
+            self._lines_layer = self._migrate_lines_to_single(path, self._lines_layer)
+
+        # Migrate legacy polygons table → closed LineStrings in lines layer
+        poly_lyr = open_layer("polygons", add_to_tree=False)
+        if poly_lyr and poly_lyr.isValid():
+            self._migrate_polygons_to_lines(poly_lyr)
+
+
+    def _migrate_lines_to_single(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:
+        """Convert a legacy MultiLineString lines layer to LineString in the GeoPackage.
+
+        Each MultiLineString feature is exploded into individual LineString features
+        (in practice the old drawing tools always produced single-part multis, so
+        this is a 1-to-1 conversion with no data loss).
+        """
+        crs = old_lyr.crs()
+
+        # Collect every part as a separate LineString feature
+        new_feats = []
+        tmp_fields = QgsFields()
+        tmp_fields.append(QgsField("cad_layer", QVariant.String))
+
+        for feat in old_lyr.getFeatures():
+            geom = feat.geometry()
+            cad = feat["cad_layer"]
+            # Iterate over parts (usually just one)
+            for part in geom.parts():
+                pts = [QgsPointXY(v.x(), v.y()) for v in part.vertices()]
+                if len(pts) < 2:
+                    continue
+                nf = QgsFeature(tmp_fields)
+                nf.setGeometry(QgsGeometry.fromPolylineXY(pts))
+                nf["cad_layer"] = cad
+                new_feats.append(nf)
+
+        # Remove stale layer from the project before overwriting the table
+        QgsProject.instance().removeMapLayer(old_lyr.id())
+
+        # Build a memory layer and write it back as LineString
+        uri = (QgsWkbTypes.displayString(QgsWkbTypes.LineString)
+               + "?crs=" + crs.authid())
+        tmp = QgsVectorLayer(uri, "lines", "memory")
+        tmp.dataProvider().addAttributes(list(tmp_fields))
+        tmp.updateFields()
+        tmp.dataProvider().addFeatures(new_feats)
+
+        opts = QgsVectorFileWriter.SaveVectorOptions()
+        opts.driverName = "GPKG"
+        opts.layerName  = "lines"
+        opts.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+        QgsVectorFileWriter.writeAsVectorFormatV3(
+            tmp, path, QgsProject.instance().transformContext(), opts
+        )
+
+        # Open and register the migrated layer
+        new_lyr = QgsVectorLayer(f"{path}|layername=lines", "lines", "ogr")
+        if new_lyr.isValid():
+            QgsProject.instance().addMapLayer(new_lyr, True)
+            return new_lyr
+        return None
+
+
+    def _migrate_polygons_to_lines(self, poly_layer: QgsVectorLayer):
+        """One-time migration: convert legacy polygon features to closed LineStrings.
+
+        Each polygon's exterior ring becomes a LineString in the lines layer.
+        The polygons layer is then removed from the project (the table stays in
+        the GPKG file but is no longer loaded by the plugin).
+        """
+        if not self._layer_alive(self._lines_layer):
+            QgsProject.instance().removeMapLayer(poly_layer.id())
+            return
+
+        new_feats = []
+        for feat in poly_layer.getFeatures():
+            geom = feat.geometry()
+            cad  = feat["cad_layer"]
+            if QgsWkbTypes.isMultiType(geom.wkbType()):
+                rings = [p[0] for p in geom.asMultiPolygon() if p]
+            else:
+                poly = geom.asPolygon()
+                rings = [poly[0]] if poly else []
+            for ring in rings:
+                if len(ring) < 2:
+                    continue
+                nf = QgsFeature(self._lines_layer.fields())
+                nf.setGeometry(QgsGeometry.fromPolylineXY(ring))
+                nf["cad_layer"] = cad
+                new_feats.append(nf)
+
+        if new_feats:
+            if not self._lines_layer.isEditable():
+                self._lines_layer.startEditing()
+            self._lines_layer.addFeatures(new_feats)
+            print(f"[UgSurv] Migrated {len(new_feats)} polygon feature(s) to lines layer")
+
+        QgsProject.instance().removeMapLayer(poly_layer.id())
 
 
 class _suppress:

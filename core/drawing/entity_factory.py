@@ -49,10 +49,8 @@ class EntityFactory:
         gtype = int(geometry.type())
         if gtype == 0:   # Point
             return self._storage.points_layer
-        if gtype == 1:   # Line
+        if gtype in (1, 2):  # Line or Polygon boundary → lines layer
             return self._storage.lines_layer
-        if gtype == 2:   # Polygon
-            return self._storage.polygons_layer
         return None
 
     # ── geometry normalisation ────────────────────────────────────────────

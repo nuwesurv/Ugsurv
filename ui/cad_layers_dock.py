@@ -140,7 +140,7 @@ class CadLayersDock(QDockWidget):
     def _apply_changes(self):
         sm = self._stor
         self._mgr.apply_renderer_to_layers(
-            sm.points_layer, sm.lines_layer, sm.polygons_layer
+            sm.points_layer, sm.lines_layer
         )
         self._sel.set_locked_cad_layers(self._mgr.locked_names())
         # persist to GeoPackage table if available

@@ -16,7 +16,8 @@ class PointProvider:
     def query(self, raw: QgsPointXY, rect, storage) -> list[SnapResult]:
         results = []
         layer = getattr(storage, "points_layer", None)
-        if not (layer and layer.isValid()):
+        from .vertex_provider import _layer_ok
+        if not _layer_ok(layer):
             return results
         for feat in layer.getFeatures(rect):
             geom = feat.geometry()

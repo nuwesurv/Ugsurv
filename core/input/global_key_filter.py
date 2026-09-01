@@ -148,7 +148,8 @@ class GlobalKeyFilter(QObject):
             t = inp.text()
             if t:
                 inp.setText(t[:-1])
-            return True
+                return True
+            return False  # empty input — pass through so the tool can handle it
 
         ch = event.text()
         if ch and ch.isprintable() and ch != '\t':
@@ -168,8 +169,12 @@ class GlobalKeyFilter(QObject):
             return True
 
         if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-            self._buffer.submit()
-            return True
+            if self._buffer.text:
+                self._buffer.submit()
+                return True
+            # Empty buffer — let the key reach the tool's keyPressEvent so it
+            # can handle confirmation (e.g. "confirm selected features").
+            return False
 
         if key == Qt.Key_Escape:
             self._buffer.cancel()

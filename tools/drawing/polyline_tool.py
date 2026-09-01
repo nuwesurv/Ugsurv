@@ -100,13 +100,11 @@ class PolylineTool(BaseTool):
         if len(self._points) < 2:
             return
         geom = QgsGeometry.fromPolylineXY(self._points)
-        geom.convertToMultiType()
         self._write_feature(geom)
 
     def _close_and_commit(self):
         pts = list(self._points) + [self._points[0]]
         geom = QgsGeometry.fromPolylineXY(pts)
-        geom.convertToMultiType()
         self._write_feature(geom)
         self._reset()
 

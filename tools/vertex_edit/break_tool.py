@@ -1,138 +1,237 @@
 # -*- coding: utf-8 -*-
 """
-BreakTool — click object → click break point(s) → commit implicit on final click.
+AutoCAD-style BREAK tool.
 
-Single-point break: splits line at one location.
-Two-point break:    removes segment between the two points (key '2' mid-command).
+Workflow
+────────
+1. Hover over a line  → yellow highlight; red dot shows exact break point
+2. Click              → line is split into two features at the nearest point
+   Both halves are kept — nothing is deleted.
+   Repeat for more breaks on other lines.
+   Enter / RMB / Esc  → exit.
 """
 
-from qgis.PyQt.QtCore import Qt
+import contextlib
+
+from qgis.gui import QgsMapTool, QgsRubberBand
+from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
-    QgsPointXY, QgsGeometry, QgsWkbTypes,
-    QgsFeatureRequest, QgsRectangle, QgsFeature,
+    QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
+    QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
 
-from ...core.base_tool import BaseTool, ToolState
-from ...core.events import SemanticEvent, EventType
-from ..modify.trim_tool import _split_at_intersection
+from ...core.events import EventType
 
 
-class BreakTool(BaseTool):
-    CURSOR = Qt.CursorShape.CrossCursor
+_C_HOVER  = QColor(255, 200,  0, 180)
+_C_BREAK  = QColor(220,   0,  0, 255)
 
-    def __init__(self, canvas, tool_context, input_translator):
-        super().__init__(canvas, tool_context, input_translator)
-        self._mode = "1pt"   # "1pt" | "2pt"
-        self._target_layer = None
-        self._target_fid   = None
-        self._target_geom  = None
-        self._bp1: QgsPointXY | None = None
+_HIT_PX = 10
+
+_HINT_STYLE = (
+    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
+    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
+    "padding:3px 8px;font-size:9pt;}"
+)
+
+
+class BreakTool(QgsMapTool):
+    """BREAK — split a line into two at a clicked point without removing anything."""
+
+    def __init__(self, canvas, ctx, translator):
+        super().__init__(canvas)
+        self._canvas     = canvas
+        self._ctx        = ctx
+        self._translator = translator
+
+        self._hover_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
+        self._hover_band.setColor(_C_HOVER)
+        self._hover_band.setWidth(3)
+        self._hover_band.setVisible(False)
+
+        self._pt_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.PointGeometry)
+        self._pt_band.setColor(_C_BREAK)
+        self._pt_band.setIconSize(8)
+        self._pt_band.setVisible(False)
+
+        self._hint = QLabel(canvas)
+        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._hint.hide()
+
+    def _log(self, msg, color="#cccccc"):
+        dock = getattr(self._ctx, 'cmd_dock', None)
+        if dock:
+            dock.log(msg, color)
+
+    def _hit_tol(self):
+        return _HIT_PX * self._canvas.mapUnitsPerPixel()
+
+    def _line_layers(self):
+        return [
+            lyr for lyr in QgsProject.instance().mapLayers().values()
+            if isinstance(lyr, QgsVectorLayer)
+            and lyr.isSpatial()
+            and QgsWkbTypes.geometryType(lyr.wkbType()) == QgsWkbTypes.GeometryType.LineGeometry
+        ]
+
+    def _find_line_near(self, map_pt):
+        tol  = self._hit_tol()
+        rect = QgsRectangle(map_pt.x()-tol, map_pt.y()-tol,
+                            map_pt.x()+tol, map_pt.y()+tol)
+        cg   = QgsGeometry.fromPointXY(map_pt)
+        best_layer, best_feat, best_d = None, None, float('inf')
+        for lyr in self._line_layers():
+            for feat in lyr.getFeatures(rect):
+                if feat.geometry().isEmpty():
+                    continue
+                d = feat.geometry().distance(cg)
+                if d < best_d:
+                    best_d, best_layer, best_feat = d, lyr, feat
+        return (best_layer, best_feat) if best_d <= tol else (None, None)
+
+    def _rm(self, item):
+        if item is not None:
+            with contextlib.suppress(Exception):
+                self._canvas.scene().removeItem(item)
+
+    def _go_home(self):
+        go = getattr(self._ctx, 'go_home', None)
+        if go and callable(go):
+            from qgis.PyQt.QtCore import QTimer
+            QTimer.singleShot(0, go)
+
+    def _show_hint(self, screen_pos):
+        self._hint.setText("Click line to break  (Enter / Esc = exit)")
+        self._hint.adjustSize()
+        pos = screen_pos + QPoint(10, 14)
+        if pos.x() + self._hint.width() > self._canvas.width():
+            pos.setX(screen_pos.x() - self._hint.width() - 4)
+        if pos.y() + self._hint.height() > self._canvas.height():
+            pos.setY(screen_pos.y() - self._hint.height() - 4)
+        self._hint.move(pos)
+        self._hint.show()
+        self._hint.raise_()
+
+    def _sub_line(self, geom, d_from, d_to):
+        if d_to - d_from < 1e-10:
+            return None
+        pts = []
+        s = geom.interpolate(d_from)
+        if not s.isEmpty():
+            p = s.asPoint()
+            pts.append(QgsPointXY(p.x(), p.y()))
+        verts = geom.asPolyline()
+        cum = 0.0
+        for i, v in enumerate(verts):
+            if i > 0:
+                cum += verts[i-1].distance(v)
+            if d_from < cum < d_to:
+                pts.append(v)
+        e = geom.interpolate(d_to)
+        if not e.isEmpty():
+            p = e.asPoint()
+            pts.append(QgsPointXY(p.x(), p.y()))
+        if len(pts) >= 2:
+            return QgsGeometry.fromPolylineXY(pts)
+        return None
+
+    def _apply_break(self, map_pt):
+        lyr, feat = self._find_line_near(map_pt)
+        if feat is None:
+            self._log("  No line found near click")
+            return
+
+        geom = feat.geometry()
+        if geom.isEmpty() or geom.isMultipart():
+            self._log("  Multipart geometry — break not supported (use single-part lines)")
+            return
+
+        pt_geom = QgsGeometry.fromPointXY(map_pt)
+        break_d = geom.lineLocatePoint(pt_geom)
+        total   = geom.length()
+
+        margin = 1e-6 * total
+        if break_d < margin or break_d > total - margin:
+            self._log("  Break point too close to an endpoint — nothing to split")
+            return
+
+        seg_a = self._sub_line(geom, 0.0, break_d)
+        seg_b = self._sub_line(geom, break_d, total)
+
+        if seg_a is None or seg_b is None:
+            self._log("  Could not compute sub-lines")
+            return
+
+        if not lyr.isEditable():
+            lyr.startEditing()
+
+        lyr.changeGeometry(feat.id(), seg_a)
+
+        new_feat = QgsFeature(lyr.fields())
+        new_feat.setAttributes(feat.attributes())
+        new_feat.setGeometry(seg_b)
+        lyr.addFeature(new_feat)
+
+        lyr.triggerRepaint()
+        brk = geom.interpolate(break_d).asPoint()
+        self._log(
+            f"  Broke '{lyr.name()}' fid {feat.id()}"
+            f"  at ({brk.x():.3f}, {brk.y():.3f})",
+            "#88ff88"
+        )
+
+    def _dispatch(self, sem):
+        pass
 
     def activate(self):
         super().activate()
-        self._transition(ToolState.ACTING)
+        self._canvas.setFocus()
+        self._log("BREAK  ──  click any line to split it  (both halves kept)  (Esc=exit)", "#aaddff")
 
-    def _on_event(self, sem: SemanticEvent):
-        if sem.type == EventType.KEY_CHAR:
-            if sem.char == '2': self._mode = "2pt"
-            elif sem.char == '1': self._mode = "1pt"
+    def deactivate(self):
+        self._rm(self._hover_band)
+        self._rm(self._pt_band)
+        self._hint.hide()
+        super().deactivate()
 
-        elif sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
-            if sem.point is None:
-                return
-            if self._target_geom is None:
-                self._pick_object(sem.point)
+    def canvasMoveEvent(self, event):
+        map_pt = self.toMapCoordinates(event.pos())
+        lyr, feat = self._find_line_near(map_pt)
+        if feat and not feat.geometry().isMultipart():
+            self._hover_band.setToGeometry(feat.geometry(), lyr)
+            self._hover_band.setVisible(True)
+            d    = feat.geometry().lineLocatePoint(QgsGeometry.fromPointXY(map_pt))
+            near = feat.geometry().interpolate(d)
+            if not near.isEmpty():
+                self._pt_band.setToGeometry(near, lyr)
+                self._pt_band.setVisible(True)
             else:
-                self._handle_break_point(sem.point)
-
-        elif sem.type == EventType.CONFIRM:
-            self._reset()
-
-    def _pick_object(self, pt: QgsPointXY):
-        sm = self._ctx.storage_manager
-        tol = 0.02
-        rect = QgsRectangle(pt.x()-tol, pt.y()-tol, pt.x()+tol, pt.y()+tol)
-        lyr = sm.lines_layer
-        if not (lyr and lyr.isValid()):
-            return
-        for feat in lyr.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
-            self._target_layer = lyr
-            self._target_fid   = feat.id()
-            self._target_geom  = feat.geometry()
-            return
-
-    def _handle_break_point(self, pt: QgsPointXY):
-        if self._mode == "1pt":
-            self._do_break_1pt(pt)
-            self._reset()
+                self._pt_band.setVisible(False)
         else:
-            if self._bp1 is None:
-                self._bp1 = pt
+            self._hover_band.setVisible(False)
+            self._pt_band.setVisible(False)
+        self._show_hint(event.pos())
+
+    def canvasPressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            map_pt = self.toMapCoordinates(event.pos())
+            lyr, feat = self._find_line_near(map_pt)
+            if feat and not feat.geometry().isMultipart():
+                self._apply_break(map_pt)
             else:
-                self._do_break_2pt(self._bp1, pt)
-                self._reset()
-
-    def _do_break_1pt(self, pt: QgsPointXY):
-        snap_pt = QgsGeometry.fromPointXY(pt)
-        inter   = self._target_geom.intersection(
-            snap_pt.buffer(0.001, 4)
-        )
-        if inter.isEmpty():
+                self._go_home()
             return
-        parts = _split_at_intersection(self._target_geom, snap_pt)
-        self._write_parts(parts)
-
-    def _do_break_2pt(self, p1: QgsPointXY, p2: QgsPointXY):
-        pts = [QgsPointXY(v.x(), v.y()) for v in self._target_geom.vertices()]
-        # find indices nearest to p1 and p2
-        idx1 = _nearest_pt_index(pts, p1)
-        idx2 = _nearest_pt_index(pts, p2)
-        if idx1 > idx2:
-            idx1, idx2 = idx2, idx1
-        part = pts[:idx1+1] + pts[idx2:]
-        if len(part) >= 2:
-            g = QgsGeometry.fromPolylineXY(part)
-            g.convertToMultiType()
-            if not self._target_layer.isEditable():
-                self._target_layer.startEditing()
-            self._target_layer.changeGeometry(self._target_fid, g)
-
-    def _write_parts(self, parts: list):
-        if not parts:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
-        lyr = self._target_layer
-        if not lyr.isEditable():
-            lyr.startEditing()
-        first = True
-        for p in parts:
-            if p.isEmpty():
-                continue
-            p.convertToMultiType()
-            if first:
-                lyr.changeGeometry(self._target_fid, p)
-                first = False
-            else:
-                feat = QgsFeature(lyr.fields())
-                feat.setGeometry(p)
-                feat["cad_layer"] = self._ctx.active_cad_layer
-                lyr.addFeature(feat)
+        self._apply_break(self.toMapCoordinates(event.pos()))
+        self._canvas.setFocus()
 
-    def _reset(self):
-        self._target_layer = None
-        self._target_fid   = None
-        self._target_geom  = None
-        self._bp1          = None
-
-    def _on_cancel_hook(self):
-        self._reset()
-
-
-def _nearest_pt_index(pts: list, pt: QgsPointXY) -> int:
-    import math
-    best_i, best_d = 0, float('inf')
-    for i, p in enumerate(pts):
-        d = math.hypot(p.x()-pt.x(), p.y()-pt.y())
-        if d < best_d:
-            best_d = d
-            best_i = i
-    return best_i
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self._go_home()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self._go_home()

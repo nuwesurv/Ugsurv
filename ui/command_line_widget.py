@@ -13,6 +13,7 @@ command window.
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QTextEdit, QLabel, QListWidget, QListWidgetItem,
+    QApplication,
 )
 from qgis.PyQt.QtCore import Qt, pyqtSignal, QEvent
 from qgis.PyQt.QtGui import QFont, QColor, QPalette
@@ -102,6 +103,14 @@ class CommandLineWidget(QDockWidget):
         self._popup.itemClicked.connect(self._on_suggestion_clicked)
         self._popup.hide()
 
+        # Global key interceptor: capture Up/Down/Enter/Esc while popup is open,
+        # regardless of which widget currently has keyboard focus.
+        QApplication.instance().installEventFilter(self)
+
+    def closeEvent(self, event):
+        QApplication.instance().removeEventFilter(self)
+        super().closeEvent(event)
+
     # ── public API ────────────────────────────────────────────────────────
     def register_ui_command(self, *aliases: str, callback):
         """Register aliases (e.g. 'SNAP', 'OS') that open a UI dialog."""
@@ -125,6 +134,12 @@ class CommandLineWidget(QDockWidget):
     def log(self, text: str, color: str = "#cccccc"):
         try:
             self._log.append(f'<span style="color:{color}">{text}</span>')
+        except RuntimeError:
+            pass
+
+    def clear_log(self):
+        try:
+            self._log.clear()
         except RuntimeError:
             pass
 
@@ -258,49 +273,73 @@ class CommandLineWidget(QDockWidget):
                 self._dispatcher.dispatch(text)
 
     def eventFilter(self, obj, event):
-        if obj is self._input and event.type() == QEvent.Type.KeyPress:
+        if event.type() == QEvent.Type.KeyPress:
             key = event.key()
 
-            # Tab → complete from popup (or do nothing)
-            if key == Qt.Key.Key_Tab:
-                if self._popup.isVisible():
-                    self._popup_complete()
-                return True
-
-            # Escape → hide popup and clear any typed text.
-            # If input is already empty, pass through so QGIS / SelectTool
-            # can handle it (e.g. deselect features).
-            if key == Qt.Key.Key_Escape:
-                if self._popup.isVisible():
-                    self._popup_hide()
-                if self._input.text():
-                    self._input.clear()
-                    return True
-
-            # Up → popup navigation if open, else history
-            if key == Qt.Key.Key_Up:
-                if self._popup.isVisible():
+            # ── Global popup navigation (any focused widget) ──────────────
+            # Only intercept when the popup is visible AND focus is NOT on
+            # _input (that case is handled by the _input branch below).
+            if self._popup.isVisible() and obj is not self._input:
+                if key == Qt.Key.Key_Up:
                     row = self._popup.currentRow()
                     self._popup.setCurrentRow(max(0, row - 1))
                     return True
-                self._navigate_history(-1)
-                return True
-
-            # Down → popup navigation if open, else history
-            if key == Qt.Key.Key_Down:
-                if self._popup.isVisible():
+                if key == Qt.Key.Key_Down:
                     row = self._popup.currentRow()
                     self._popup.setCurrentRow(
                         min(self._popup.count() - 1, row + 1)
                     )
                     return True
-                self._navigate_history(1)
-                return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter,
+                           Qt.Key.Key_Space):
+                    self._popup_complete()
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    self._popup_hide()
+                    return True
 
-            # Space → execute (same as Enter)
-            if key == Qt.Key.Key_Space:
-                self._on_enter()
-                return True
+            # ── Input-field-specific handling ─────────────────────────────
+            if obj is self._input:
+                # Tab → complete from popup (or do nothing)
+                if key == Qt.Key.Key_Tab:
+                    if self._popup.isVisible():
+                        self._popup_complete()
+                    return True
+
+                # Escape → hide popup and clear any typed text.
+                # If input is already empty, pass through so QGIS / SelectTool
+                # can handle it (e.g. deselect features).
+                if key == Qt.Key.Key_Escape:
+                    if self._popup.isVisible():
+                        self._popup_hide()
+                    if self._input.text():
+                        self._input.clear()
+                        return True
+
+                # Up → popup navigation if open, else history
+                if key == Qt.Key.Key_Up:
+                    if self._popup.isVisible():
+                        row = self._popup.currentRow()
+                        self._popup.setCurrentRow(max(0, row - 1))
+                        return True
+                    self._navigate_history(-1)
+                    return True
+
+                # Down → popup navigation if open, else history
+                if key == Qt.Key.Key_Down:
+                    if self._popup.isVisible():
+                        row = self._popup.currentRow()
+                        self._popup.setCurrentRow(
+                            min(self._popup.count() - 1, row + 1)
+                        )
+                        return True
+                    self._navigate_history(1)
+                    return True
+
+                # Space → execute (same as Enter)
+                if key == Qt.Key.Key_Space:
+                    self._on_enter()
+                    return True
 
         return super().eventFilter(obj, event)
 

@@ -16,6 +16,7 @@ class ToolContext:
         self.canvas = None                         # QgsMapCanvas, set by plugin_main
         self.iface = None                          # QgsInterface, set by plugin_main
         self.dyn_widget = None                     # DynamicInputWidget, set by plugin_main
+        self.cmd_dock = None                       # CommandLineWidget, set by plugin_main
 
     # convenience ----------------------------------------------------------
     @property

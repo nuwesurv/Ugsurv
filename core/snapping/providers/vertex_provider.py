@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""VertexProvider — snaps to vertices (endpoints/nodes) of line and polygon features.
+"""VertexProvider — snaps to vertices (endpoints/nodes) of line features.
 
 Point features are handled by PointProvider with SnapType.POINT.
 """
@@ -26,22 +26,32 @@ class VertexProvider:
         return results
 
 
+def _layer_ok(lyr) -> bool:
+    """Safely test a layer reference — guards against deleted C++ objects."""
+    if lyr is None:
+        return False
+    try:
+        return lyr.isValid()
+    except RuntimeError:
+        return False
+
+
 def _line_polygon_layers(storage):
-    """Lines and polygons only — for vertex/endpoint snapping."""
+    """Lines only — for vertex/endpoint snapping."""
     layers = []
-    for attr in ("lines_layer", "polygons_layer"):
+    for attr in ("lines_layer",):
         lyr = getattr(storage, attr, None)
-        if lyr and lyr.isValid():
+        if _layer_ok(lyr):
             layers.append(lyr)
     return layers
 
 
 def _geometry_layers(storage):
-    """All three geometry layers — re-exported for use by other providers."""
+    """All geometry layers — re-exported for use by other providers."""
     layers = []
-    for attr in ("points_layer", "lines_layer", "polygons_layer"):
+    for attr in ("points_layer", "lines_layer"):
         lyr = getattr(storage, attr, None)
-        if lyr and lyr.isValid():
+        if _layer_ok(lyr):
             layers.append(lyr)
     return layers
 

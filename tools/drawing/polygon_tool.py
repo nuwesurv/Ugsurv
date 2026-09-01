@@ -3,6 +3,7 @@
 PolygonTool (regular polygon) — specify side count → click center →
 click/type circumradius → commit.
 
+Stored as a closed LineString in the lines layer.
 Default: inscribed (circumradius).  'I' key toggles to edge-midpoint
 (inradius) mode.
 """
@@ -16,10 +17,10 @@ from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 
 
-def _regular_polygon(center: QgsPointXY, radius: float, sides: int,
-                     inscribed: bool = True) -> QgsGeometry:
+def _regular_polygon_ring(center: QgsPointXY, radius: float, sides: int,
+                          inscribed: bool = True) -> QgsGeometry:
+    """Return a closed LineString for the regular polygon boundary."""
     if not inscribed:
-        # inradius → circumradius
         radius = radius / math.cos(math.pi / sides)
     pts = []
     for i in range(sides + 1):
@@ -28,9 +29,22 @@ def _regular_polygon(center: QgsPointXY, radius: float, sides: int,
             center.x() + radius * math.cos(a),
             center.y() + radius * math.sin(a),
         ))
-    geom = QgsGeometry.fromPolygonXY([pts])
-    geom.convertToMultiType()
-    return geom
+    return QgsGeometry.fromPolylineXY(pts)
+
+
+def _regular_polygon(center: QgsPointXY, radius: float, sides: int,
+                     inscribed: bool = True) -> QgsGeometry:
+    """Return a filled polygon for rubber-band preview only."""
+    if not inscribed:
+        radius = radius / math.cos(math.pi / sides)
+    pts = []
+    for i in range(sides + 1):
+        a = 2 * math.pi * i / sides
+        pts.append(QgsPointXY(
+            center.x() + radius * math.cos(a),
+            center.y() + radius * math.sin(a),
+        ))
+    return QgsGeometry.fromPolygonXY([pts])
 
 
 class PolygonTool(BaseTool):
@@ -87,8 +101,8 @@ class PolygonTool(BaseTool):
     def _commit(self, center: QgsPointXY, radius: float):
         if radius <= 0:
             return
-        geom = _regular_polygon(center, radius, self._sides, self._inscribed)
-        layer = self._ctx.storage_manager.polygons_layer
+        geom = _regular_polygon_ring(center, radius, self._sides, self._inscribed)
+        layer = self._ctx.storage_manager.lines_layer
         if layer is None:
             return
         if not layer.isEditable():

@@ -43,7 +43,7 @@ class RemoveVertexTool(BaseTool):
         sm = self._ctx.storage_manager
         tol = 0.02
         rect = QgsRectangle(pt.x()-tol, pt.y()-tol, pt.x()+tol, pt.y()+tol)
-        for attr in ("lines_layer", "polygons_layer"):
+        for attr in ("lines_layer",):
             lyr = getattr(sm, attr, None)
             if not (lyr and lyr.isValid()):
                 continue

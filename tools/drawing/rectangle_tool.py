@@ -2,7 +2,7 @@
 """
 RectangleTool — click corner 1 → live preview → click corner 2 → commit.
 
-Produces a closed MultiPolygon.
+Produces a closed LineString stored in the lines layer.
 """
 
 from qgis.PyQt.QtCore import Qt
@@ -61,9 +61,10 @@ class RectangleTool(BaseTool):
         self._preview_rb.setToGeometry(geom)
 
     def _commit(self, c1: QgsPointXY, c2: QgsPointXY):
-        geom = QgsGeometry.fromRect(QgsRectangle(c1, c2))
-        geom.convertToMultiType()
-        layer = self._ctx.storage_manager.polygons_layer
+        poly_geom = QgsGeometry.fromRect(QgsRectangle(c1, c2))
+        ring = poly_geom.asPolygon()[0]   # exterior ring (closed, last == first)
+        geom = QgsGeometry.fromPolylineXY(ring)
+        layer = self._ctx.storage_manager.lines_layer
         if layer is None:
             return
         if not layer.isEditable():

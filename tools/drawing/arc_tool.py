@@ -113,7 +113,6 @@ class ArcTool(BaseTool):
         if len(pts) < 2:
             return
         geom = QgsGeometry.fromPolylineXY(pts)
-        geom.convertToMultiType()
         layer = self._ctx.storage_manager.lines_layer
         if layer is None:
             return

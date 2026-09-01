@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 CadLayers — manages the in-memory cad_layers table and drives the
-rule-based renderer applied to the three geometry QGIS layers.
+rule-based renderer applied to the geometry QGIS layers.
 
 The cad_layers concept is AutoCAD-style layering (color/linetype/
-visibility/lock) that cuts across the three geometry tables (points/lines/
-polygons).  It is NOT a QGIS layer — it is stored as a non-spatial table
-in the GeoPackage alongside the three geometry tables.
+visibility/lock) that cuts across the two geometry tables (points/lines).
+It is NOT a QGIS layer — stored as a non-spatial table in the GeoPackage.
 """
 
 from dataclasses import dataclass, field
@@ -135,7 +134,7 @@ class CadLayerManager:
         renderer = QgsRuleBasedRenderer(root)
         return renderer
 
-    def apply_renderer_to_layers(self, points_layer, lines_layer, poly_layer):
+    def apply_renderer_to_layers(self, points_layer, lines_layer):
         lyrs = self.all_layers()
         if points_layer:
             points_layer.setRenderer(self.build_rule_renderer("Point", lyrs))
@@ -143,6 +142,3 @@ class CadLayerManager:
         if lines_layer:
             lines_layer.setRenderer(self.build_rule_renderer("Line", lyrs))
             lines_layer.triggerRepaint()
-        if poly_layer:
-            poly_layer.setRenderer(self.build_rule_renderer("Polygon", lyrs))
-            poly_layer.triggerRepaint()

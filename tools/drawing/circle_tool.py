@@ -2,8 +2,8 @@
 """
 CircleTool — click center → live radius preview → click/type radius → commit.
 
-Stored as a densified polygon (MultiPolygon) since QGIS vectors don't
-natively persist true circular arcs.  Supports typed-radius entry.
+Stored as a densified closed LineString in the lines layer.
+Supports typed-radius entry.
 
 2-point and 3-point variants are accessible via key press (2 / 3) mid-command.
 """
@@ -20,7 +20,8 @@ from ...core import style as _style
 _SEGMENTS = 72   # polygon approximation of circle
 
 
-def _circle_polygon(center: QgsPointXY, radius: float) -> QgsGeometry:
+def _circle_ring(center: QgsPointXY, radius: float) -> QgsGeometry:
+    """Return a closed LineString approximating a circle."""
     pts = []
     for i in range(_SEGMENTS + 1):
         a = 2 * math.pi * i / _SEGMENTS
@@ -28,9 +29,19 @@ def _circle_polygon(center: QgsPointXY, radius: float) -> QgsGeometry:
             center.x() + radius * math.cos(a),
             center.y() + radius * math.sin(a),
         ))
-    geom = QgsGeometry.fromPolygonXY([pts])
-    geom.convertToMultiType()
-    return geom
+    return QgsGeometry.fromPolylineXY(pts)
+
+
+def _circle_polygon(center: QgsPointXY, radius: float) -> QgsGeometry:
+    """Return a filled polygon for rubber-band preview only."""
+    pts = []
+    for i in range(_SEGMENTS + 1):
+        a = 2 * math.pi * i / _SEGMENTS
+        pts.append(QgsPointXY(
+            center.x() + radius * math.cos(a),
+            center.y() + radius * math.sin(a),
+        ))
+    return QgsGeometry.fromPolygonXY([pts])
 
 
 class CircleTool(BaseTool):
@@ -116,8 +127,8 @@ class CircleTool(BaseTool):
     def _commit_circle(self, center: QgsPointXY, radius: float):
         if radius <= 0:
             return
-        geom = _circle_polygon(center, radius)
-        layer = self._ctx.storage_manager.polygons_layer
+        geom = _circle_ring(center, radius)
+        layer = self._ctx.storage_manager.lines_layer
         if layer is None:
             return
         if not layer.isEditable():

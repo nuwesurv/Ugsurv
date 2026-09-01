@@ -81,7 +81,6 @@ class LineTool(BaseTool):
         if abs(p1.x() - p2.x()) < 1e-10 and abs(p1.y() - p2.y()) < 1e-10:
             return  # zero-length, skip
         geom = QgsGeometry.fromPolylineXY([p1, p2])
-        geom.convertToMultiType()
         factory = self._ctx.storage_manager
         ef = self._ctx.entity_factory if hasattr(self._ctx, 'entity_factory') else None
         if ef:

@@ -181,7 +181,7 @@ class GripEditTool(BaseTool):
             old_pt.x()+tol, old_pt.y()+tol,
         )
         sm = self._ctx.storage_manager
-        for attr in ("points_layer", "lines_layer", "polygons_layer"):
+        for attr in ("points_layer", "lines_layer"):
             lyr = getattr(sm, attr, None)
             if not (lyr and lyr.isValid()):
                 continue
@@ -212,13 +212,16 @@ def _replace_vertex(geom: QgsGeometry, idx: int, new_pt: QgsPointXY) -> QgsGeome
     pts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
     if 0 <= idx < len(pts):
         pts[idx] = new_pt
-    wtype = int(QgsWkbTypes.geometryType(geom.wkbType()))
+    wtype    = int(QgsWkbTypes.geometryType(geom.wkbType()))
+    is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
     if wtype == 0:   # Point
-        g = QgsGeometry.fromMultiPointXY(pts)
+        g = QgsGeometry.fromMultiPointXY(pts) if is_multi else QgsGeometry.fromPointXY(pts[0])
     elif wtype == 1:  # Line
         g = QgsGeometry.fromPolylineXY(pts)
-        g.convertToMultiType()
+        if is_multi:
+            g.convertToMultiType()
     else:             # Polygon
         g = QgsGeometry.fromPolygonXY([pts])
-        g.convertToMultiType()
+        if is_multi:
+            g.convertToMultiType()
     return g

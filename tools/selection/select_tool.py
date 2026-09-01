@@ -163,6 +163,82 @@ class SelectTool(BaseTool):
             self._pick_at_point(sem.point, shift=False)
         elif sem.type == EventType.SHIFT_CLICK:
             self._pick_at_point(sem.point, shift=True)
+        elif sem.type == EventType.DELETE:
+            if self._hot_grip is not None:
+                self._remove_armed_vertex()
+            else:
+                self._delete_selected()
+
+    def _remove_armed_vertex(self):
+        grip = self._hot_grip
+        self._hot_grip      = None
+        self._drag_geom_wkt = None
+        self._last_snap_pt  = None
+        self._clear_rubber_bands()
+
+        layer = QgsProject.instance().mapLayer(grip.layer_id)
+        if layer is None:
+            self._show_overlay()
+            return
+        feat = layer.getFeature(grip.fid)
+        if not feat.isValid():
+            self._show_overlay()
+            return
+        geom  = feat.geometry()
+        wtype = int(QgsWkbTypes.geometryType(geom.wkbType()))
+
+        if wtype == 0:  # Point — delete the whole feature
+            if not layer.isEditable():
+                layer.startEditing()
+            layer.deleteFeature(grip.fid)
+            self._ctx.selection_model.remove(grip.layer_id, grip.fid)
+            # selectionChanged fires → overlay rebuilds automatically
+            self._rebuild_grips()
+            return
+
+        pts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
+        if wtype == 1 and len(pts) <= 2:
+            self._show_overlay()
+            return
+        if wtype == 2 and len(pts) <= 4:
+            self._show_overlay()
+            return
+
+        del pts[grip.vertex_idx]
+        is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
+
+        if wtype == 1:
+            new_geom = QgsGeometry.fromPolylineXY(pts)
+            if is_multi:
+                new_geom.convertToMultiType()
+        else:
+            new_geom = QgsGeometry.fromPolygonXY([pts])
+            if is_multi:
+                new_geom.convertToMultiType()
+
+        if not layer.isEditable():
+            layer.startEditing()
+        layer.changeGeometry(grip.fid, new_geom)
+        # Rebuild overlay AFTER changeGeometry so it reads the updated shape
+        self._show_overlay()
+        self._rebuild_grips()
+
+    def _delete_selected(self):
+        sel = self._ctx.selection_model
+        if sel.is_empty():
+            return
+        count = len(sel)
+        for lid, fid in list(sel):
+            layer = QgsProject.instance().mapLayer(lid)
+            if layer is None:
+                continue
+            if not layer.isEditable():
+                layer.startEditing()
+            layer.deleteFeature(fid)
+        sel.clear()
+        cmd_dock = getattr(self._ctx, 'cmd_dock', None)
+        if cmd_dock:
+            cmd_dock.log(f"Deleted {count} feature{'s' if count != 1 else ''}.", "#ff8888")
 
     def _on_hover(self, sem: SemanticEvent):
         pass
@@ -346,7 +422,7 @@ class SelectTool(BaseTool):
     def _all_geometry_layers(self):
         sm = self._ctx.storage_manager
         result = []
-        for attr in ("points_layer", "lines_layer", "polygons_layer"):
+        for attr in ("points_layer", "lines_layer"):
             lyr = getattr(sm, attr, None)
             if lyr and lyr.isValid():
                 result.append((lyr.id(), lyr))

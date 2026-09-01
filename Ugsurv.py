@@ -239,6 +239,7 @@ class Ugsurv:
         cmd_dock = CommandLineWidget(dispatcher, translator, mw)
         iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, cmd_dock)
         self._cmd_dock = cmd_dock
+        ctx.cmd_dock = cmd_dock
 
         dyn = DynamicInputWidget(canvas, translator, canvas)
         self._dyn_widget = dyn
@@ -337,9 +338,12 @@ class Ugsurv:
             cmd_dock.log("─" * 44, "#4488cc")
             cmd_dock.log("  snap_settings      SNAP  OS  OSNAP", "#aaddff")
             cmd_dock.log("  help               HELP  ?", "#aaddff")
+            cmd_dock.log("  clear log          CLS  CLEAR", "#aaddff")
             cmd_dock.log("─" * 44, "#4488cc")
 
         cmd_dock.register_ui_command("HELP", "?", callback=_on_help)
+
+        cmd_dock.register_ui_command("CLS", "CLEAR", callback=cmd_dock.clear_log)
 
         # 5. Wire InputBuffer to both display widgets ─────────────────────
         buf.textChanged.connect(dyn.on_buffer_text_changed)
@@ -438,7 +442,6 @@ class Ugsurv:
                 cad_lyr_mgr.apply_renderer_to_layers(
                     storage.points_layer,
                     storage.lines_layer,
-                    storage.polygons_layer,
                 )
         storage.gatingChanged.connect(_reload_cad_layers)
         self._reload_layers_slot = _reload_cad_layers
@@ -684,9 +687,10 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.selection.stretch_tool    import StretchTool
     from .tools.vertex_edit.grip_edit_tool     import GripEditTool
     from .tools.vertex_edit.add_vertex_tool    import AddVertexTool
-    from .tools.vertex_edit.remove_vertex_tool import RemoveVertexTool
     from .tools.vertex_edit.break_tool         import BreakTool
     from .tools.vertex_edit.join_tool          import JoinTool
+    from .tools.modify.chamfer_tool        import ChamferTool
+    from .tools.modify.explode_tool        import ExplodeTool
     from .tools.annotation.dimension_tool import DimensionTool
     from .tools.annotation.text_tool      import TextTool
 
@@ -703,8 +707,9 @@ def _make_tool(key: str, canvas, ctx, translator):
         "erase":         EraseTool,
         "stretch":       StretchTool,
         "grip_edit":     GripEditTool,    "add_vertex":    AddVertexTool,
-        "remove_vertex": RemoveVertexTool,"break":         BreakTool,
+        "break":         BreakTool,
         "join":          JoinTool,
+        "chamfer":       ChamferTool,     "explode":       ExplodeTool,
         "dimension":     DimensionTool,   "text":          TextTool,
     }
     cls = _MAP.get(key)
@@ -739,9 +744,10 @@ def _register_commands(registry):
         ("stretch",       "STRETCH", "S"),
         ("grip_edit",     "GRIPS",   "V"),
         ("add_vertex",    "ADDV",    "AV"),
-        ("remove_vertex", "REMV",    "RV"),
         ("break",         "BREAK",   "BR"),
         ("join",          "JOIN",    "J"),
+        ("chamfer",       "CHAMFER", "CH"),
+        ("explode",       "EXPLODE", "XP"),
         ("dimension",     "DIM",     "DIMLINEAR"),
         ("text",          "TEXT",    "T", "MTEXT"),
     ]:
