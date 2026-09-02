@@ -3,7 +3,7 @@
 SnapEngine — queries all active SnapProviders within tolerance on each mouse
 move, collects candidates, resolves to the best match.
 
-All providers default to OFF (§9).  The SnapSettingsDock drives set_enabled().
+All providers default to ON.  The SnapSettingsDialog drives set_enabled().
 
 Pipeline (§9):
     canvasMoveEvent → SnapEngine.resolve(raw_point, canvas)
@@ -23,6 +23,25 @@ class SnapResult:
     point:     QgsPointXY
     snap_type: SnapType
     distance:  float        # map units
+
+
+# Tier 1 — exact discrete points: distance wins within the tier.
+# Tier 2 — computed intersections.
+# Tier 3 — relational (direction-dependent): perpendicular, extension.
+# Tier 4 — sliding: nearest fires only when nothing above matched.
+# Tier 5 — background grid: last resort.
+_SNAP_TIER: dict[SnapType, int] = {
+    SnapType.VERTEX:        1,
+    SnapType.POINT:         1,
+    SnapType.SELF:          1,
+    SnapType.MIDPOINT:      1,
+    SnapType.CENTER:        1,
+    SnapType.INTERSECTION:  2,
+    SnapType.PERPENDICULAR: 3,
+    SnapType.EXTENSION:     3,
+    SnapType.NEAREST:       4,
+    SnapType.GRID:          5,
+}
 
 
 class SnapEngine:
@@ -55,12 +74,12 @@ class SnapEngine:
             hits = provider.query(raw_point, search_rect, self._storage)
             candidates.extend(hits)
 
-        if not candidates:
+        within = [r for r in candidates if r.distance <= tolerance_mu]
+        if not within:
             return None
 
-        # nearest wins; no hardcoded priority
-        best = min(candidates, key=lambda r: r.distance)
-        return best if best.distance <= tolerance_mu else None
+        # Sort by (tier, distance): higher tier loses even if closer to cursor.
+        return min(within, key=lambda r: (_SNAP_TIER.get(r.snap_type, 99), r.distance))
 
     @staticmethod
     def _px_to_map_units(px: int, canvas) -> float:

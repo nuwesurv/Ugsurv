@@ -31,8 +31,9 @@ class PolylineTool(BaseTool):
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas, tool_context, input_translator)
         self._points: list[QgsPointXY] = []
-        self._preview_rb = None
-        self._arc_mode   = False
+        self._committed_rb = None  # solid — all already-clicked segments
+        self._preview_rb   = None  # dashed — last point → cursor only
+        self._arc_mode     = False
         # dimensional-indicator graphics (created lazily, cleared on reset)
         self._arc_rb    = None   # QgsRubberBand  — angle arc
         self._ref_rb    = None   # QgsRubberBand  — horizontal reference line
@@ -67,11 +68,14 @@ class PolylineTool(BaseTool):
                 self._undo_last_vertex()
 
         elif sem.type == EventType.VALUE_ENTERED:
-            pass
+            pt = self._try_extension_distance(sem.value)
+            if pt:
+                self._add_point(pt)
 
     def _on_hover(self, sem: SemanticEvent):
         if self._points and sem.point:
             self._update_preview(sem.point)
+        self._update_extension_guide(sem.snap_type, sem.point)
 
     def _on_undo_step(self):
         self._undo_last_vertex()
@@ -90,23 +94,36 @@ class PolylineTool(BaseTool):
             self._request_input("polar", "Specify next point:")
         elif len(self._points) > 1:
             self._request_input("polar", "Specify next point [U=undo C=close]:")
+        self._update_committed()
 
     def _undo_last_vertex(self):
         if self._points:
             self._points.pop()
+        self._update_committed()
         self._update_preview(None)
 
+    def _update_committed(self):
+        """Solid rubber band showing all already-clicked segments."""
+        if self._committed_rb is None:
+            self._committed_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH + 1
+            )
+            self._committed_rb.setLineStyle(Qt.PenStyle.SolidLine)
+        self._committed_rb.reset(QgsWkbTypes.LineGeometry)
+        if len(self._points) >= 2:
+            for i, p in enumerate(self._points):
+                self._committed_rb.addPoint(p, i == len(self._points) - 1)
+
     def _update_preview(self, cursor_pt: QgsPointXY | None):
+        """Dashed rubber band: last committed point → current cursor only."""
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
                 QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH
             )
         self._preview_rb.reset(QgsWkbTypes.LineGeometry)
-        pts = list(self._points)
-        if cursor_pt:
-            pts.append(cursor_pt)
-        for i, p in enumerate(pts):
-            self._preview_rb.addPoint(p, i == len(pts) - 1)
+        if cursor_pt and self._points:
+            self._preview_rb.addPoint(self._points[-1], False)
+            self._preview_rb.addPoint(cursor_pt, True)
 
         if cursor_pt and len(self._points) >= 1:
             self._draw_dim_indicators(self._points[-1], cursor_pt)
@@ -236,7 +253,9 @@ class PolylineTool(BaseTool):
         self._arc_mode = False
         self._clear_dim_indicators()
         self._clear_rubber_bands()
-        self._preview_rb = None
+        self._committed_rb = None
+        self._preview_rb   = None
+        self._ext_guide_rb = None
         if self._ctx.snap_engine:
             for prov in self._ctx.snap_engine._providers.values():
                 if hasattr(prov, 'clear'):

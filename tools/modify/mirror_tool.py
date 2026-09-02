@@ -12,6 +12,10 @@ from ._modify_base import _ModifyBase, selected_features
 from ...core.base_tool import ToolState
 from ...core.events import SemanticEvent, EventType
 from ...core import style as _style
+from ...core.circle_utils import (
+    is_circle, circle_params, build_circle_geom,
+    update_circle_attrs, set_circle_attrs_on_feature,
+)
 from qgis.core import QgsFeature
 
 
@@ -28,6 +32,11 @@ def _mirror_point(pt: QgsPointXY, p1: QgsPointXY, p2: QgsPointXY) -> QgsPointXY:
 
 
 def _mirror_geometry(geom: QgsGeometry, p1: QgsPointXY, p2: QgsPointXY) -> QgsGeometry:
+    if is_circle(geom):
+        center, radius = circle_params(geom)
+        new_center = _mirror_point(center, p1, p2)
+        return build_circle_geom(new_center, radius)
+
     verts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
     mirrored = [_mirror_point(v, p1, p2) for v in verts]
     wtype = int(QgsWkbTypes.geometryType(geom.wkbType()))
@@ -70,15 +79,22 @@ class MirrorTool(_ModifyBase):
         if self._mirror_p1 is None or self._mirror_p2 is None:
             return
         for layer, feat in selected_features(self._ctx):
-            new_geom = _mirror_geometry(feat.geometry(), self._mirror_p1, self._mirror_p2)
+            orig_geom = feat.geometry()
+            new_geom  = _mirror_geometry(orig_geom, self._mirror_p1, self._mirror_p2)
             if not layer.isEditable():
                 layer.startEditing()
             if erase:
                 layer.changeGeometry(feat.id(), new_geom)
+                if is_circle(orig_geom):
+                    new_center, new_radius = circle_params(new_geom)
+                    update_circle_attrs(layer, feat.id(), new_center, new_radius)
             else:
                 new_feat = QgsFeature(layer.fields())
                 new_feat.setGeometry(new_geom)
-                new_feat["cad_layer"] = feat["cad_layer"]
+                new_feat.setAttributes(feat.attributes())
+                if is_circle(orig_geom):
+                    new_center, new_radius = circle_params(new_geom)
+                    set_circle_attrs_on_feature(new_feat, new_center, new_radius)
                 layer.addFeature(new_feat)
         self._ctx.selection_model.clear()
         self._clear_rubber_bands()

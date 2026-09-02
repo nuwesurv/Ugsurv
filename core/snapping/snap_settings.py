@@ -10,10 +10,17 @@ class SnapSettings:
     DEFAULT_TOLERANCE_PX = _style._SNAP_PX
 
     def __init__(self):
-        # vertex (endpoint) and point are on by default; everything else off
         self._enabled: dict[str, bool] = {
-            "vertex": True,
-            "point":  True,
+            "vertex":        True,
+            "point":         True,
+            "midpoint":      True,
+            "center":        True,
+            "intersection":  True,
+            "perpendicular": True,
+            "extension":     True,
+            "grid":          False,
+            "self":          True,
+            "nearest":       True,
         }
         self.tolerance_px: int = self.DEFAULT_TOLERANCE_PX
 

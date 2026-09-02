@@ -19,7 +19,7 @@ from qgis.gui import QgsVertexMarker
 _CC_COLOR = QColor(66, 135, 245)    # unified blue for all snap indicators
 _CC_SIZE  = 9                       # icon size, pixels
 _CC_PEN_W = 2                       # pen width
-_SNAP_PX  = 20                      # pixel radius for snap search tolerance
+_SNAP_PX  = 10                      # pixel radius for snap search tolerance
 
 SNAP_ICON_SIZE = _CC_SIZE
 SNAP_PEN_WIDTH = _CC_PEN_W

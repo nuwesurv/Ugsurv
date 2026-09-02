@@ -27,6 +27,9 @@ from qgis.core import (
 from ...core.events import EventType
 from ...core import style as _style
 from ..layer_utils import polyline_attrs
+from ...core.circle_utils import (
+    is_circle, circle_params, build_circle_geom, set_circle_attrs_on_feature,
+)
 
 _C_PREVIEW  = _style.RB_PREVIEW
 _C_HOVER    = _style.RB_HOVER
@@ -61,6 +64,7 @@ class OffsetTool(QgsMapTool):
 
         self._state       = _ST_SELECT
         self._sel_layer   = None
+        self._sel_fid     = None
         self._sel_geom    = None
         self._last_map_pt = None
 
@@ -221,6 +225,14 @@ class OffsetTool(QgsMapTool):
         return 1 if cross >= 0 else -1
 
     def _build_offset_geom(self, geom, dist, map_pt):
+        if is_circle(geom):
+            center, radius = circle_params(geom)
+            cursor_dist = math.hypot(map_pt.x() - center.x(), map_pt.y() - center.y())
+            new_r = radius + dist if cursor_dist >= radius else radius - dist
+            if new_r <= 0:
+                return None
+            return build_circle_geom(center, new_r)
+
         if geom.isMultipart():
             return None
         pts = geom.asPolyline()
@@ -269,6 +281,7 @@ class OffsetTool(QgsMapTool):
 
     def _select_feature(self, lyr, feat):
         self._sel_layer = lyr
+        self._sel_fid   = feat.id()
         self._sel_geom  = QgsGeometry(feat.geometry())
         self._sel_band.setToGeometry(self._sel_geom, lyr)
         self._sel_band.setVisible(True)
@@ -279,6 +292,7 @@ class OffsetTool(QgsMapTool):
 
     def _deselect(self):
         self._sel_layer = None
+        self._sel_fid   = None
         self._sel_geom  = None
         self._sel_band.setVisible(False)
         self._preview_band.setVisible(False)
@@ -296,13 +310,20 @@ class OffsetTool(QgsMapTool):
             self._log("  Could not compute offset — multipart lines not supported", "#ffaaaa")
             return
 
-        lyr    = self._sel_layer
-        nf     = QgsFeature(lyr.fields())
+        lyr = self._sel_layer
+        nf  = QgsFeature(lyr.fields())
         nf.setGeometry(off_geom)
-        for fname, val in polyline_attrs(off_geom).items():
-            idx = lyr.fields().indexOf(fname)
-            if idx >= 0:
-                nf.setAttribute(idx, val)
+        if is_circle(self._sel_geom):
+            src_feat = lyr.getFeature(self._sel_fid)
+            if src_feat.isValid():
+                nf.setAttributes(src_feat.attributes())
+            new_center, new_radius = circle_params(off_geom)
+            set_circle_attrs_on_feature(nf, new_center, new_radius)
+        else:
+            for fname, val in polyline_attrs(off_geom).items():
+                idx = lyr.fields().indexOf(fname)
+                if idx >= 0:
+                    nf.setAttribute(idx, val)
         if not lyr.isEditable():
             lyr.startEditing()
         lyr.addFeature(nf)

@@ -138,6 +138,7 @@ class Ugsurv:
         from .core.snapping.providers.extension_provider     import ExtensionProvider
         from .core.snapping.providers.grid_provider          import GridProvider
         from .core.snapping.providers.self_snap_provider     import SelfSnapProvider
+        from .core.snapping.providers.nearest_provider       import NearestProvider
 
         from .core.constraints.ortho_constraint import OrthoConstraint
         from .core.constraints.polar_constraint import PolarConstraint
@@ -181,6 +182,7 @@ class Ugsurv:
             ("extension",     ExtensionProvider),
             ("grid",          GridProvider),
             ("self",          SelfSnapProvider),
+            ("nearest",       NearestProvider),
         ]:
             snap_engine.register_provider(key, ProviderClass())
         ctx.snap_engine = snap_engine
@@ -617,6 +619,11 @@ class Ugsurv:
         from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
         cmd_dock.register_ui_command("SPIKY", "SG",
             callback=_make_toggle(lambda: SpikyGeomsDock(canvas, mw)))
+
+        # 12. Overlap Area — append overlap % column from Layer2 into Dataset1
+        from .module_wz_dialogs.overlap_area import OverlapAreaDock
+        cmd_dock.register_ui_command("OVERLAP", "OA",
+            callback=_make_toggle(lambda: OverlapAreaDock(mw)))
 
         # 9. Layout Importer — align a PDF/image raster to two GCP points
         def _open_layout_importer():

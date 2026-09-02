@@ -40,12 +40,14 @@ class LineTool(BaseTool):
             self._transition(ToolState.IDLE)
             self._go_home()
         elif sem.type == EventType.VALUE_ENTERED and self._start_pt:
-            # typed length → extend from start in current direction
-            pass  # direction not known without cursor; handled via polar/ortho
+            pt = self._try_extension_distance(sem.value)
+            if pt:
+                self._handle_point(pt)
 
     def _on_hover(self, sem: SemanticEvent):
         if self._start_pt and sem.point:
             self._update_preview(sem.point)
+        self._update_extension_guide(sem.snap_type, sem.point)
 
     def _on_undo_step(self):
         self._start_pt = None

@@ -48,6 +48,7 @@ class BaseTool(QgsMapTool):
         self._esc_count      = 0
         self._snap_marker: QgsVertexMarker | None = None
         self._last_input_ref = None   # last committed point; used for @rel / polar entry
+        self._ext_guide_rb   = None   # extension-line guide rubber band
         self.setCursor(self._get_cursor())
 
     # ── public read ──────────────────────────────────────────────────────
@@ -166,6 +167,7 @@ class BaseTool(QgsMapTool):
         SnapType.EXTENSION:     (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
         SnapType.GRID:          (QgsVertexMarker.ICON_CROSS,       _style.SNAP_GRID_COLOR),
         SnapType.SELF:          (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+        SnapType.NEAREST:       (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
     }
 
     def _get_cursor(self) -> QCursor:
@@ -219,8 +221,49 @@ class BaseTool(QgsMapTool):
             self._pending.cancel()
             self._pending = None
         self._clear_rubber_bands()
+        self._ext_guide_rb = None   # cleared by _clear_rubber_bands; null the ref
         self._on_cancel_hook()
         self._transition(ToolState.IDLE)
+
+    # ── extension-snap helpers ────────────────────────────────────────────
+    def _update_extension_guide(self, snap_type, snap_point):
+        """Show a guide line from the extension endpoint to the cursor.
+        Call from _on_hover whenever the snap type may be EXTENSION."""
+        snap_engine = getattr(self._ctx, 'snap_engine', None)
+        if snap_type != SnapType.EXTENSION or snap_point is None or not snap_engine:
+            if self._ext_guide_rb:
+                self._ext_guide_rb.reset(QgsWkbTypes.LineGeometry)
+            return
+        ext_prov = snap_engine._providers.get("extension")
+        if not ext_prov or not ext_prov.active_endpoint:
+            if self._ext_guide_rb:
+                self._ext_guide_rb.reset(QgsWkbTypes.LineGeometry)
+            return
+        if self._ext_guide_rb is None:
+            self._ext_guide_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _style.RB_EDGE, _style.RB_WIDTH
+            )
+        self._ext_guide_rb.reset(QgsWkbTypes.LineGeometry)
+        self._ext_guide_rb.addPoint(ext_prov.active_endpoint, False)
+        self._ext_guide_rb.addPoint(snap_point, True)
+
+    def _try_extension_distance(self, value):
+        """Convert a typed distance to a point along the active extension line.
+        Returns QgsPointXY if extension snap is active, else None."""
+        snap_engine = getattr(self._ctx, 'snap_engine', None)
+        if not snap_engine:
+            return None
+        ext_prov = snap_engine._providers.get("extension")
+        if not ext_prov or not ext_prov.active_endpoint or not ext_prov.active_direction:
+            return None
+        try:
+            dist = float(value)
+        except (TypeError, ValueError):
+            return None
+        from qgis.core import QgsPointXY
+        ep       = ext_prov.active_endpoint
+        ux, uy   = ext_prov.active_direction
+        return QgsPointXY(ep.x() + dist * ux, ep.y() + dist * uy)
 
     # ── dynamic input ─────────────────────────────────────────────────────
     def _request_input(self, mode: str, prompt: str = ""):

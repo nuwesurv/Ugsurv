@@ -25,6 +25,7 @@ from qgis.core import (
 
 from ...core.events import EventType
 from ...core import style as _style
+from ...core.circle_utils import is_circle, circle_params, set_circle_attrs_on_feature
 
 _C_HIGHLIGHT = _style.RB_SOURCE
 _C_HL_FILL   = _style.RB_SOURCE_FILL
@@ -217,6 +218,9 @@ class CopyTool(QgsMapTool):
             new_feat = QgsFeature(layer.fields())
             new_feat.setAttributes(src_feat.attributes())
             new_feat.setGeometry(new_geom)
+            if is_circle(geom):
+                new_center, new_radius = circle_params(new_geom)
+                set_circle_attrs_on_feature(new_feat, new_center, new_radius)
             if not layer.isEditable():
                 layer.startEditing()
             layer.addFeature(new_feat)

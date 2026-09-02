@@ -24,6 +24,9 @@ from qgis.core import (
 
 from ...core.events import EventType
 from ...core import style as _style
+from ...core.circle_utils import (
+    is_circle, circle_params, build_circle_geom, update_circle_attrs,
+)
 
 _C_HIGHLIGHT = _style.RB_SOURCE
 _C_HL_FILL   = _style.RB_SOURCE_FILL
@@ -58,6 +61,16 @@ def _rotate_pt(p, cx, cy, cos_a, sin_a):
 
 def _rotate_geom(geom, cx, cy, angle_deg):
     """Rotate geometry CCW by angle_deg around (cx, cy). Handles all geom types."""
+    if is_circle(geom):
+        # Rotating a circle = moving its center; radius stays the same.
+        center, radius = circle_params(geom)
+        a = math.radians(angle_deg)
+        cos_a, sin_a = math.cos(a), math.sin(a)
+        dx, dy = center.x() - cx, center.y() - cy
+        new_cx = cx + dx * cos_a - dy * sin_a
+        new_cy = cy + dx * sin_a + dy * cos_a
+        return build_circle_geom(QgsPointXY(new_cx, new_cy), radius)
+
     a = math.radians(angle_deg)
     cos_a, sin_a = math.cos(a), math.sin(a)
     gt = QgsWkbTypes.geometryType(geom.wkbType())
@@ -255,6 +268,9 @@ class RotateTool(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             layer.changeGeometry(fid, new_geom)
+            if is_circle(geom):
+                new_center, new_radius = circle_params(new_geom)
+                update_circle_attrs(layer, fid, new_center, new_radius)
             modified.add(layer)
         for lyr in modified:
             lyr.triggerRepaint()

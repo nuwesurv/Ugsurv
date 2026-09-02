@@ -22,6 +22,9 @@ from qgis.core import (
 
 from ...core.events import EventType
 from ...core import style as _style
+from ...core.circle_utils import (
+    is_circle, circle_params, build_circle_geom, update_circle_attrs,
+)
 
 _C_HIGHLIGHT = _style.RB_SOURCE
 _C_HL_FILL   = _style.RB_SOURCE_FILL
@@ -49,6 +52,12 @@ _HINT_STYLE = (
 
 def _scale_geom(geom, cx, cy, factor):
     """Scale geometry around (cx, cy) by factor. Handles all geometry types."""
+    if is_circle(geom):
+        center, radius = circle_params(geom)
+        new_cx = cx + (center.x() - cx) * factor
+        new_cy = cy + (center.y() - cy) * factor
+        return build_circle_geom(QgsPointXY(new_cx, new_cy), radius * abs(factor))
+
     gt = QgsWkbTypes.geometryType(geom.wkbType())
 
     def _sp(p):
@@ -245,6 +254,9 @@ class ScaleTool(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             layer.changeGeometry(fid, new_geom)
+            if is_circle(geom):
+                new_center, new_radius = circle_params(new_geom)
+                update_circle_attrs(layer, fid, new_center, new_radius)
             modified.add(layer)
         for lyr in modified:
             lyr.triggerRepaint()

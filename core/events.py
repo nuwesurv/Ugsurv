@@ -31,6 +31,7 @@ class SnapType(Enum):
     EXTENSION    = "extension"
     GRID         = "grid"
     SELF         = "self"
+    NEAREST      = "nearest"
 
 
 @dataclass

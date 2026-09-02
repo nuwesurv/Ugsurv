@@ -24,6 +24,7 @@ from qgis.core import (
 
 from ...core.events import EventType
 from ...core import style as _style
+from ...core.circle_utils import is_circle, circle_params, update_circle_attrs
 
 _C_HIGHLIGHT = _style.RB_SOURCE
 _C_HL_FILL   = _style.RB_SOURCE_FILL
@@ -227,6 +228,9 @@ class MoveTool(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             layer.changeGeometry(fid, new_geom)
+            if is_circle(geom):
+                new_center, new_radius = circle_params(new_geom)
+                update_circle_attrs(layer, fid, new_center, new_radius)
             modified.add(layer)
         for lyr in modified:
             lyr.triggerRepaint()
