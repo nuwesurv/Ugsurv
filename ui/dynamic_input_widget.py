@@ -164,6 +164,16 @@ class DynamicInputWidget(QWidget):
         self._reposition()
         self.show()
 
+    def set_prompt(self, text: str):
+        """Update only the prompt label — does NOT rebuild fields or clear typed text."""
+        display_prompt = _re.sub(r'\s*\[[^\]]+\]', '', text).strip()
+        if display_prompt:
+            self._prompt_lbl.setText(display_prompt)
+            self._prompt_lbl.show()
+        else:
+            self._prompt_lbl.hide()
+        self.adjustSize()
+
     def set_live_polar(self, dist: float, angle_deg: float):
         """Update live cursor values used as fallbacks when a polar field is empty."""
         self._live = [dist, angle_deg]

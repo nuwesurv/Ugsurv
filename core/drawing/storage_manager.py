@@ -32,6 +32,19 @@ _LAYER_EPSG = 32636   # WGS 84 / UTM Zone 36N — all geometry stored here
 from qgis.PyQt.QtCore import QVariant
 
 
+def _geom_has_circular_string(geom: QgsGeometry) -> bool:
+    """Return True if geom contains a QgsCircularString arc."""
+    curve = geom.constGet()
+    name = type(curve).__name__
+    if name == 'QgsCircularString':
+        return True
+    if name == 'QgsCompoundCurve':
+        for i in range(curve.nCurves()):
+            if type(curve.curveAt(i)).__name__ == 'QgsCircularString':
+                return True
+    return False
+
+
 def _linestring_to_compound_curve(geom: QgsGeometry) -> QgsGeometry:
     """Wrap a plain LineString in a CompoundCurve so it can be stored in a CompoundCurve layer."""
     pts = [QgsPoint(p.x(), p.y()) for p in geom.asPolyline()]
@@ -50,6 +63,7 @@ class StorageManager(QObject):
         self._gpkg_path    = None
         self._points_layer  = None
         self._lines_layer   = None
+        self._circles_layer = None
         self._cad_lyr_layer = None   # non-spatial QgsVectorLayer
         self._toolbar_ref   = None   # set by plugin_main
         self._crs_manager   = None   # set by plugin after CrsManager is created
@@ -73,6 +87,10 @@ class StorageManager(QObject):
     @property
     def lines_layer(self) -> QgsVectorLayer | None:
         return self._live('_lines_layer')
+
+    @property
+    def circles_layer(self) -> QgsVectorLayer | None:
+        return self._live('_circles_layer')
 
     @property
     def cad_layers_table(self) -> QgsVectorLayer | None:
@@ -101,10 +119,10 @@ class StorageManager(QObject):
             return None
         # Stale reference — reopen from disk (don't reload all layers).
         name = {"_points_layer": "points", "_lines_layer": "lines",
-                "_cad_lyr_layer": "cad_layers"}.get(attr)
+                "_cad_lyr_layer": "cad_layers", "_circles_layer": "circles"}.get(attr)
         if name is None:
             return None
-        add_to_tree = attr in ("_points_layer", "_lines_layer")
+        add_to_tree = attr in ("_points_layer", "_lines_layer", "_circles_layer")
         lyr = self._open_gpkg_layer(name, add_to_tree=add_to_tree)
         if lyr is not None:
             setattr(self, attr, lyr)
@@ -134,6 +152,23 @@ class StorageManager(QObject):
             geom = self._crs_manager.transform_geom_to_layer(geom)
         if layer.wkbType() == QgsWkbTypes.CompoundCurve and geom.wkbType() == QgsWkbTypes.LineString:
             geom = _linestring_to_compound_curve(geom)
+        if not layer.isEditable():
+            layer.startEditing()
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(geom)
+        feat["cad_layer"] = cad_layer
+        return layer.addFeature(feat)
+
+    def add_circle(self, geom: QgsGeometry, cad_layer: str) -> bool:
+        """Add a circle geometry (CompoundCurve/CircularString) to the circles layer."""
+        if not self._enabled:
+            return False
+        self._ensure_circles_layer()
+        layer = self._circles_layer
+        if not self._layer_alive(layer):
+            return False
+        if self._crs_manager is not None:
+            geom = self._crs_manager.transform_geom_to_layer(geom)
         if not layer.isEditable():
             layer.startEditing()
         feat = QgsFeature(layer.fields())
@@ -186,12 +221,13 @@ class StorageManager(QObject):
         self._gpkg_path     = None
         self._points_layer  = None
         self._lines_layer   = None
+        self._circles_layer = None
         self._cad_lyr_layer = None
         self._evaluate_gating()
 
     def _on_layer_deleted(self):
         """Called when any relevant layer is removed; nulls stale references."""
-        for attr in ('_points_layer', '_lines_layer', '_cad_lyr_layer'):
+        for attr in ('_points_layer', '_lines_layer', '_circles_layer', '_cad_lyr_layer'):
             lyr = getattr(self, attr)
             if not self._layer_alive(lyr):
                 setattr(self, attr, None)
@@ -233,6 +269,16 @@ class StorageManager(QObject):
             self._add_geom_table(self._gpkg_path, "lines", QgsWkbTypes.CompoundCurve)
             lyr = self._open_gpkg_layer("lines", add_to_tree=True)
         self._lines_layer = lyr
+
+    def _ensure_circles_layer(self):
+        if self._layer_alive(self._circles_layer):
+            return
+        self._ensure_gpkg_file()
+        lyr = self._open_gpkg_layer("circles", add_to_tree=True)
+        if lyr is None:
+            self._add_geom_table(self._gpkg_path, "circles", QgsWkbTypes.CompoundCurve)
+            lyr = self._open_gpkg_layer("circles", add_to_tree=True)
+        self._circles_layer = lyr
 
     def _ensure_points_layer(self):
         """Create and load the points layer on first actual use. No-op if already alive."""
@@ -363,6 +409,7 @@ class StorageManager(QObject):
         self._gpkg_path     = path
         self._points_layer  = self._open_gpkg_layer("points",     add_to_tree=True)
         self._lines_layer   = self._open_gpkg_layer("lines",      add_to_tree=True)
+        self._circles_layer = self._open_gpkg_layer("circles",    add_to_tree=True)
         self._cad_lyr_layer = self._open_gpkg_layer("cad_layers", add_to_tree=False)
         # Migrate existing points layers that predate the Description/Symbol columns
         if self._points_layer is not None:
@@ -374,6 +421,8 @@ class StorageManager(QObject):
         poly_lyr = self._open_gpkg_layer("polygons", add_to_tree=False)
         if poly_lyr:
             self._migrate_polygons_to_lines(poly_lyr)
+
+        self._migrate_circles_to_own_layer()
 
 
     def _migrate_lines_to_compound_curve(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:
@@ -426,6 +475,35 @@ class StorageManager(QObject):
             return new_lyr
         return None
 
+
+    def _migrate_circles_to_own_layer(self):
+        """Move any CircularString features from the lines layer into the circles layer."""
+        lines_lyr = self._lines_layer
+        if not self._layer_alive(lines_lyr):
+            return
+        circle_fids = []
+        circle_data = []
+        for feat in lines_lyr.getFeatures():
+            if _geom_has_circular_string(feat.geometry()):
+                circle_fids.append(feat.id())
+                circle_data.append((feat.geometry(), feat["cad_layer"]))
+        if not circle_fids:
+            return
+        self._ensure_circles_layer()
+        circles_lyr = self._circles_layer
+        if not self._layer_alive(circles_lyr):
+            return
+        if not circles_lyr.isEditable():
+            circles_lyr.startEditing()
+        for geom, cad in circle_data:
+            nf = QgsFeature(circles_lyr.fields())
+            nf.setGeometry(geom)
+            nf["cad_layer"] = cad
+            circles_lyr.addFeature(nf)
+        if not lines_lyr.isEditable():
+            lines_lyr.startEditing()
+        lines_lyr.deleteFeatures(circle_fids)
+        print(f"[UgSurv] Migrated {len(circle_fids)} circle(s) to circles layer.")
 
     def _migrate_polygons_to_lines(self, poly_layer: QgsVectorLayer):
         """One-time migration: convert legacy polygon features to closed LineStrings.

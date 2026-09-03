@@ -132,6 +132,26 @@ def snap_toolbar_icon() -> QIcon:
     return QIcon(px)
 
 
+def ortho_toolbar_icon() -> QIcon:
+    """Amber right-angle icon for the ortho toggle toolbar button."""
+    size, m = 18, 3
+    col = QColor(220, 140, 0)
+    px = QPixmap(size, size)
+    px.fill(Qt.transparent)
+    p = QPainter(px)
+    cx, cy = m, size - m - 1   # corner: left edge, bottom edge
+    p.setPen(QPen(col, 2))
+    p.drawLine(cx, m, cx, cy)                    # vertical arm
+    p.drawLine(cx, cy, size - m - 1, cy)         # horizontal arm
+    # small right-angle mark at the corner
+    box = 4
+    p.setPen(QPen(col, 1))
+    p.drawLine(cx, cy - box, cx + box, cy - box)
+    p.drawLine(cx + box, cy - box, cx + box, cy)
+    p.end()
+    return QIcon(px)
+
+
 def cad_crosshair_cursor() -> QCursor:
     """Red precision crosshair cursor for all CAD drawing tools. Cached after first call."""
     global _cad_cursor

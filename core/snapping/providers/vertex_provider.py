@@ -37,9 +37,9 @@ def _layer_ok(lyr) -> bool:
 
 
 def _line_polygon_layers(storage):
-    """Lines only — for vertex/endpoint snapping."""
+    """Lines and circles — for vertex/nearest snapping."""
     layers = []
-    for attr in ("lines_layer",):
+    for attr in ("lines_layer", "circles_layer"):
         lyr = getattr(storage, attr, None)
         if _layer_ok(lyr):
             layers.append(lyr)
@@ -49,7 +49,7 @@ def _line_polygon_layers(storage):
 def _geometry_layers(storage):
     """All geometry layers — re-exported for use by other providers."""
     layers = []
-    for attr in ("points_layer", "lines_layer"):
+    for attr in ("points_layer", "lines_layer", "circles_layer"):
         lyr = getattr(storage, attr, None)
         if _layer_ok(lyr):
             layers.append(lyr)

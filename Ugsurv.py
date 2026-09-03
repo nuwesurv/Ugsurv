@@ -57,6 +57,7 @@ class Ugsurv:
         self._tool_context       = None
         self._sel_overlay        = None
         self._snap_action        = None
+        self._ortho_action       = None
         self._shortcuts              = []
         self._tool_changed_slot     = None
         self._tool_for_cmdline_slot = None
@@ -299,6 +300,15 @@ class Ugsurv:
         iface.addToolBarIcon(snap_act)
         self._snap_action = snap_act
 
+        # Ortho toggle button — right of snap icon
+        ortho_act = QAction(_cstyle.ortho_toolbar_icon(), "Ortho  (F8)", mw)
+        ortho_act.setToolTip("Toggle Ortho  (F8)")
+        ortho_act.setCheckable(True)
+        ortho_act.setChecked(ortho.enabled)
+        ortho_act.triggered.connect(lambda checked: setattr(ortho, 'enabled', checked))
+        iface.addToolBarIcon(ortho_act)
+        self._ortho_action = ortho_act
+
         # Command-line aliases: SNAP / OS / OSNAP
         cmd_dock.register_ui_command("SNAP", "OS", "OSNAP",
                                      callback=snap_dialog.open_or_raise)
@@ -511,7 +521,7 @@ class Ugsurv:
 
         # 6. Keyboard shortcuts ──────────────────────────────────────────
         self._shortcuts = _install_shortcuts(
-            canvas, ortho, polar, snap_settings, tool_mgr
+            canvas, ortho, polar, snap_settings, tool_mgr, ortho_act
         )
 
         # 7. Gating hint ─────────────────────────────────────────────────
@@ -719,6 +729,12 @@ class Ugsurv:
                 self._snap_action.deleteLater()
             self._snap_action = None
 
+        if self._ortho_action:
+            with contextlib.suppress(Exception):
+                self.iface.removeToolBarIcon(self._ortho_action)
+                self._ortho_action.deleteLater()
+            self._ortho_action = None
+
         if self._sel_overlay:
             with contextlib.suppress(Exception):
                 self._sel_overlay.destroy()
@@ -877,7 +893,8 @@ def _register_commands(registry):
 
 
 # ── Keyboard shortcuts ────────────────────────────────────────────────────
-def _install_shortcuts(canvas, ortho, polar, snap_settings, tool_mgr):
+def _install_shortcuts(canvas, ortho, polar, snap_settings, tool_mgr,
+                       ortho_action=None):
     shortcuts = []
 
     def _sc(seq, slot):
@@ -889,7 +906,12 @@ def _install_shortcuts(canvas, ortho, polar, snap_settings, tool_mgr):
     def _toggle(obj, attr):
         setattr(obj, attr, not getattr(obj, attr))
 
-    _sc("F8",  lambda: _toggle(ortho, "enabled"))
+    def _toggle_ortho():
+        ortho.enabled = not ortho.enabled
+        if ortho_action is not None:
+            ortho_action.setChecked(ortho.enabled)
+
+    _sc("F8", _toggle_ortho)
     _sc("F10", lambda: _toggle(polar, "enabled"))
     _sc("F3",  lambda: [snap_settings.set_enabled(k, not snap_settings.any_enabled())
                         for k in ["vertex", "midpoint", "center"]])

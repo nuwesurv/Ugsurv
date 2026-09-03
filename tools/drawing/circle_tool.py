@@ -128,7 +128,7 @@ class CircleTool(BaseTool):
         if radius <= 0:
             return
         geom = _true_circle(center, radius)
-        self._ctx.storage_manager.add_line(geom, self._ctx.active_cad_layer)
+        self._ctx.storage_manager.add_circle(geom, self._ctx.active_cad_layer)
 
     def _reset(self):
         self._pts.clear()

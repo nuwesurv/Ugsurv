@@ -31,6 +31,7 @@ from qgis.PyQt.QtWidgets import QMenu
 from qgis.core import (
     QgsPointXY, QgsGeometry, QgsProject, QgsWkbTypes,
     QgsFeatureRequest, QgsRectangle,
+    QgsPoint, QgsCircle, QgsCompoundCurve,
 )
 from qgis.gui import QgsVertexMarker
 
@@ -222,6 +223,14 @@ class GripEditTool(BaseTool):
                 # Short click → enter hot mode
                 self._hot_mode      = True
                 self._drag_start_px = None
+                wkt = self._drag_geoms.get(
+                    (self._hot_grip.layer_id, self._hot_grip.fid))
+                if wkt:
+                    params = _circle_params(QgsGeometry.fromWkt(wkt))
+                    if params is not None:
+                        self._request_input(
+                            "value", f"New radius <{params[2]:.3f}>:")
+                        return
                 self._request_input("value",
                                     "Extension distance  /  click to place:")
             return
@@ -255,6 +264,20 @@ class GripEditTool(BaseTool):
             return
 
         if sem.type == EventType.VALUE_ENTERED:
+            wkt = self._drag_geoms.get(
+                (self._hot_grip.layer_id, self._hot_grip.fid))
+            if wkt:
+                params = _circle_params(QgsGeometry.fromWkt(wkt))
+                if params is not None:
+                    try:
+                        new_r = float(sem.value)
+                        if new_r > 1e-10:
+                            cx, cy, _ = params
+                            self._commit_grip_and_finish(
+                                QgsPointXY(cx + new_r, cy))
+                    except (TypeError, ValueError):
+                        pass
+                    return
             pt = self._try_extension_distance(sem.value)
             if pt:
                 self._commit_grip_and_finish(pt)
@@ -275,12 +298,18 @@ class GripEditTool(BaseTool):
 
     # ── endpoint context menu ─────────────────────────────────────────────
     def _endpoint_grip_at(self, pt: QgsPointXY) -> 'Grip | None':
-        """Return the closest endpoint grip within tolerance, or None."""
+        """Return the closest endpoint grip within tolerance, or None.
+        Grips on circles are excluded — circles have no meaningful endpoints."""
         tol = self._px_to_mu(GRIP_TOLERANCE_PX)
         best, best_d = None, tol
         for g in self._grips:
             if not g.is_endpoint:
                 continue
+            layer = QgsProject.instance().mapLayer(g.layer_id)
+            if layer is not None:
+                feat = layer.getFeature(g.fid)
+                if feat.isValid() and _circle_params(feat.geometry()) is not None:
+                    continue
             d = math.hypot(g.pt.x() - pt.x(), g.pt.y() - pt.y())
             if d < best_d:
                 best_d, best = d, g
@@ -581,7 +610,19 @@ class GripEditTool(BaseTool):
 
 
 def _replace_vertex(geom: QgsGeometry, idx: int, new_pt: QgsPointXY) -> QgsGeometry:
-    """Return a copy of geom with vertex at idx replaced by new_pt."""
+    """Return a copy of geom with vertex at idx moved to new_pt.
+
+    For circles (CompoundCurve containing a CircularString) any grip drag
+    resizes the circle: center stays fixed, radius becomes dist(center, new_pt).
+    """
+    params = _circle_params(geom)
+    if params is not None:
+        cx, cy, _ = params
+        new_r = math.hypot(new_pt.x() - cx, new_pt.y() - cy)
+        if new_r > 1e-10:
+            return _make_circle_geom(cx, cy, new_r)
+        return QgsGeometry(geom)   # zero-radius edge case — leave unchanged
+
     pts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
     if 0 <= idx < len(pts):
         pts[idx] = new_pt
@@ -598,3 +639,41 @@ def _replace_vertex(geom: QgsGeometry, idx: int, new_pt: QgsPointXY) -> QgsGeome
         if is_multi:
             g.convertToMultiType()
     return g
+
+
+def _circle_params(geom: QgsGeometry):
+    """Return (cx, cy, radius) if geom contains a CircularString, else None."""
+    curve = geom.constGet()
+    name  = type(curve).__name__
+    cs    = None
+    if name == 'QgsCircularString':
+        cs = curve
+    elif name == 'QgsCompoundCurve':
+        for i in range(curve.nCurves()):
+            c = curve.curveAt(i)
+            if type(c).__name__ == 'QgsCircularString':
+                cs = c
+                break
+    if cs is None or cs.numPoints() < 3:
+        return None
+    pts = cs.points()
+    ax, ay = pts[0].x(), pts[0].y()
+    bx, by = pts[1].x(), pts[1].y()
+    cx, cy = pts[2].x(), pts[2].y()
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-10:
+        return None
+    ux = ((ax**2 + ay**2) * (by - cy) + (bx**2 + by**2) * (cy - ay) +
+          (cx**2 + cy**2) * (ay - by)) / d
+    uy = ((ax**2 + ay**2) * (cx - bx) + (bx**2 + by**2) * (ax - cx) +
+          (cx**2 + cy**2) * (bx - ax)) / d
+    return ux, uy, math.hypot(ax - ux, ay - uy)
+
+
+def _make_circle_geom(cx: float, cy: float, r: float) -> QgsGeometry:
+    """Construct a true CompoundCurve(CircularString) circle."""
+    c  = QgsCircle(QgsPoint(cx, cy), r)
+    cs = c.toCircularString()
+    cc = QgsCompoundCurve()
+    cc.addCurve(cs)
+    return QgsGeometry(cc)

@@ -84,6 +84,9 @@ class SelectTool(BaseTool):
         self._ep_preview_rb:    object       = None
         self._last_snap_ep:     QgsPointXY | None = None
 
+        self._circle_center: QgsPointXY | None = None
+        self._radius_rb     = None   # radius guide line — NOT in _rubber_bands
+
     # ── lifecycle ──────────────────────────────────────────────────────────
     def activate(self):
         super().activate()
@@ -139,14 +142,20 @@ class SelectTool(BaseTool):
         # A grip is already armed: second click confirms the new position.
         if self._hot_grip is not None:
             # Use last snapped point from move if available, otherwise re-snap at click
-            place_pt = self._last_snap_pt if self._last_snap_pt is not None else snapped
+            place_pt   = self._last_snap_pt if self._last_snap_pt is not None else snapped
+            was_circle = self._circle_center is not None
             self._commit_grip_move(self._hot_grip, place_pt)
             self._hot_grip      = None
             self._drag_geom_wkt = None
             self._last_snap_pt  = None
             self._clear_rubber_bands()
+            self._clear_circle_input()
+            if was_circle:
+                self._ctx.selection_model.clear()
+                self._clear_grips()
             self._show_overlay()
-            self._rebuild_grips()
+            if not was_circle:
+                self._rebuild_grips()
             return
 
         # Priority 1: vertex grip hit → arm it (first click, use raw for marker proximity)
@@ -161,6 +170,16 @@ class SelectTool(BaseTool):
                 feat = layer.getFeature(grip.fid)
                 if feat.isValid():
                     self._drag_geom_wkt = feat.geometry().asWkt()
+                    params = _circle_params(feat.geometry())
+                    if params is not None:
+                        cx, cy, r = params
+                        self._circle_center = QgsPointXY(cx, cy)
+                        self._radius_rb = QgsRubberBand(
+                            self.canvas(), QgsWkbTypes.LineGeometry)
+                        self._radius_rb.setColor(_style.RB_DRAW)
+                        self._radius_rb.setWidth(1)
+                        self._request_input("value",
+                                            f"New radius <{r:.3f}>:")
             self._hide_overlay()
             return
 
@@ -194,6 +213,11 @@ class SelectTool(BaseTool):
             sem = self._translator.translate_move(event, self._ctx)
             self._update_snap_marker(sem)
             self._move_grip_preview(self._hot_grip, sem.point)
+            if self._circle_center is not None and sem.point and self._radius_rb is not None:
+                self._radius_rb.reset(QgsWkbTypes.LineGeometry)
+                self._radius_rb.addPoint(self._circle_center, False)
+                self._radius_rb.addPoint(sem.point, True)
+                self._update_radius_prompt(sem.point)
             self._last_snap_pt = sem.point
             self._hide_hover_band()
             return
@@ -275,6 +299,30 @@ class SelectTool(BaseTool):
                 self._cancel_add_pts()
             return
 
+        if (sem.type == EventType.VALUE_ENTERED
+                and self._hot_grip is not None
+                and self._drag_geom_wkt is not None):
+            geom   = QgsGeometry.fromWkt(self._drag_geom_wkt)
+            params = _circle_params(geom)
+            if params is not None:
+                try:
+                    new_r = float(sem.value)
+                    if new_r > 1e-10:
+                        cx, cy, _ = params
+                        self._commit_grip_move(
+                            self._hot_grip, QgsPointXY(cx + new_r, cy))
+                        self._hot_grip      = None
+                        self._drag_geom_wkt = None
+                        self._last_snap_pt  = None
+                        self._clear_rubber_bands()
+                        self._clear_circle_input()
+                        self._ctx.selection_model.clear()
+                        self._clear_grips()
+                        self._show_overlay()
+                except (TypeError, ValueError):
+                    pass
+                return
+
         if sem.type == EventType.POINT_PICKED:
             self._pick_at_point(sem.point, shift=False)
         elif sem.type == EventType.SHIFT_CLICK:
@@ -291,6 +339,7 @@ class SelectTool(BaseTool):
         self._drag_geom_wkt = None
         self._last_snap_pt  = None
         self._clear_rubber_bands()
+        self._clear_circle_input()
 
         layer = QgsProject.instance().mapLayer(grip.layer_id)
         if layer is None:
@@ -432,8 +481,8 @@ class SelectTool(BaseTool):
                 marker.setIconType(QgsVertexMarker.ICON_BOX)
                 self._grips.append(Grip(lid, fid, i, pt, marker, is_endpoint=is_ep))
 
-            # Green + marks at edge midpoints (lines and polygons only)
-            if wtype in (1, 2):
+            # Green + marks at edge midpoints (lines and polygons only, not circles)
+            if wtype in (1, 2) and _circle_params(feat.geometry()) is None:
                 for i in range(len(verts) - 1):
                     va, vb = verts[i], verts[i + 1]
                     # skip degenerate closing segment (first == last for polygons)
@@ -469,6 +518,11 @@ class SelectTool(BaseTool):
         for g in self._grips:
             if not g.is_endpoint:
                 continue
+            layer = QgsProject.instance().mapLayer(g.layer_id)
+            if layer is not None:
+                feat = layer.getFeature(g.fid)
+                if feat.isValid() and _circle_params(feat.geometry()) is not None:
+                    continue
             d = math.hypot(g.pt.x() - pt.x(), g.pt.y() - pt.y())
             if d < best_d:
                 best_d, best = d, g
@@ -727,7 +781,7 @@ class SelectTool(BaseTool):
     def _all_geometry_layers(self):
         sm = self._ctx.storage_manager
         result = []
-        for attr in ("points_layer", "lines_layer"):
+        for attr in ("points_layer", "lines_layer", "circles_layer"):
             lyr = getattr(sm, attr, None)
             if lyr and lyr.isValid():
                 result.append((lyr.id(), lyr))
@@ -755,11 +809,34 @@ class SelectTool(BaseTool):
             self._drag_geom_wkt = None
             self._last_snap_pt  = None
             self._clear_rubber_bands()
+            self._clear_circle_input()
             self._show_overlay()
         if self._drag_rb:
             self._drag_rb.reset()
             self._drag_rb = None
         self._drag_start = None
+
+    def _update_radius_prompt(self, cursor_pt: QgsPointXY):
+        """Update the DynamicInputWidget prompt with the live radius value."""
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn is None:
+            return
+        radius = self._circle_center.distance(cursor_pt)
+        dyn.set_prompt(f"New radius <{radius:.3f}>:")
+
+    def _clear_circle_input(self):
+        """Remove the radius guide rubber band and hide the DynamicInputWidget."""
+        if self._radius_rb is not None:
+            try:
+                self.canvas().scene().removeItem(self._radius_rb)
+            except Exception:
+                try:
+                    self._radius_rb.reset()
+                except Exception:
+                    pass
+            self._radius_rb = None
+        self._circle_center = None
+        self._request_input("", "")
 
     # ── Esc override — SelectTool IS the home tool, never calls go_home ────
     def _handle_esc(self):
@@ -775,6 +852,7 @@ class SelectTool(BaseTool):
             self._hot_grip      = None
             self._drag_geom_wkt = None
             self._clear_rubber_bands()
+            self._clear_circle_input()
         self._ctx.selection_model.clear()
         self._clear_grips()
         self._show_overlay()
@@ -803,6 +881,7 @@ class SelectTool(BaseTool):
             self._drag_geom_wkt = None
             self._last_snap_pt  = None
             self._drag_start    = None
+            self._clear_circle_input()
             self._show_overlay()
         if self._drag_rb:
             self._drag_rb.reset()
@@ -816,23 +895,67 @@ class SelectTool(BaseTool):
             return px * 0.001
 
 
-# ── geometry helper ────────────────────────────────────────────────────────
+# ── geometry helpers ───────────────────────────────────────────────────────
 def _replace_vertex(geom: QgsGeometry, idx: int, new_pt: QgsPointXY) -> QgsGeometry:
-    """Return a copy of geom with vertex at idx replaced by new_pt.
-    Preserves single vs multi type to match the layer's geometry type."""
+    """Return a copy of geom with vertex at idx moved to new_pt.
+    For circles, any grip drag resizes the circle (center fixed, new radius)."""
+    params = _circle_params(geom)
+    if params is not None:
+        cx, cy, _ = params
+        new_r = math.hypot(new_pt.x() - cx, new_pt.y() - cy)
+        if new_r > 1e-10:
+            return _make_circle_geom(cx, cy, new_r)
+        return QgsGeometry(geom)
     pts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
     if 0 <= idx < len(pts):
         pts[idx] = new_pt
     wtype    = int(QgsWkbTypes.geometryType(geom.wkbType()))
     is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
-    if wtype == 0:   # Point
+    if wtype == 0:
         g = QgsGeometry.fromMultiPointXY(pts) if is_multi else QgsGeometry.fromPointXY(pts[0])
-    elif wtype == 1:  # Line
+    elif wtype == 1:
         g = QgsGeometry.fromPolylineXY(pts)
         if is_multi:
             g.convertToMultiType()
-    else:             # Polygon
+    else:
         g = QgsGeometry.fromPolygonXY([pts])
         if is_multi:
             g.convertToMultiType()
     return g
+
+
+def _circle_params(geom: QgsGeometry):
+    """Return (cx, cy, radius) if geom is a circle, else None."""
+    curve = geom.constGet()
+    name  = type(curve).__name__
+    cs    = None
+    if name == 'QgsCircularString':
+        cs = curve
+    elif name == 'QgsCompoundCurve':
+        for i in range(curve.nCurves()):
+            c = curve.curveAt(i)
+            if type(c).__name__ == 'QgsCircularString':
+                cs = c
+                break
+    if cs is None or cs.numPoints() < 3:
+        return None
+    pts = cs.points()
+    ax, ay = pts[0].x(), pts[0].y()
+    bx, by = pts[1].x(), pts[1].y()
+    cx, cy = pts[2].x(), pts[2].y()
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-10:
+        return None
+    ux = ((ax**2+ay**2)*(by-cy) + (bx**2+by**2)*(cy-ay) + (cx**2+cy**2)*(ay-by)) / d
+    uy = ((ax**2+ay**2)*(cx-bx) + (bx**2+by**2)*(ax-cx) + (cx**2+cy**2)*(bx-ax)) / d
+    return ux, uy, math.hypot(ax-ux, ay-uy)
+
+
+def _make_circle_geom(cx: float, cy: float, r: float) -> QgsGeometry:
+    """Construct a CompoundCurve(CircularString) circle geometry."""
+    from qgis.core import QgsPoint, QgsCircle, QgsCompoundCurve
+    c  = QgsCircle(QgsPoint(cx, cy), r)
+    cs = c.toCircularString()
+    cc = QgsCompoundCurve()
+    cc.addCurve(cs)
+    return QgsGeometry(cc)

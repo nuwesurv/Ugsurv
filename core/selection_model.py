@@ -31,7 +31,12 @@ class SelectionModel(QObject):
         if layer is None:
             return ""
         feat = layer.getFeature(fid)
-        return feat["cad_layer"] if feat.isValid() else ""
+        if not feat.isValid():
+            return ""
+        try:
+            return feat["cad_layer"]
+        except KeyError:
+            return ""
 
     def _is_locked(self, layer_id: str, fid: int) -> bool:
         return self._cad_layer_of(layer_id, fid) in self._locked_cad_layers

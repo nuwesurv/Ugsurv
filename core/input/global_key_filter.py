@@ -127,6 +127,12 @@ class GlobalKeyFilter(QObject):
 
     def _idle(self, event) -> bool:
         """Type-anywhere: forward canvas keystrokes to the command-line input."""
+        # DynamicInputWidget gets first refusal even in idle mode — handles
+        # radius entry while a circle grip is armed on the select/home tool.
+        dyn = self._get_dyn() if self._get_dyn else None
+        if dyn is not None and dyn.isVisible() and dyn.handle_key(event):
+            return True
+
         cmd = self._get_cmd() if self._get_cmd else None
         if cmd is None:
             return False
