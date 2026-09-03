@@ -731,6 +731,8 @@ class SelectTool(BaseTool):
             lyr = getattr(sm, attr, None)
             if lyr and lyr.isValid():
                 result.append((lyr.id(), lyr))
+        for lyr in self._ctx.plugin_extra_layers:
+            result.append((lyr.id(), lyr))
         return result
 
     # ── overlay visibility helpers ─────────────────────────────────────────

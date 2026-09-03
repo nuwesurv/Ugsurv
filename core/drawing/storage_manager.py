@@ -11,7 +11,7 @@ Hard rules (§5):
 
 GeoPackage schema (§4):
   - points   (MultiPoint) — cad_layer attribute
-  - lines    (LineString) — cad_layer attribute
+  - lines    (CompoundCurve) — cad_layer attribute; stores true circles as CircularString
   - cad_layers (non-spatial) — name, color, linetype, visible, locked, sort_order
 
 Legacy "polygons" table (MultiPolygon) is migrated to closed LineStrings in
@@ -25,10 +25,20 @@ from qgis.core import (
     QgsProject, QgsVectorLayer, QgsField, QgsFields,
     QgsWkbTypes, QgsCoordinateReferenceSystem,
     QgsVectorFileWriter, QgsFeature, QgsGeometry, QgsPointXY,
+    QgsPoint, QgsLineString, QgsCompoundCurve,
 )
 
 _LAYER_EPSG = 32636   # WGS 84 / UTM Zone 36N — all geometry stored here
 from qgis.PyQt.QtCore import QVariant
+
+
+def _linestring_to_compound_curve(geom: QgsGeometry) -> QgsGeometry:
+    """Wrap a plain LineString in a CompoundCurve so it can be stored in a CompoundCurve layer."""
+    pts = [QgsPoint(p.x(), p.y()) for p in geom.asPolyline()]
+    ls = QgsLineString(pts)
+    cc = QgsCompoundCurve()
+    cc.addCurve(ls)
+    return QgsGeometry(cc)
 
 
 class StorageManager(QObject):
@@ -122,6 +132,8 @@ class StorageManager(QObject):
             return False
         if self._crs_manager is not None:
             geom = self._crs_manager.transform_geom_to_layer(geom)
+        if layer.wkbType() == QgsWkbTypes.CompoundCurve and geom.wkbType() == QgsWkbTypes.LineString:
+            geom = _linestring_to_compound_curve(geom)
         if not layer.isEditable():
             layer.startEditing()
         feat = QgsFeature(layer.fields())
@@ -129,10 +141,13 @@ class StorageManager(QObject):
         feat["cad_layer"] = cad_layer
         return layer.addFeature(feat)
 
-    def add_point(self, geom: QgsGeometry, cad_layer: str) -> bool:
+    def add_point(self, geom: QgsGeometry, cad_layer: str,
+                  description: str = "", symbol: str = "") -> bool:
         """
         Add a point geometry (in current project CRS) to the points layer.
         The geometry is transformed to EPSG:32636 (layer CRS) if needed.
+        Optional description and symbol attributes are written when the
+        corresponding columns exist on the layer.
         """
         if not self._enabled:
             return False
@@ -147,6 +162,11 @@ class StorageManager(QObject):
         feat = QgsFeature(layer.fields())
         feat.setGeometry(geom)
         feat["cad_layer"] = cad_layer
+        flds = layer.fields()
+        if description and flds.indexOf("Description") >= 0:
+            feat["Description"] = description
+        if symbol and flds.indexOf("Symbol") >= 0:
+            feat["Symbol"] = symbol
         return layer.addFeature(feat)
 
     def unload(self):
@@ -210,7 +230,7 @@ class StorageManager(QObject):
         self._ensure_gpkg_file()
         lyr = self._open_gpkg_layer("lines", add_to_tree=True)
         if lyr is None:
-            self._add_geom_table(self._gpkg_path, "lines", QgsWkbTypes.LineString)
+            self._add_geom_table(self._gpkg_path, "lines", QgsWkbTypes.CompoundCurve)
             lyr = self._open_gpkg_layer("lines", add_to_tree=True)
         self._lines_layer = lyr
 
@@ -224,6 +244,28 @@ class StorageManager(QObject):
             self._add_geom_table(self._gpkg_path, "points", QgsWkbTypes.MultiPoint)
             lyr = self._open_gpkg_layer("points", add_to_tree=True)
         self._points_layer = lyr
+        self._ensure_extra_point_fields()
+
+    def _ensure_extra_point_fields(self):
+        """Add Description and Symbol columns to the points layer if missing.
+
+        Uses the data provider directly so the schema change is written to the
+        GeoPackage immediately without needing commitChanges on the edit buffer.
+        Safe to call on an already-migrated layer (no-op if both columns exist).
+        """
+        lyr = self._points_layer
+        if not self._layer_alive(lyr):
+            return
+        missing = []
+        flds = lyr.fields()
+        if flds.indexOf("Description") < 0:
+            missing.append(QgsField("Description", QVariant.String))
+        if flds.indexOf("Symbol") < 0:
+            missing.append(QgsField("Symbol", QVariant.String))
+        if not missing:
+            return
+        lyr.dataProvider().addAttributes(missing)
+        lyr.updateFields()
 
     def _ensure_gpkg_file(self):
         """Ensure the GPKG file and cad_layers metadata table exist. No geometry tables yet."""
@@ -322,48 +364,48 @@ class StorageManager(QObject):
         self._points_layer  = self._open_gpkg_layer("points",     add_to_tree=True)
         self._lines_layer   = self._open_gpkg_layer("lines",      add_to_tree=True)
         self._cad_lyr_layer = self._open_gpkg_layer("cad_layers", add_to_tree=False)
+        # Migrate existing points layers that predate the Description/Symbol columns
+        if self._points_layer is not None:
+            self._ensure_extra_point_fields()
 
-        if self._lines_layer and QgsWkbTypes.isMultiType(self._lines_layer.wkbType()):
-            self._lines_layer = self._migrate_lines_to_single(path, self._lines_layer)
+        if self._lines_layer and self._lines_layer.wkbType() != QgsWkbTypes.CompoundCurve:
+            self._lines_layer = self._migrate_lines_to_compound_curve(path, self._lines_layer)
 
         poly_lyr = self._open_gpkg_layer("polygons", add_to_tree=False)
         if poly_lyr:
             self._migrate_polygons_to_lines(poly_lyr)
 
 
-    def _migrate_lines_to_single(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:
-        """Convert a legacy MultiLineString lines layer to LineString in the GeoPackage.
+    def _migrate_lines_to_compound_curve(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:
+        """Migrate any LineString/MultiLineString lines layer to CompoundCurve.
 
-        Each MultiLineString feature is exploded into individual LineString features
-        (in practice the old drawing tools always produced single-part multis, so
-        this is a 1-to-1 conversion with no data loss).
+        Existing straight-line features are preserved exactly — each part becomes
+        a CompoundCurve wrapping a straight QgsLineString. New circles will be
+        stored as CompoundCurve(CircularString) without segment approximation.
         """
         crs = old_lyr.crs()
-
-        # Collect every part as a separate LineString feature
-        new_feats = []
         tmp_fields = QgsFields()
         tmp_fields.append(QgsField("cad_layer", QVariant.String))
+        new_feats = []
 
         for feat in old_lyr.getFeatures():
             geom = feat.geometry()
             cad = feat["cad_layer"]
-            # Iterate over parts (usually just one)
             for part in geom.parts():
-                pts = [QgsPointXY(v.x(), v.y()) for v in part.vertices()]
+                pts = [QgsPoint(v.x(), v.y()) for v in part.vertices()]
                 if len(pts) < 2:
                     continue
+                ls = QgsLineString(pts)
+                cc = QgsCompoundCurve()
+                cc.addCurve(ls)
                 nf = QgsFeature(tmp_fields)
-                nf.setGeometry(QgsGeometry.fromPolylineXY(pts))
+                nf.setGeometry(QgsGeometry(cc))
                 nf["cad_layer"] = cad
                 new_feats.append(nf)
 
-        # Remove stale layer from the project before overwriting the table
         QgsProject.instance().removeMapLayer(old_lyr.id())
 
-        # Build a memory layer and write it back as LineString
-        uri = (QgsWkbTypes.displayString(QgsWkbTypes.LineString)
-               + "?crs=" + crs.authid())
+        uri = "CompoundCurve?crs=" + crs.authid()
         tmp = QgsVectorLayer(uri, "lines", "memory")
         tmp.dataProvider().addAttributes(list(tmp_fields))
         tmp.updateFields()
@@ -377,7 +419,6 @@ class StorageManager(QObject):
             tmp, path, QgsProject.instance().transformContext(), opts
         )
 
-        # Open and register the migrated layer
         new_lyr = QgsVectorLayer(f"{path}|layername=lines", "lines", "ogr")
         if new_lyr.isValid():
             QgsProject.instance().addMapLayer(new_lyr, False)

@@ -43,10 +43,11 @@ class RemoveVertexTool(BaseTool):
         sm = self._ctx.storage_manager
         tol = 0.02
         rect = QgsRectangle(pt.x()-tol, pt.y()-tol, pt.x()+tol, pt.y()+tol)
-        for attr in ("lines_layer",):
-            lyr = getattr(sm, attr, None)
-            if not (lyr and lyr.isValid()):
-                continue
+        sm_layers = [getattr(sm, "lines_layer", None)]
+        all_layers = [l for l in sm_layers if l and l.isValid()]
+        all_layers += [l for l in self._ctx.plugin_extra_layers
+                       if int(l.geometryType()) == 1]
+        for lyr in all_layers:
             for feat in lyr.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
                 for vi, v in enumerate(feat.geometry().vertices()):
                     vpt = QgsPointXY(v.x(), v.y())

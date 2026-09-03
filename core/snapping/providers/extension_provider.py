@@ -13,6 +13,7 @@ from qgis.core import QgsPointXY
 from ..snap_engine import SnapResult
 from ...events import SnapType
 from .vertex_provider import _geometry_layers, _dist
+from .nearest_provider import _find_circular_string
 
 
 def _extension_info(p: QgsPointXY, a: QgsPointXY, b: QgsPointXY):
@@ -59,6 +60,8 @@ class ExtensionProvider:
                 geom = feat.geometry()
                 if geom.isEmpty():
                     continue
+                if _find_circular_string(geom) is not None:
+                    continue  # extension of chord tangents is not meaningful for arcs
                 pts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
                 for i in range(len(pts) - 1):
                     info = _extension_info(raw, pts[i], pts[i + 1])

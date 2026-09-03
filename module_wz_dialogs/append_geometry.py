@@ -68,7 +68,10 @@ class AppendGeometryTool(QgsMapToolIdentifyFeature):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self.canvas.unsetMapTool(self)
+            if self._dock_alive():
+                self._dock.close()
+            else:
+                self.canvas.unsetMapTool(self)
 
     def canvasMoveEvent(self, event):
         pass
@@ -178,6 +181,12 @@ class GeometryAppenderDock(QDockWidget):
         self._select_btn.clicked.connect(self._activate_tool)
         self.append_btn.clicked.connect(self.append_parcels)
         self.visibilityChanged.connect(self._on_visibility_changed)
+
+    def closeEvent(self, event):
+        self.tool.clear()
+        if self.canvas.mapTool() is self.tool:
+            self.canvas.unsetMapTool(self.tool)
+        super().closeEvent(event)
 
     def _on_visibility_changed(self, visible):
         if visible:

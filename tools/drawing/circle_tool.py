@@ -2,7 +2,7 @@
 """
 CircleTool — click center → live radius preview → click/type radius → commit.
 
-Stored as a densified closed LineString in the lines layer.
+Stored as a true CircularString (CompoundCurve) in the lines layer — no segment approximation.
 Supports typed-radius entry.
 
 2-point and 3-point variants are accessible via key press (2 / 3) mid-command.
@@ -10,33 +10,32 @@ Supports typed-radius entry.
 
 import math
 from qgis.PyQt.QtCore import Qt
-from qgis.core import QgsPointXY, QgsGeometry, QgsWkbTypes, QgsFeature
+from qgis.core import (
+    QgsPointXY, QgsGeometry, QgsWkbTypes, QgsFeature,
+    QgsCircle, QgsPoint, QgsCompoundCurve,
+)
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 from ...core import style as _style
 
+_PREVIEW_SEGS = 72  # only for rubber-band preview rendering, never stored
 
-_SEGMENTS = 72   # polygon approximation of circle
 
-
-def _circle_ring(center: QgsPointXY, radius: float) -> QgsGeometry:
-    """Return a closed LineString approximating a circle."""
-    pts = []
-    for i in range(_SEGMENTS + 1):
-        a = 2 * math.pi * i / _SEGMENTS
-        pts.append(QgsPointXY(
-            center.x() + radius * math.cos(a),
-            center.y() + radius * math.sin(a),
-        ))
-    return QgsGeometry.fromPolylineXY(pts)
+def _true_circle(center: QgsPointXY, radius: float) -> QgsGeometry:
+    """Return a mathematically exact circle as a CompoundCurve(CircularString)."""
+    c = QgsCircle(QgsPoint(center.x(), center.y()), radius)
+    cs = c.toCircularString()
+    cc = QgsCompoundCurve()
+    cc.addCurve(cs)
+    return QgsGeometry(cc)
 
 
 def _circle_polygon(center: QgsPointXY, radius: float) -> QgsGeometry:
-    """Return a filled polygon for rubber-band preview only."""
+    """Return a segmented polygon for rubber-band preview only — never committed."""
     pts = []
-    for i in range(_SEGMENTS + 1):
-        a = 2 * math.pi * i / _SEGMENTS
+    for i in range(_PREVIEW_SEGS + 1):
+        a = 2 * math.pi * i / _PREVIEW_SEGS
         pts.append(QgsPointXY(
             center.x() + radius * math.cos(a),
             center.y() + radius * math.sin(a),
@@ -128,7 +127,7 @@ class CircleTool(BaseTool):
     def _commit_circle(self, center: QgsPointXY, radius: float):
         if radius <= 0:
             return
-        geom = _circle_ring(center, radius)
+        geom = _true_circle(center, radius)
         self._ctx.storage_manager.add_line(geom, self._ctx.active_cad_layer)
 
     def _reset(self):

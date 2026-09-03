@@ -647,6 +647,16 @@ class Ugsurv:
             canvas.setMapTool(_tfix_ref[0])
         cmd_dock.register_ui_command("TS", "TF", callback=_activate_tfix)
 
+        # 13. Canvas Georeferencer — pick GCPs on the canvas, type E,N via dynamic input
+        _georef_ref = [None]
+        def _activate_georef():
+            if _georef_ref[0] is None:
+                from .tools.georef.georeference_tool import GeoreferenceTool
+                _georef_ref[0] = GeoreferenceTool(canvas, self._tool_context, self._translator)
+                _georef_ref[0]._tool_key = 'georef'
+            self._tool_manager.activate_tool(_georef_ref[0])
+        cmd_dock.register_ui_command("GEOREF", "GR", callback=_activate_georef)
+
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
         with contextlib.suppress(Exception):
@@ -802,7 +812,7 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.vertex_edit.join_tool          import JoinTool
     from .tools.modify.chamfer_tool        import ChamferTool
     from .tools.modify.explode_tool        import ExplodeTool
-    from .tools.annotation.dimension_tool import DimensionTool
+    from .tools.annotation.dimension_tool import DimensionTool, AutoDimensionTool
     from .tools.annotation.text_tool      import TextTool
 
     _MAP = {
@@ -821,7 +831,8 @@ def _make_tool(key: str, canvas, ctx, translator):
         "break":         BreakTool,
         "join":          JoinTool,
         "chamfer":       ChamferTool,     "explode":       ExplodeTool,
-        "dimension":     DimensionTool,   "text":          TextTool,
+        "dimension":     DimensionTool,   "adimension":    AutoDimensionTool,
+        "text":          TextTool,
     }
     cls = _MAP.get(key)
     if cls is None:
@@ -859,6 +870,7 @@ def _register_commands(registry):
         ("chamfer",       "CHAMFER", "CH"),
         ("explode",       "EXPLODE", "XP"),
         ("dimension",     "DIM",     "DIMLINEAR"),
+        ("adimension",    "ADIM"),
         ("text",          "TEXT",    "T", "MTEXT"),
     ]:
         registry.register(key, *aliases)

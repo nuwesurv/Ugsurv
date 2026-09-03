@@ -1,1 +1,0 @@
-write a deatiled prompt that i shall copy and paste from this converstion to the next converstion so that the model can continue with knowledge of this conversation.

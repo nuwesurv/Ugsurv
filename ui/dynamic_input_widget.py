@@ -59,6 +59,7 @@ _CRS_LBL = (
 # (field_label, placeholder) lists per mode
 _CONFIGS = {
     "xy":    [("X",     "0.000"), ("Y",    "0.000")],
+    "en":    [("E",     "0.000"), ("N",    "0.000")],   # georeferencing GCP input
     "polar": [("Dist",  "0.000"), ("Brg",  "0.0°" )],
     "value": [("Value", "0.000")],
 }
@@ -225,7 +226,7 @@ class DynamicInputWidget(QWidget):
         # fall through so single-key commands (C=close, U=undo, A=arc…)
         # still reach the tool even while fields have content.
         if ch and ch.isprintable() and ch not in ('\t', ','):
-            if self._mode in ('polar', 'xy', 'value') and not (ch.isdigit() or ch in '.-'):
+            if self._mode in ('polar', 'xy', 'en', 'value') and not (ch.isdigit() or ch in '.-'):
                 return False
             self._texts[self._active] += ch
             self._refresh_fields()
@@ -237,7 +238,7 @@ class DynamicInputWidget(QWidget):
     def _submit(self) -> bool:
         mode = self._mode
 
-        if mode == "xy":
+        if mode in ("xy", "en"):
             try:
                 x = float(self._texts[0].strip())
                 y = float(self._texts[1].strip())
