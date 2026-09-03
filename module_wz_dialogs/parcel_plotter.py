@@ -40,10 +40,6 @@ try:
 except Exception:
     print('Failed to find pandas module')
 try:
-    import geopandas as gpd
-except Exception:
-    print('Failed to find geopandas module')
-try:
     import shapely as sh
 except Exception:
     print('Failed to find shapely module')
@@ -240,15 +236,13 @@ class ParcelPlotterDialog(QDialog):
             # Create geometry
             df['geometry'] = df.index.map(lambda i: sh.Point([df.loc[i, eastings], df.loc[i, northings]]))
 
-            gdf = gpd.GeoDataFrame(data=df)
-
             crs = self.crsWidget.crs()
             epsg_code = crs.postgisSrid()
 
-            unique_codes = gdf[code].unique()
+            unique_codes = df[code].unique()
             rows = []
             for unique_code in unique_codes:
-                gdf1 = gdf[gdf[code] == unique_code]
+                gdf1 = df[df[code] == unique_code]
                 parcel_boundary = [[point.x, point.y] for point in gdf1['geometry']]
                 try:
                     poly = sh.Polygon(parcel_boundary)
@@ -261,14 +255,12 @@ class ParcelPlotterDialog(QDialog):
                 self.response.setText("No valid polygons created")
                 return
 
-            new_gdf = gpd.GeoDataFrame(rows, geometry='geometry')
-
             mem_layer = QgsVectorLayer(f'Polygon?crs=EPSG:{epsg_code}', filename, 'memory')
             prov = mem_layer.dataProvider()
             prov.addAttributes([QgsField(code, QVariant.String)])
             mem_layer.updateFields()
             feats = []
-            for _, row in new_gdf.iterrows():
+            for row in rows:
                 geom = row['geometry']
                 if geom is None or geom.is_empty:
                     continue

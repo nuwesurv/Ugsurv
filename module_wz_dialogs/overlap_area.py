@@ -15,24 +15,80 @@ _COL_PCT  = 'overlap_pct'
 _COL_AREA = 'overlap_area'
 
 
+class _STRIndex:
+    """Spatial index backed by shapely STRtree; drop-in for geopandas .sindex.intersection()."""
+
+    def __init__(self, geoms):
+        from shapely.strtree import STRtree
+        self._real_idxs = [i for i, g in enumerate(geoms)
+                           if g is not None and not g.is_empty]
+        valid = [geoms[i] for i in self._real_idxs]
+        self._tree = STRtree(valid) if valid else None
+
+    def intersection(self, bounds):
+        if self._tree is None:
+            return []
+        from shapely.geometry import box
+        hits = self._tree.query(box(*bounds))
+        return [self._real_idxs[int(h)] for h in hits]
+
+
 def _read_source(source):
-    import geopandas as gpd
+    """Read a vector file via OGR. Returns (geoms, srs)."""
+    from osgeo import ogr
+    from shapely.wkt import loads as wkt_loads
+
+    path, layername = source, None
     if '|layername=' in source:
         path, rest = source.split('|', 1)
-        layername = rest.split('layername=', 1)[1].split('|')[0]
-        return gpd.read_file(path, layer=layername)
-    return gpd.read_file(source)
+        layername  = rest.split('layername=', 1)[1].split('|')[0]
+
+    ds = ogr.Open(path, 0)
+    if ds is None:
+        raise IOError(f"Cannot open: {path}")
+    lyr = ds.GetLayerByName(layername) if layername else ds.GetLayer(0)
+    if lyr is None:
+        raise IOError(f"Layer '{layername}' not found in {path}")
+
+    srs   = lyr.GetSpatialRef()
+    geoms = []
+    for feat in lyr:
+        geom_ref = feat.GetGeometryRef()
+        if geom_ref is not None:
+            geom_ref.FlattenTo2D()
+            geoms.append(wkt_loads(geom_ref.ExportToWkt()))
+        else:
+            geoms.append(None)
+
+    ds = None
+    return geoms, srs
 
 
-def _safe_to_crs(gdf, target_crs):
-    if gdf.crs is None:
-        return gdf.set_crs(target_crs)
-    return gdf.to_crs(target_crs)
+def _reproject_geoms(geoms, from_srs, to_srs):
+    """Reproject shapely geometries; returns list unchanged if CRS is the same."""
+    if from_srs is None or to_srs is None:
+        return geoms
+    if from_srs.IsSame(to_srs):
+        return geoms
+    from osgeo import ogr, osr
+    from shapely.wkt import loads as wkt_loads
+    ct  = osr.CoordinateTransformation(from_srs, to_srs)
+    out = []
+    for g in geoms:
+        if g is None or g.is_empty:
+            out.append(g)
+            continue
+        ogr_g = ogr.CreateGeometryFromWkt(g.wkt)
+        if ogr_g is None:
+            out.append(g)
+            continue
+        ogr_g.Transform(ct)
+        out.append(wkt_loads(ogr_g.ExportToWkt()))
+    return out
 
 
 class _Worker(QObject):
     progress = pyqtSignal(str)
-    # finished emits {fid: {'pct': float|None, 'area': float|None}}
     finished = pyqtSignal(object)
     error    = pyqtSignal(str)
 
@@ -44,20 +100,20 @@ class _Worker(QObject):
 
     def run(self):
         try:
-            import geopandas as gpd
             from shapely.wkt import loads as wkt_loads
             from shapely.ops import unary_union
-            from pyproj import CRS
+            from osgeo import osr
+
+            target_srs = osr.SpatialReference()
+            target_srs.ImportFromWkt(self.layer1_crs_wkt)
 
             self.progress.emit("Loading comparison layer…")
-            gdf2 = _read_source(self.layer2_src)
-
-            target_crs = CRS.from_wkt(self.layer1_crs_wkt)
-            gdf2 = _safe_to_crs(gdf2, target_crs)
+            geoms2_raw, src_srs = _read_source(self.layer2_src)
+            geoms2_raw = _reproject_geoms(geoms2_raw, src_srs, target_srs)
+            geoms2  = [g for g in geoms2_raw if g is not None and not g.is_empty]
 
             self.progress.emit("Building spatial index for comparison layer…")
-            geoms2  = [g for g in gdf2.geometry if g is not None and not g.is_empty]
-            sindex2 = gpd.GeoDataFrame(geometry=geoms2, crs=target_crs).sindex
+            sindex2 = _STRIndex(geoms2)
 
             n           = len(self.fid_wkt_list)
             results     = {}
@@ -87,7 +143,7 @@ class _Worker(QObject):
                     results[fid] = {'pct': 0.0, 'area': 0.0}
                     continue
 
-                cands = list(sindex2.intersection(geom1.bounds))
+                cands = sindex2.intersection(geom1.bounds)
                 if not cands:
                     results[fid] = {'pct': 0.0, 'area': 0.0}
                     continue

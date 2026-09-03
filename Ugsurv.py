@@ -578,7 +578,7 @@ class Ugsurv:
         # 1. Append Geometry — copy selected features from one layer to another
         from .module_wz_dialogs.append_geometry import GeometryAppenderDock
         cmd_dock.register_ui_command("APPEND", "AG",
-            callback=_make_toggle(lambda: GeometryAppenderDock(mw)))
+            callback=_make_toggle(lambda: GeometryAppenderDock(mw, iface, canvas)))
 
         # 2. CRS Adjust — reproject selected features using a chosen CRS
         from .module_wz_dialogs.crs_adjust import CrsAdjustDock
@@ -608,11 +608,11 @@ class Ugsurv:
                 from .module_wz_dialogs.revert_geometry import RevertMapTool
                 self._revert_tool = RevertMapTool(canvas, iface, cmd_dock)
             canvas.setMapTool(self._revert_tool)
-        cmd_dock.register_ui_command("REVERT", "REV", callback=_activate_revert)
+        cmd_dock.register_ui_command("RV", "REV", callback=_activate_revert)
 
         # 7. Solve Topology — cut parcels against rivers, roads, waterbodies
         from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
-        cmd_dock.register_ui_command("TOPO", "ST",
+        cmd_dock.register_ui_command("SLV", "ST",
             callback=_make_toggle(lambda: SolveTopologyDock(mw)))
 
         # 8. Spiky Geometry — find sharp-angled vertices across polygon layers
@@ -645,7 +645,7 @@ class Ugsurv:
                 _tfix_ref[0] = TopologySolver(canvas, iface, cmd_dock)
                 self._tfix_tool = _tfix_ref[0]
             canvas.setMapTool(_tfix_ref[0])
-        cmd_dock.register_ui_command("TFIX", "TF", callback=_activate_tfix)
+        cmd_dock.register_ui_command("TS", "TF", callback=_activate_tfix)
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
@@ -798,7 +798,6 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.selection.erase_tool      import EraseTool
     from .tools.selection.stretch_tool    import StretchTool
     from .tools.vertex_edit.grip_edit_tool     import GripEditTool
-    from .tools.vertex_edit.add_vertex_tool    import AddVertexTool
     from .tools.vertex_edit.break_tool         import BreakTool
     from .tools.vertex_edit.join_tool          import JoinTool
     from .tools.modify.chamfer_tool        import ChamferTool
@@ -818,7 +817,7 @@ def _make_tool(key: str, canvas, ctx, translator):
         "fillet":        FilletTool,      "array":         ArrayTool,
         "erase":         EraseTool,
         "stretch":       StretchTool,
-        "grip_edit":     GripEditTool,    "add_vertex":    AddVertexTool,
+        "grip_edit":     GripEditTool,
         "break":         BreakTool,
         "join":          JoinTool,
         "chamfer":       ChamferTool,     "explode":       ExplodeTool,
@@ -855,7 +854,6 @@ def _register_commands(registry):
         ("erase",         "ERASE",   "E", "DEL"),
         ("stretch",       "STRETCH", "S"),
         ("grip_edit",     "GRIPS",   "V"),
-        ("add_vertex",    "ADDV",    "AV"),
         ("break",         "BREAK",   "BR"),
         ("join",          "JOIN",    "J"),
         ("chamfer",       "CHAMFER", "CH"),

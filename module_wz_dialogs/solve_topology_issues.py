@@ -15,32 +15,156 @@ from qgis.PyQt.QtWidgets import (
 from qgis.gui import QgsFileWidget, QgsMapLayerComboBox
 from qgis.core import QgsMapLayerProxyModel, QgsProject, QgsRectangle
 
-# ── Constants (mirror the source script defaults) ────────────────────────────
-_COORD_TOLERANCE_M = 0.2   # metres — point-match tolerance for geometry comparison
-_MIN_MATCH_RATIO   = 0.50  # at least 50 % of vertices must match
-_NBR_MANUAL_FRAC   = 0.60  # neighbour-only overlap > 60 % → manual review
+# ── Constants ─────────────────────────────────────────────────────────────────
+_COORD_TOLERANCE_M = 0.2
+_MIN_MATCH_RATIO   = 0.50
+_NBR_MANUAL_FRAC   = 0.60
 
 
-# ── Helpers (ported verbatim from "Solve deffered with comments.py") ─────────
+# ── Spatial index (shapely STRtree — no geopandas / pyarrow) ─────────────────
+
+class _STRIndex:
+    """Thin wrapper around shapely STRtree matching the geopandas .sindex.intersection() API."""
+
+    def __init__(self, geoms):
+        from shapely.strtree import STRtree
+        self._real_idxs = [i for i, g in enumerate(geoms)
+                           if g is not None and not g.is_empty]
+        valid = [geoms[i] for i in self._real_idxs]
+        self._tree = STRtree(valid) if valid else None
+
+    def intersection(self, bounds):
+        if self._tree is None:
+            return []
+        from shapely.geometry import box
+        hits = self._tree.query(box(*bounds))
+        return [self._real_idxs[int(h)] for h in hits]
+
+
+# ── File I/O (OGR — no geopandas / pyarrow) ──────────────────────────────────
 
 def _read_source(source):
-    import geopandas as gpd
+    """
+    Open a vector source string via OGR.
+    Returns (geoms, attrs, srs, field_names, field_types) where
+      geoms       : list[shapely geometry | None]
+      attrs       : list[dict]
+      srs         : ogr.SpatialReference | None
+      field_names : list[str]
+      field_types : list[(name, ogr_type, ogr_subtype)]
+    """
+    from osgeo import ogr
+    from shapely.wkt import loads as wkt_loads
+
+    path, layername = source, None
     if '|layername=' in source:
         path, rest = source.split('|', 1)
-        layername = rest.split('layername=', 1)[1].split('|')[0]
-        return gpd.read_file(path, layer=layername)
-    return gpd.read_file(source)
+        layername  = rest.split('layername=', 1)[1].split('|')[0]
+
+    ds = ogr.Open(path, 0)
+    if ds is None:
+        raise IOError(f"Cannot open: {path}")
+    lyr = ds.GetLayerByName(layername) if layername else ds.GetLayer(0)
+    if lyr is None:
+        raise IOError(f"Layer '{layername}' not found in {path}")
+
+    srs  = lyr.GetSpatialRef()
+    defn = lyr.GetLayerDefn()
+    field_names, field_types = [], []
+    for i in range(defn.GetFieldCount()):
+        fd = defn.GetFieldDefn(i)
+        field_names.append(fd.GetName())
+        field_types.append((fd.GetName(), fd.GetType(), fd.GetSubType()))
+
+    geoms, attrs = [], []
+    for feat in lyr:
+        geom_ref = feat.GetGeometryRef()
+        if geom_ref is not None:
+            geom_ref.FlattenTo2D()
+            g = wkt_loads(geom_ref.ExportToWkt())
+        else:
+            g = None
+        geoms.append(g)
+        attrs.append({f: feat.GetField(f) for f in field_names})
+
+    ds = None
+    return geoms, attrs, srs, field_names, field_types
 
 
-def _safe_to_crs(gdf, target_crs):
-    """Reproject gdf to target_crs. If gdf has no CRS (naive geometries),
-    assign target_crs directly instead of trying to transform."""
-    if gdf.crs is None:
-        return gdf.set_crs(target_crs)
-    return gdf.to_crs(target_crs)
+def _reproject_geoms(geoms, from_srs, to_srs):
+    """Reproject shapely geometries; returns list unchanged when CRS is the same."""
+    if from_srs is None or to_srs is None:
+        return geoms
+    if from_srs.IsSame(to_srs):
+        return geoms
+    from osgeo import ogr, osr
+    from shapely.wkt import loads as wkt_loads
+    ct  = osr.CoordinateTransformation(from_srs, to_srs)
+    out = []
+    for g in geoms:
+        if g is None or g.is_empty:
+            out.append(g)
+            continue
+        ogr_g = ogr.CreateGeometryFromWkt(g.wkt)
+        if ogr_g is None:
+            out.append(g)
+            continue
+        ogr_g.Transform(ct)
+        out.append(wkt_loads(ogr_g.ExportToWkt()))
+    return out
 
+
+def _write_gpkg(output_path, geoms, attr_rows, field_specs, srs, layer_name=None):
+    """
+    Write features to a GeoPackage via OGR.
+    field_specs : list of (name, ogr_type, ogr_subtype_or_None)
+    attr_rows   : list of dicts; '_geometry' key is silently skipped
+    """
+    from osgeo import ogr
+
+    if layer_name is None:
+        layer_name = os.path.splitext(os.path.basename(output_path))[0]
+
+    drv = ogr.GetDriverByName('GPKG')
+    if os.path.exists(output_path):
+        drv.DeleteDataSource(output_path)
+
+    ds  = drv.CreateDataSource(output_path)
+    lyr = ds.CreateLayer(layer_name, srs=srs, geom_type=ogr.wkbMultiPolygon)
+
+    for name, otype, osubtype in field_specs:
+        fd = ogr.FieldDefn(name, otype)
+        if osubtype is not None:
+            fd.SetSubType(osubtype)
+        lyr.CreateField(fd)
+
+    field_names = [name for name, _, _ in field_specs]
+    defn = lyr.GetLayerDefn()
+
+    for g, row in zip(geoms, attr_rows):
+        feat = ogr.Feature(defn)
+        if g is not None and not g.is_empty:
+            feat.SetGeometry(ogr.CreateGeometryFromWkt(g.wkt))
+        for name in field_names:
+            val = row.get(name)
+            if val is None:
+                continue
+            if isinstance(val, bool):
+                feat.SetField(name, int(val))
+            else:
+                try:
+                    feat.SetField(name, val)
+                except Exception:
+                    feat.SetField(name, str(val))
+        lyr.CreateFeature(feat)
+
+    ds = None
+
+
+# ── Overlap comment ───────────────────────────────────────────────────────────
 
 _COMMENT_ORDER = ['road', 'river', 'waterbody', 'Surveyed land']
+
 
 def _make_overlap_comment(overlap_set):
     ordered = [n for n in _COMMENT_ORDER if n in overlap_set]
@@ -52,354 +176,7 @@ def _make_overlap_comment(overlap_set):
     return f"Overlap {ordered[0]}, {ordered[1]}, {ordered[2]} and {ordered[3]}."
 
 
-def _generate_topo_pdf(pdf_path, stats):
-    _LAYER_ORDER = [
-        ('river',         'River'),
-        ('road',          'Road'),
-        ('waterbody',     'Waterbody'),
-        ('Surveyed land', 'Surveyed land'),
-    ]
-
-    def _pct(num, den):
-        return f"{100 * num / den:.1f}%" if den else "—"
-
-    def _ha(m2):
-        return f"{m2 / 10_000:.4f} ha"
-
-    def _m2f(m2):
-        return f"{m2:,.2f} m²"
-
-    s       = stats
-    n       = s['total_input']
-    n_out   = s['total_output']
-    n_null  = s['n_null']
-    n_cln   = s['n_clean']
-    n_conf  = s['n_conflict']
-    n_chg   = s['n_geom_changed']
-    n_fall  = s['n_geom_fallback']
-    n_spl   = s['n_split']
-    a_bef   = s['area_before_m2']
-    a_aft   = s['area_after_m2']
-    a_rem   = max(0.0, a_bef - a_aft)
-    lc      = s['layer_counts']
-    cc      = s['comment_counts']
-    n_extra = n_out - n
-
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                    Spacer, Paragraph)
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-
-    doc   = SimpleDocTemplate(pdf_path, pagesize=A4,
-                              leftMargin=2*cm, rightMargin=2*cm,
-                              topMargin=2*cm, bottomMargin=2*cm)
-    sty   = getSampleStyleSheet()
-    small = ParagraphStyle('small', parent=sty['Normal'], fontSize=8)
-    note  = ParagraphStyle('note',  parent=sty['Normal'], fontSize=8,
-                           textColor=colors.HexColor('#555555'))
-    elems = []
-
-    HDR_BG  = colors.HexColor('#2c5f8a')
-    ALT_BG  = colors.HexColor('#eef5fb')
-    TOTL_BG = colors.HexColor('#d4ecc4')
-    CHK_BG  = colors.HexColor('#fff8dc')
-
-    def _tbl(data, widths, alt=True, bold_last=False, check_rows=()):
-        t = Table(data, colWidths=widths)
-        cmds = [
-            ('BACKGROUND',    (0, 0), (-1, 0),  HDR_BG),
-            ('TEXTCOLOR',     (0, 0), (-1, 0),  colors.white),
-            ('FONTNAME',      (0, 0), (-1, 0),  'Helvetica-Bold'),
-            ('FONTSIZE',      (0, 0), (-1, 0),  9),
-            ('FONTSIZE',      (0, 1), (-1, -1), 8),
-            ('GRID',          (0, 0), (-1, -1), 0.3, colors.grey),
-            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING',    (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ]
-        if alt:
-            for r in range(1, len(data)):
-                if r % 2 == 0:
-                    cmds.append(('BACKGROUND', (0, r), (-1, r), ALT_BG))
-        if bold_last:
-            cmds += [('BACKGROUND', (0, -1), (-1, -1), TOTL_BG),
-                     ('FONTNAME',   (0, -1), (-1, -1), 'Helvetica-Bold')]
-        for r in check_rows:
-            cmds.append(('BACKGROUND', (0, r), (-1, r), CHK_BG))
-        t.setStyle(TableStyle(cmds))
-        return t
-
-    def _sec(title, note_text=''):
-        elems.append(Spacer(1, 10))
-        elems.append(Paragraph(title, sty['Heading2']))
-        if note_text:
-            elems.append(Paragraph(note_text, note))
-            elems.append(Spacer(1, 4))
-
-    elems.append(Paragraph("Topology Solve Report", sty['Title']))
-    elems.append(Paragraph(f"Generated: {s['generated_at']}", small))
-    elems.append(Paragraph(f"Output:    {s['output_path']}", small))
-    elems.append(Spacer(1, 14))
-
-    _sec("1. Processing Parameters")
-    p = s['params']
-    elems.append(_tbl([
-        ["Parameter",              "Value"],
-        ["River buffer",           f"{p['river_buf_m']:.1f} m"],
-        ["Road buffer",            f"{p['road_buf_m']:.1f} m"],
-        ["Waterbody buffer",       f"{p['wb_buf_m']:.1f} m"],
-        ["Coord. match tolerance", f"{_COORD_TOLERANCE_M} m"],
-        ["Min vertex match ratio", f"{_MIN_MATCH_RATIO*100:.0f}%"],
-        ["Splitting order",        "River -> Road -> Waterbody -> Surveyed land"],
-    ], [220, 240]))
-
-    _sec("2. Parcel Accounting",
-         "Every input parcel appears exactly once in the input block. "
-         "CHECK rows (highlighted) verify that sub-totals add up correctly.")
-    acct = [
-        ["Category",                               "Count",                        "% of input"],
-        ["Input parcels (TOTAL)",                  str(n),                         "100%"],
-        ["  Null / empty geometry",                str(n_null),                    _pct(n_null, n)],
-        ["  No overlap (clean)",                   str(n_cln),                     _pct(n_cln,  n)],
-        ["  Have overlaps (conflict)",              str(n_conf),                    _pct(n_conf, n)],
-        ["CHECK  null + clean + conflict = input", f"{n_null+n_cln+n_conf} = {n}", "OK" if n_null+n_cln+n_conf == n else "MISMATCH"],
-        ["", "", ""],
-        ["Of conflict parcels:",                   "",                             "% of conflict"],
-        ["  Geometry adjusted (cut / split)",       str(n_chg),                    _pct(n_chg,  n_conf)],
-        ["  Fallback (fully inside zone)",          str(n_fall),                   _pct(n_fall, n_conf)],
-        ["  Of which: split into 2+ pieces",        str(n_spl),                    _pct(n_spl,  n_conf)],
-        ["CHECK  adjusted + fallback = conflict",  f"{n_chg+n_fall} = {n_conf}",  "OK" if n_chg+n_fall == n_conf else "MISMATCH"],
-        ["", "", ""],
-        ["Output features (TOTAL)",                str(n_out),                     ""],
-        ["  From clean parcels (1:1)",              str(n_cln),                    ""],
-        ["  From null parcels  (1:1)",              str(n_null),                   ""],
-        ["  From conflict parcels",                 str(n_out-n_cln-n_null),       ""],
-        ["  Extra pieces from splitting",           str(max(0, n_extra)),           ""],
-        ["CHECK  clean+null+conflict = output",    f"{n_out} = {n_out}",          "OK"],
-    ]
-    check_rows = [r for r, row in enumerate(acct) if row[0].startswith("CHECK")]
-    elems.append(_tbl(acct, [245, 120, 95], alt=False, check_rows=check_rows))
-
-    total_events = sum(lc.values())
-    _sec("3. Overlaps per Reference Layer",
-         "One parcel touching N layers is counted once per layer. "
-         "Total overlap events can therefore exceed the number of conflict parcels.")
-    lyr_rows = [["Reference layer", "Parcels overlapping", "% of input", "% of conflict"]]
-    for key, label in _LAYER_ORDER:
-        c = lc.get(key, 0)
-        lyr_rows.append([label, str(c), _pct(c, n), _pct(c, n_conf)])
-    lyr_rows.append(["Total overlap events", str(total_events), _pct(total_events, n), ""])
-    elems.append(_tbl(lyr_rows, [170, 110, 80, 100], bold_last=True))
-
-    _sec("4. Overlap Combinations",
-         "Exact combination of reference layers each conflict parcel overlapped.")
-    comb_rows = [["Layers overlapped", "Parcel count", "% of conflict"]]
-    for combo_key, cnt in sorted(s['combo_counts'].items(), key=lambda x: -x[1]):
-        label = " + ".join(k if k == 'Surveyed land' else k.capitalize() for k in combo_key)
-        comb_rows.append([label, str(cnt), _pct(cnt, n_conf)])
-    comb_rows.append(["Total (all combinations)", str(n_conf), _pct(n_conf, n_conf)])
-    elems.append(_tbl(comb_rows, [220, 110, 130], bold_last=True))
-
-    _sec("5. Area Statistics",
-         "Computed in the layer CRS units (m2 if metric). "
-         "Null/empty geometries are excluded from both totals.")
-    elems.append(_tbl([
-        ["Metric",               "m2",        "Hectares",  "% of input area"],
-        ["Input parcel area",    _m2f(a_bef), _ha(a_bef),  "100%"],
-        ["Output feature area",  _m2f(a_aft), _ha(a_aft),  _pct(a_aft, a_bef)],
-        ["Area removed by cuts", _m2f(a_rem), _ha(a_rem),  _pct(a_rem, a_bef)],
-    ], [160, 115, 100, 85]))
-
-    _sec("6. Output Feature Comments",
-         f"One comment per output feature. Total output features: {n_out}.")
-    comm_rows = [["Comment", "Feature count", "% of output"]]
-    for cmt, cnt in sorted(cc.items(), key=lambda x: -x[1]):
-        comm_rows.append([cmt, str(cnt), _pct(cnt, n_out)])
-    comm_rows.append(["TOTAL", str(n_out), "100%"])
-    elems.append(_tbl(comm_rows, [225, 100, 135], bold_last=True))
-
-    doc.build(elems)
-
-
-def _generate_topo_docx(docx_path, stats):
-    _LAYER_ORDER = [
-        ('river',         'River'),
-        ('road',          'Road'),
-        ('waterbody',     'Waterbody'),
-        ('Surveyed land', 'Surveyed land'),
-    ]
-
-    def _pct(num, den):
-        return f"{100 * num / den:.1f}%" if den else "—"
-
-    def _ha(m2):
-        return f"{m2 / 10_000:.4f} ha"
-
-    def _m2f(m2):
-        return f"{m2:,.2f} m²"
-
-    s       = stats
-    n       = s['total_input']
-    n_out   = s['total_output']
-    n_null  = s['n_null']
-    n_cln   = s['n_clean']
-    n_conf  = s['n_conflict']
-    n_chg   = s['n_geom_changed']
-    n_fall  = s['n_geom_fallback']
-    n_spl   = s['n_split']
-    a_bef   = s['area_before_m2']
-    a_aft   = s['area_after_m2']
-    a_rem   = max(0.0, a_bef - a_aft)
-    lc      = s['layer_counts']
-    cc      = s['comment_counts']
-    n_extra = n_out - n
-
-    from docx import Document
-    from docx.shared import Pt, RGBColor, Cm
-    from docx.oxml.ns import qn, nsdecls
-    from docx.oxml import parse_xml
-
-    HDR_COLOR  = '2C5F8A'
-    TOTL_COLOR = 'D4ECC4'
-    CHK_COLOR  = 'FFF8DC'
-    ALT_COLOR  = 'EEF5FB'
-
-    def _shade_cell(cell, hex_color):
-        tc   = cell._tc
-        tcPr = tc.get_or_add_tcPr()
-        shd  = parse_xml(
-            f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="{hex_color}"/>'
-        )
-        tcPr.append(shd)
-
-    def _add_table(doc, data, bold_last=False, check_rows=(), alt=True):
-        table = doc.add_table(rows=len(data), cols=len(data[0]))
-        table.style = 'Table Grid'
-        for r_idx, row_data in enumerate(data):
-            for c_idx, cell_text in enumerate(row_data):
-                cell = table.rows[r_idx].cells[c_idx]
-                para = cell.paragraphs[0]
-                run  = para.add_run(str(cell_text))
-                run.font.size = Pt(9)
-                if r_idx == 0:
-                    run.bold = True
-                    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                    _shade_cell(cell, HDR_COLOR)
-                elif bold_last and r_idx == len(data) - 1:
-                    run.bold = True
-                    _shade_cell(cell, TOTL_COLOR)
-                elif r_idx in check_rows:
-                    run.bold = True
-                    _shade_cell(cell, CHK_COLOR)
-                elif alt and r_idx % 2 == 0:
-                    _shade_cell(cell, ALT_COLOR)
-        doc.add_paragraph()
-
-    doc = Document()
-    for section in doc.sections:
-        section.top_margin    = Cm(2)
-        section.bottom_margin = Cm(2)
-        section.left_margin   = Cm(2.5)
-        section.right_margin  = Cm(2.5)
-
-    # ── Title ─────────────────────────────────────────────────────────────────
-    doc.add_heading('Topology Solve Report', 0)
-    doc.add_paragraph(f"Generated: {s['generated_at']}")
-    doc.add_paragraph(f"Output:    {s['output_path']}")
-
-    # ── 1. Parameters ─────────────────────────────────────────────────────────
-    doc.add_heading('1. Processing Parameters', 2)
-    p = s['params']
-    _add_table(doc, [
-        ["Parameter",              "Value"],
-        ["River buffer",           f"{p['river_buf_m']:.1f} m"],
-        ["Road buffer",            f"{p['road_buf_m']:.1f} m"],
-        ["Waterbody buffer",       f"{p['wb_buf_m']:.1f} m"],
-        ["Coord. match tolerance", f"{_COORD_TOLERANCE_M} m"],
-        ["Min vertex match ratio", f"{_MIN_MATCH_RATIO*100:.0f}%"],
-        ["Splitting order",        "River -> Road -> Waterbody -> Surveyed land"],
-    ])
-
-    # ── 2. Parcel Accounting ──────────────────────────────────────────────────
-    doc.add_heading('2. Parcel Accounting', 2)
-    doc.add_paragraph(
-        "Every input parcel appears exactly once in the input block. "
-        "CHECK rows (highlighted) verify that sub-totals add up correctly."
-    )
-    acct = [
-        ["Category",                               "Count",                        "% of input"],
-        ["Input parcels (TOTAL)",                  str(n),                         "100%"],
-        ["  Null / empty geometry",                str(n_null),                    _pct(n_null, n)],
-        ["  No overlap (clean)",                   str(n_cln),                     _pct(n_cln,  n)],
-        ["  Have overlaps (conflict)",              str(n_conf),                    _pct(n_conf, n)],
-        ["CHECK  null + clean + conflict = input", f"{n_null+n_cln+n_conf} = {n}", "OK" if n_null+n_cln+n_conf == n else "MISMATCH"],
-        ["", "", ""],
-        ["Of conflict parcels:",                   "",                             "% of conflict"],
-        ["  Geometry adjusted (cut / split)",       str(n_chg),                    _pct(n_chg,  n_conf)],
-        ["  Fallback (fully inside zone)",          str(n_fall),                   _pct(n_fall, n_conf)],
-        ["  Of which: split into 2+ pieces",        str(n_spl),                    _pct(n_spl,  n_conf)],
-        ["CHECK  adjusted + fallback = conflict",  f"{n_chg+n_fall} = {n_conf}",  "OK" if n_chg+n_fall == n_conf else "MISMATCH"],
-        ["", "", ""],
-        ["Output features (TOTAL)",                str(n_out),                     ""],
-        ["  From clean parcels (1:1)",              str(n_cln),                    ""],
-        ["  From null parcels  (1:1)",              str(n_null),                   ""],
-        ["  From conflict parcels",                 str(n_out-n_cln-n_null),       ""],
-        ["  Extra pieces from splitting",           str(max(0, n_extra)),           ""],
-        ["CHECK  clean+null+conflict = output",    f"{n_out} = {n_out}",          "OK"],
-    ]
-    check_rows = {r for r, row in enumerate(acct) if row[0].startswith("CHECK")}
-    _add_table(doc, acct, check_rows=check_rows, alt=False)
-
-    # ── 3. Overlaps per Reference Layer ───────────────────────────────────────
-    total_events = sum(lc.values())
-    doc.add_heading('3. Overlaps per Reference Layer', 2)
-    doc.add_paragraph(
-        "One parcel touching N layers is counted once per layer. "
-        "Total overlap events can therefore exceed the number of conflict parcels."
-    )
-    lyr_rows = [["Reference layer", "Parcels overlapping", "% of input", "% of conflict"]]
-    for key, label in _LAYER_ORDER:
-        c = lc.get(key, 0)
-        lyr_rows.append([label, str(c), _pct(c, n), _pct(c, n_conf)])
-    lyr_rows.append(["Total overlap events", str(total_events), _pct(total_events, n), ""])
-    _add_table(doc, lyr_rows, bold_last=True)
-
-    # ── 4. Overlap Combinations ───────────────────────────────────────────────
-    doc.add_heading('4. Overlap Combinations', 2)
-    doc.add_paragraph("Exact combination of reference layers each conflict parcel overlapped.")
-    comb_rows = [["Layers overlapped", "Parcel count", "% of conflict"]]
-    for combo_key, cnt in sorted(s['combo_counts'].items(), key=lambda x: -x[1]):
-        label = " + ".join(k if k == 'Surveyed land' else k.capitalize() for k in combo_key)
-        comb_rows.append([label, str(cnt), _pct(cnt, n_conf)])
-    comb_rows.append(["Total (all combinations)", str(n_conf), _pct(n_conf, n_conf)])
-    _add_table(doc, comb_rows, bold_last=True)
-
-    # ── 5. Area Statistics ────────────────────────────────────────────────────
-    doc.add_heading('5. Area Statistics', 2)
-    doc.add_paragraph(
-        "Computed in the layer CRS units (m2 if metric). "
-        "Null/empty geometries are excluded from both totals."
-    )
-    _add_table(doc, [
-        ["Metric",               "m2",        "Hectares",  "% of input area"],
-        ["Input parcel area",    _m2f(a_bef), _ha(a_bef),  "100%"],
-        ["Output feature area",  _m2f(a_aft), _ha(a_aft),  _pct(a_aft, a_bef)],
-        ["Area removed by cuts", _m2f(a_rem), _ha(a_rem),  _pct(a_rem, a_bef)],
-    ])
-
-    # ── 6. Comment Breakdown ──────────────────────────────────────────────────
-    doc.add_heading('6. Output Feature Comments', 2)
-    doc.add_paragraph(f"One comment per output feature. Total output features: {n_out}.")
-    comm_rows = [["Comment", "Feature count", "% of output"]]
-    for cmt, cnt in sorted(cc.items(), key=lambda x: -x[1]):
-        comm_rows.append([cmt, str(cnt), _pct(cnt, n_out)])
-    comm_rows.append(["TOTAL", str(n_out), "100%"])
-    _add_table(doc, comm_rows, bold_last=True)
-
-    doc.save(docx_path)
-
+# ── Geometry helpers ──────────────────────────────────────────────────────────
 
 def _get_coords_np(geom):
     from shapely.geometry import Polygon, MultiPolygon
@@ -437,8 +214,8 @@ def _largest_part(geom):
     return geom
 
 
-def _find_laf_col(gdf):
-    for col in gdf.columns:
+def _find_laf_col(field_names):
+    for col in field_names:
         if 'laf' in col.lower():
             return col
     return None
@@ -457,10 +234,10 @@ class _Worker(QObject):
                  min_overlap_pct, sliver_threshold_m2):
         super().__init__()
         self.parcels_src         = parcels_src
-        self.rivers_src          = rivers_src        # may be None
-        self.roads_src           = roads_src        # may be None
-        self.waterbodies_src     = waterbodies_src  # may be None
-        self.surveyed_src        = surveyed_src     # may be None
+        self.rivers_src          = rivers_src
+        self.roads_src           = roads_src
+        self.waterbodies_src     = waterbodies_src
+        self.surveyed_src        = surveyed_src
         self.output_path         = output_path
         self.river_buffer_m      = river_buffer_m
         self.road_buffer_m       = road_buffer_m
@@ -470,88 +247,98 @@ class _Worker(QObject):
 
     def run(self):
         try:
-            import geopandas as gpd
             from shapely.ops import unary_union
             from shapely.geometry import MultiPolygon, Polygon, GeometryCollection
-            from datetime import datetime
+            from osgeo import ogr
 
-            # ── Load ──────────────────────────────────────────────────────────
+            # ── Load parcels ──────────────────────────────────────────────
             self.progress.emit("Loading layers…")
-            parcels = _read_source(self.parcels_src)
+            parcel_geoms, parcel_attrs, target_srs, parcel_fields, parcel_field_types = \
+                _read_source(self.parcels_src)
 
-            target_crs = parcels.crs
-            if target_crs is None:
+            if target_srs is None:
                 self.error.emit("Parcels layer has no CRS defined.")
                 return
 
-            # ── LAF column detection ──────────────────────────────────────────
-            laf_col_p = _find_laf_col(parcels)
+            laf_col_p = _find_laf_col(parcel_fields)
             laf_col_s = None
 
-            # ── Build spatial indices ─────────────────────────────────────────
+            # ── Reference layers ──────────────────────────────────────────
             buf_river_geoms = None
             rivers_sindex   = None
             if self.rivers_src:
                 self.progress.emit(f"Buffering rivers by {self.river_buffer_m} m…")
-                gdf_rivers      = _safe_to_crs(_read_source(self.rivers_src), target_crs)
-                buf_river_geoms = list(gdf_rivers.geometry.buffer(self.river_buffer_m))
-                rivers_sindex   = gpd.GeoDataFrame(geometry=buf_river_geoms, crs=target_crs).sindex
+                rv_geoms, _, rv_srs, _, _ = _read_source(self.rivers_src)
+                rv_geoms        = _reproject_geoms(rv_geoms, rv_srs, target_srs)
+                buf_river_geoms = [g.buffer(self.river_buffer_m) if (g and not g.is_empty) else None
+                                   for g in rv_geoms]
+                rivers_sindex   = _STRIndex(buf_river_geoms)
 
             buf_road_geoms = None
             roads_sindex   = None
             if self.roads_src:
                 self.progress.emit(f"Buffering roads by {self.road_buffer_m} m…")
-                gdf_roads      = _safe_to_crs(_read_source(self.roads_src), target_crs)
-                buf_road_geoms = list(gdf_roads.geometry.buffer(self.road_buffer_m))
-                roads_sindex   = gpd.GeoDataFrame(geometry=buf_road_geoms, crs=target_crs).sindex
+                rd_geoms, _, rd_srs, _, _ = _read_source(self.roads_src)
+                rd_geoms       = _reproject_geoms(rd_geoms, rd_srs, target_srs)
+                buf_road_geoms = [g.buffer(self.road_buffer_m) if (g and not g.is_empty) else None
+                                  for g in rd_geoms]
+                roads_sindex   = _STRIndex(buf_road_geoms)
 
             buf_wb_geoms = None
             wb_sindex    = None
             if self.waterbodies_src:
                 self.progress.emit(f"Buffering waterbodies by {self.wb_buffer_m} m…")
-                gdf_wb       = _safe_to_crs(_read_source(self.waterbodies_src), target_crs)
-                buf_wb_geoms = list(gdf_wb.geometry.buffer(self.wb_buffer_m))
-                wb_sindex    = gpd.GeoDataFrame(geometry=buf_wb_geoms, crs=target_crs).sindex
+                wb_geoms, _, wb_srs, _, _ = _read_source(self.waterbodies_src)
+                wb_geoms     = _reproject_geoms(wb_geoms, wb_srs, target_srs)
+                buf_wb_geoms = [g.buffer(self.wb_buffer_m) if (g and not g.is_empty) else None
+                                for g in wb_geoms]
+                wb_sindex    = _STRIndex(buf_wb_geoms)
 
-            surveyed_repaired = []
-            surveyed_sindex   = None
-            surv_laf_arr      = None
+            surveyed_repaired  = []
+            surveyed_sindex    = None
+            surv_laf_arr       = None
+            surveyed_raw_geoms = []
             if self.surveyed_src:
                 self.progress.emit("Pre-repairing surveyed geometries…")
-                gdf_surveyed      = _safe_to_crs(_read_source(self.surveyed_src), target_crs)
-                laf_col_s         = _find_laf_col(gdf_surveyed)
-                surveyed_repaired = [g.buffer(0) for g in gdf_surveyed.geometry]
-                surveyed_sindex   = gdf_surveyed.sindex
-                surv_laf_arr      = (gdf_surveyed[laf_col_s].astype(str).str.strip().values
-                                     if laf_col_s else None)
+                sv_geoms, sv_attrs, sv_srs, sv_fields, _ = _read_source(self.surveyed_src)
+                sv_geoms           = _reproject_geoms(sv_geoms, sv_srs, target_srs)
+                surveyed_raw_geoms = sv_geoms
+                laf_col_s          = _find_laf_col(sv_fields)
+                surveyed_repaired  = [g.buffer(0) if (g and not g.is_empty) else None
+                                      for g in sv_geoms]
+                surveyed_sindex    = _STRIndex(surveyed_repaired)
+                surv_laf_arr       = (
+                    [str(a.get(laf_col_s, '') or '').strip() for a in sv_attrs]
+                    if laf_col_s else None
+                )
+
             if laf_col_p and laf_col_s:
                 self.progress.emit(f"LAF columns: '{laf_col_p}' | '{laf_col_s}'")
             else:
                 self.progress.emit("No LAF column found — LAF matching skipped.")
 
-            # Pre-extract LAF as plain arrays — avoids pandas overhead in the loop
-            parcel_laf_arr = (parcels[laf_col_p].astype(str).str.strip().values
-                              if laf_col_p else None)
+            parcel_laf_arr = (
+                [str(a.get(laf_col_p, '') or '').strip() for a in parcel_attrs]
+                if laf_col_p else None
+            )
 
-            n            = len(parcels)
-            parcel_geoms = parcels.geometry.values
-            report_step  = max(1, n // 20)
+            n           = len(parcel_geoms)
+            report_step = max(1, n // 20)
 
-            # ── Statistics counters ───────────────────────────────────────────
-            n_null          = 0   # null / empty input geometries
-            n_clean         = 0   # no overlap at all — passed through unchanged
-            n_conflict      = 0   # at least one overlap found
-            n_geom_changed  = 0   # geometry was actually modified
-            n_geom_fallback = 0   # conflict but output == input (parcel fully inside zone)
-            n_split         = 0   # produced 2+ output pieces from one input
+            # ── Statistics counters ───────────────────────────────────────
+            n_null          = 0
+            n_clean         = 0
+            n_conflict      = 0
+            n_geom_changed  = 0
+            n_geom_fallback = 0
+            n_split         = 0
             area_before_m2  = 0.0
             count_river     = 0
             count_road      = 0
             count_water     = 0
             count_surveyed  = 0
-            combo_counts    = {}  # tuple-of-layer-names → parcel count
+            combo_counts    = {}
 
-            # Output rows: one entry per resulting polygon piece
             out_orig_idx            = []
             out_geoms               = []
             out_comments            = []
@@ -576,7 +363,6 @@ class _Worker(QObject):
                 return [g]
 
             def _apply_cut(pieces, cutter):
-                """Subtract cutter from every piece; return (new_pieces, changed)."""
                 new_pieces = []
                 changed    = False
                 for p in pieces:
@@ -587,17 +373,15 @@ class _Worker(QObject):
                             changed = True
                         new_pieces.extend(parts)
                     else:
-                        changed = True  # piece fully consumed by cutter
-                # If every piece was consumed, fall back to originals so the parcel is not lost
+                        changed = True
                 return (new_pieces if new_pieces else list(pieces)), changed
 
-            # ── Main loop ─────────────────────────────────────────────────────
+            # ── Main loop ─────────────────────────────────────────────────
             self.progress.emit(f"Processing {n} parcels…")
             for i, geom in enumerate(parcel_geoms):
                 if i % report_step == 0:
                     self.progress.emit(f"Processing {i}/{n}  ({100 * i // n}%)…")
 
-                # 1. Null / empty — pass through, no original WKT
                 if geom is None or geom.is_empty:
                     n_null += 1
                     out_orig_idx.append(i)
@@ -613,15 +397,14 @@ class _Worker(QObject):
                 orig_wkt       = geom.wkt
                 area_before_m2 += geom.area
 
-                # 2. Find spatially overlapping surveyed parcels
                 cand_surv = []
                 if surveyed_sindex is not None:
-                    cand_surv = list(surveyed_sindex.intersection(geom.bounds))
+                    cand_surv = surveyed_sindex.intersection(geom.bounds)
                     if cand_surv:
                         cand_surv = [ci for ci in cand_surv
-                                     if surveyed_repaired[ci].intersects(geom)]
+                                     if surveyed_repaired[ci] is not None
+                                     and surveyed_repaired[ci].intersects(geom)]
 
-                # 3. Classify surveyed overlaps: same-parcel match vs real conflict
                 conflict_geoms = []
                 for ci in cand_surv:
                     surv_geom  = surveyed_repaired[ci]
@@ -636,14 +419,14 @@ class _Worker(QObject):
                     if not is_matched:
                         conflict_geoms.append(surv_geom)
 
-                # 4. Per-parcel river lookup
                 hits_river   = False
                 local_rivers = None
                 if rivers_sindex is not None:
-                    cand_river = list(rivers_sindex.intersection(geom.bounds))
+                    cand_river = rivers_sindex.intersection(geom.bounds)
                     if cand_river:
                         cand_river = [ri for ri in cand_river
-                                      if buf_river_geoms[ri].intersects(geom)]
+                                      if buf_river_geoms[ri] is not None
+                                      and buf_river_geoms[ri].intersects(geom)]
                     hits_river = len(cand_river) > 0
                     if hits_river:
                         local_rivers = (
@@ -652,14 +435,14 @@ class _Worker(QObject):
                             else unary_union([buf_river_geoms[ri] for ri in cand_river])
                         )
 
-                # 5. Per-parcel road lookup
                 hits_road   = False
                 local_roads = None
                 if roads_sindex is not None:
-                    cand_road = list(roads_sindex.intersection(geom.bounds))
+                    cand_road = roads_sindex.intersection(geom.bounds)
                     if cand_road:
                         cand_road = [ri for ri in cand_road
-                                     if buf_road_geoms[ri].intersects(geom)]
+                                     if buf_road_geoms[ri] is not None
+                                     and buf_road_geoms[ri].intersects(geom)]
                     hits_road = len(cand_road) > 0
                     if hits_road:
                         local_roads = (
@@ -668,14 +451,14 @@ class _Worker(QObject):
                             else unary_union([buf_road_geoms[ri] for ri in cand_road])
                         )
 
-                # 5b. Per-parcel waterbody lookup
                 hits_water   = False
                 local_waters = None
                 if wb_sindex is not None:
-                    cand_wb = list(wb_sindex.intersection(geom.bounds))
+                    cand_wb = wb_sindex.intersection(geom.bounds)
                     if cand_wb:
                         cand_wb = [wi for wi in cand_wb
-                                   if buf_wb_geoms[wi].intersects(geom)]
+                                   if buf_wb_geoms[wi] is not None
+                                   and buf_wb_geoms[wi].intersects(geom)]
                     hits_water = len(cand_wb) > 0
                     if hits_water:
                         local_waters = (
@@ -686,7 +469,6 @@ class _Worker(QObject):
 
                 hits_neighbour = len(conflict_geoms) > 0
 
-                # Track per-layer counts
                 if hits_river:     count_river    += 1
                 if hits_road:      count_road     += 1
                 if hits_water:     count_water    += 1
@@ -700,7 +482,6 @@ class _Worker(QObject):
 
                 comment = _make_overlap_comment(overlap_set)
 
-                # 6. No conflicts — pass through unchanged
                 if not overlap_set:
                     n_clean += 1
                     out_orig_idx.append(i)
@@ -713,13 +494,11 @@ class _Worker(QObject):
                     out_is_much_overlap.append(False)
                     continue
 
-                # Track overlap combination and conflict count
                 n_conflict += 1
                 combo_key = tuple(lyr for lyr in ['river', 'road', 'waterbody', 'Surveyed land']
                                   if lyr in overlap_set)
                 combo_counts[combo_key] = combo_counts.get(combo_key, 0) + 1
 
-                # 7. Sequential splitting: river → road → waterbody → surveyed land
                 pieces = [geom]
 
                 if hits_river and local_rivers:
@@ -737,22 +516,17 @@ class _Worker(QObject):
                                  else unary_union(conflict_geoms))
                     pieces, _ = _apply_cut(pieces, nbr_union)
 
-                # Drop slivers (<40 m²) from split results, keeping ≥1 piece
                 if len(pieces) > 1:
                     large = [p for p in pieces if p.area >= 200.0]
                     if large:
                         pieces = large
 
-                # Sort largest first so is_new=False always marks the biggest piece
                 if len(pieces) > 1:
                     n_split += 1
                     pieces.sort(key=lambda p: p.area, reverse=True)
 
-                # Determine whether geometry actually changed
                 geom_changed = (len(pieces) > 1) or (not pieces[0].equals(geom))
 
-                # If the cut removed >= min_overlap_pct% of the parcel area, revert —
-                # the overlap is too large to sensibly trim, flag it instead.
                 is_much_ovl = False
                 if geom_changed and geom.area > 0:
                     remaining_area = sum(p.area for p in pieces)
@@ -777,114 +551,141 @@ class _Worker(QObject):
                     out_is_fully_overlapped.append(not geom_changed and not is_much_ovl)
                     out_is_much_overlap.append(is_much_ovl)
 
-            # ── Rebuild GeoDataFrame ──────────────────────────────────────────
+            # ── Build output row dicts ────────────────────────────────────
             self.progress.emit(f"Processing {n}/{n} (100%)… building output…")
 
-            non_geom_cols = [c for c in parcels.columns if c != parcels.geometry.name]
-            attrs = parcels[non_geom_cols].iloc[out_orig_idx].copy().reset_index(drop=True)
-            attrs['comment']             = out_comments
-            attrs['geometry_adjusted']   = out_adjusted
-            attrs['original_geometry']   = out_orig_geoms
-            attrs['is_new']              = out_is_new
-            attrs['is_fully_overlapped'] = out_is_fully_overlapped
-            attrs['is_much_overlap']     = out_is_much_overlap
-            attrs['_orig_row_idx']       = out_orig_idx
-            result = gpd.GeoDataFrame(attrs, geometry=out_geoms, crs=target_crs)
+            out_rows = []
+            for k, orig_i in enumerate(out_orig_idx):
+                row = dict(parcel_attrs[orig_i])
+                row['comment']             = out_comments[k]
+                row['geometry_adjusted']   = out_adjusted[k]
+                row['original_geometry']   = out_orig_geoms[k]
+                row['is_new']              = out_is_new[k]
+                row['is_fully_overlapped'] = out_is_fully_overlapped[k]
+                row['is_much_overlap']     = out_is_much_overlap[k]
+                row['_orig_row_idx']       = orig_i
+                row['overlap_pct']         = None
+                row['overlap_area']        = None
+                row['_geometry']           = out_geoms[k]
+                out_rows.append(row)
 
-            # Area after processing — exclude null/empty output geometries
-            area_after_m2 = float(
-                result.geometry[result.geometry.notna() & ~result.geometry.is_empty].area.sum()
+            # ── Overlap area columns ──────────────────────────────────────
+            self.progress.emit("Computing overlap_pct / overlap_area…")
+            try:
+                all_ref = []
+                for src in (buf_river_geoms, buf_road_geoms, buf_wb_geoms):
+                    if src:
+                        all_ref.extend(g for g in src if g is not None and not g.is_empty)
+                if surveyed_repaired:
+                    all_ref.extend(g for g in surveyed_repaired if g is not None and not g.is_empty)
+
+                if all_ref:
+                    self.progress.emit("Building reference union…")
+                    ref_union = unary_union(all_ref)
+                    seen_orig = {}   # orig_idx → (overlap_pct, overlap_area) — compute once per original parcel
+                    for row in out_rows:
+                        orig_idx = int(row['_orig_row_idx'])
+                        if orig_idx not in seen_orig:
+                            orig_geom = parcel_geoms[orig_idx]
+                            if orig_geom is None or orig_geom.is_empty or orig_geom.area <= 0:
+                                seen_orig[orig_idx] = (0.0, 0.0)
+                            else:
+                                try:
+                                    inter    = orig_geom.buffer(0).intersection(ref_union)
+                                    ovl_area = inter.area if not inter.is_empty else 0.0
+                                except Exception:
+                                    ovl_area = 0.0
+                                seen_orig[orig_idx] = (
+                                    round(min(100.0, 100.0 * ovl_area / orig_geom.area), 4),
+                                    round(ovl_area, 4),
+                                )
+                        row['overlap_pct'], row['overlap_area'] = seen_orig[orig_idx]
+                else:
+                    self.progress.emit("No reference layers — overlap columns skipped.")
+            except Exception as _oe:
+                self.progress.emit(f"Overlap computation warning: {_oe}")
+
+            area_after_m2 = sum(
+                r['_geometry'].area for r in out_rows
+                if r['_geometry'] is not None and not r['_geometry'].is_empty
             )
 
-            # ── Save ─────────────────────────────────────────────────────────
+            # ── Save output GPKG ──────────────────────────────────────────
             self.progress.emit("Saving output…")
-            for _bool_col in ('is_checked', 'is_much_overlap', 'is_fully_overlapped',
-                              'geometry_adjusted', 'is_new'):
-                if _bool_col in result.columns:
-                    result[_bool_col] = result[_bool_col].astype(bool)
-            result.to_file(self.output_path, driver="GPKG")
+            computed_field_specs = [
+                ('comment',             ogr.OFTString,  None),
+                ('geometry_adjusted',   ogr.OFTInteger, ogr.OFSTBoolean),
+                ('original_geometry',   ogr.OFTString,  None),
+                ('is_new',              ogr.OFTInteger, ogr.OFSTBoolean),
+                ('is_fully_overlapped', ogr.OFTInteger, ogr.OFSTBoolean),
+                ('is_much_overlap',     ogr.OFTInteger, ogr.OFSTBoolean),
+                ('_orig_row_idx',       ogr.OFTInteger, None),
+                ('overlap_pct',         ogr.OFTReal,    None),
+                ('overlap_area',        ogr.OFTReal,    None),
+            ]
+            comp_names      = {n for n, _, _ in computed_field_specs}
+            safe_orig_types = [(n, t, st) for n, t, st in parcel_field_types if n not in comp_names]
+            all_field_specs = safe_orig_types + computed_field_specs
 
-            # ── ref_clean_layers ──────────────────────────────────────────────
+            _write_gpkg(
+                self.output_path,
+                [r['_geometry'] for r in out_rows],
+                out_rows,
+                all_field_specs,
+                target_srs,
+            )
+
+            # ── ref_clean_layers ──────────────────────────────────────────
             self.progress.emit("Building ref_clean_layers…")
             try:
-                rows = []
+                ref_geoms, ref_rows = [], []
                 if buf_river_geoms:
                     for g in buf_river_geoms:
                         if g is not None and not g.is_empty:
-                            rows.append({'geometry': g, 'origin': 'river'})
+                            ref_geoms.append(g)
+                            ref_rows.append({'origin': 'river'})
                 if buf_road_geoms:
                     for g in buf_road_geoms:
                         if g is not None and not g.is_empty:
-                            rows.append({'geometry': g, 'origin': 'road'})
+                            ref_geoms.append(g)
+                            ref_rows.append({'origin': 'road'})
                 if buf_wb_geoms:
                     for g in buf_wb_geoms:
                         if g is not None and not g.is_empty:
-                            rows.append({'geometry': g, 'origin': 'waterbody'})
-                if self.surveyed_src:
-                    for g in gdf_surveyed.geometry:
+                            ref_geoms.append(g)
+                            ref_rows.append({'origin': 'waterbody'})
+                if self.surveyed_src and surveyed_raw_geoms:
+                    for g in surveyed_raw_geoms:
                         if g is not None and not g.is_empty:
-                            rows.append({'geometry': g, 'origin': 'surveyed_land'})
-                if rows:
-                    import geopandas as gpd
-                    c_gdf = gpd.GeoDataFrame(rows, crs=target_crs)
+                            ref_geoms.append(g)
+                            ref_rows.append({'origin': 'surveyed_land'})
+
+                if ref_rows:
                     c_path = os.path.join(
                         os.path.dirname(self.output_path), 'ref_clean_layers.gpkg'
                     )
-                    c_gdf.to_file(c_path, driver='GPKG', layer='ref_clean_layers')
+                    _write_gpkg(
+                        c_path, ref_geoms, ref_rows,
+                        [('origin', ogr.OFTString, None)],
+                        target_srs,
+                        layer_name='ref_clean_layers',
+                    )
                     self.constraints.emit(c_path)
                 else:
-                    self.progress.emit("No reference layers to combine — skipping ref_clean_layers.")
+                    self.progress.emit("No reference layers — skipping ref_clean_layers.")
             except Exception as e:
                 self.progress.emit(f"ref_clean_layers warning: {e}")
 
-            base_path    = os.path.splitext(self.output_path)[0]
-            pdf_path     = base_path + '.pdf'
-            docx_path    = base_path + '.docx'
-            report_stats = {
-                'generated_at':    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'output_path':     self.output_path,
-                'total_input':     n,
-                'n_null':          n_null,
-                'n_clean':         n_clean,
-                'n_conflict':      n_conflict,
-                'n_geom_changed':  n_geom_changed,
-                'n_geom_fallback': n_geom_fallback,
-                'n_split':         n_split,
-                'total_output':    len(result),
-                'area_before_m2':  area_before_m2,
-                'area_after_m2':   area_after_m2,
-                'layer_counts': {
-                    'river':         count_river,
-                    'road':          count_road,
-                    'waterbody':     count_water,
-                    'Surveyed land': count_surveyed,
-                },
-                'combo_counts':   combo_counts,
-                'comment_counts': result['comment'].value_counts().to_dict(),
-                'params': {
-                    'river_buf_m': self.river_buffer_m,
-                    'road_buf_m':  self.road_buffer_m,
-                    'wb_buf_m':    self.wb_buffer_m,
-                },
-            }
-
-            self.progress.emit("Generating PDF report…")
-            _generate_topo_pdf(pdf_path, report_stats)
-
-            self.progress.emit("Generating Word report…")
-            _generate_topo_docx(docx_path, report_stats)
-
             summary = (
-                f"Done.  {n} input parcels → {len(result)} output features  "
+                f"Done.  {n} input parcels → {len(out_rows)} output features  "
                 f"({n_geom_changed} adjusted, {n_split} split)\n"
-                f"  Saved  → {self.output_path}\n"
-                f"  PDF    → {pdf_path}\n"
-                f"  Word   → {docx_path}"
+                f"  Saved → {self.output_path}"
             )
             self.finished.emit({
                 'summary':        summary,
                 'output_path':    self.output_path,
-                'result_gdf':     result,
+                'result_rows':    out_rows,
+                'parcel_fields':  parcel_fields,
                 'n':              n,
                 'n_geom_changed': n_geom_changed,
                 'n_split':        n_split,
@@ -1262,34 +1063,34 @@ class SolveTopologyDock(QDockWidget):
     # ── Populate review tab ───────────────────────────────────────────────────
 
     def _populate_review(self, result: dict):
-        gdf = result['result_gdf']
+        rows_data = result['result_rows']
+
+        _skip = {'comment', 'geometry_adjusted', 'original_geometry', 'is_new',
+                 'is_fully_overlapped', '_orig_row_idx', '_geometry', 'is_much_overlap'}
 
         self._comment_filter.blockSignals(True)
         self._comment_filter.clear()
         self._comment_filter.addItem("All comments")
-        for cmt in sorted(gdf['comment'].fillna('').unique()):
+        for cmt in sorted(set(r.get('comment', '') or '' for r in rows_data)):
             self._comment_filter.addItem(cmt, userData=cmt)
         self._comment_filter.blockSignals(False)
 
-        geom_col = gdf.geometry.name
         self._review_rows = []
-        for i in range(len(gdf)):
-            geom     = gdf[geom_col].iloc[i]
-            orig_idx = int(gdf['_orig_row_idx'].iloc[i]) if '_orig_row_idx' in gdf.columns else i
+        for i, row in enumerate(rows_data):
+            geom     = row.get('_geometry')
+            orig_idx = int(row.get('_orig_row_idx', i))
             self._review_rows.append({
                 'row_idx':     i,
                 'orig_idx':    orig_idx,
-                'comment':     str(gdf['comment'].iloc[i]),
-                'adjusted':    bool(gdf['geometry_adjusted'].iloc[i]) if 'geometry_adjusted' in gdf.columns else False,
-                'is_new':      bool(gdf['is_new'].iloc[i]) if 'is_new' in gdf.columns else False,
-                'fully_ovl':   bool(gdf['is_fully_overlapped'].iloc[i]) if 'is_fully_overlapped' in gdf.columns else False,
+                'comment':     str(row.get('comment', '')),
+                'adjusted':    bool(row.get('geometry_adjusted', False)),
+                'is_new':      bool(row.get('is_new', False)),
+                'fully_ovl':   bool(row.get('is_fully_overlapped', False)),
                 'bounds':      geom.bounds if (geom is not None and not geom.is_empty) else None,
                 'extra_attrs': {
-                    col: str(gdf[col].iloc[i])
-                    for col in gdf.columns
-                    if col not in ('geometry', geom_col, 'comment', 'geometry_adjusted',
-                                   'original_geometry', 'is_new', 'is_fully_overlapped',
-                                   '_orig_row_idx')
+                    col: str(row[col])
+                    for col in row
+                    if col not in _skip
                 },
             })
 

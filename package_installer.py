@@ -26,7 +26,6 @@ def solve_dependency_issues() -> list[str]:
         ("fitz",     "PyMuPDF"),
         ("PIL",      "pillow"),
         ("pandas",   "pandas"),
-        ("geopandas","geopandas"),
         ("shapely",  "shapely"),
         ("numpy",    "numpy"),
         ("openpyxl", "openpyxl"),

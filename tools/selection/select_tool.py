@@ -22,6 +22,8 @@ import math
 from dataclasses import dataclass
 
 from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtGui import QCursor
+from qgis.PyQt.QtWidgets import QMenu
 from qgis.core import (
     QgsPointXY, QgsRectangle, QgsGeometry, QgsWkbTypes,
     QgsProject, QgsFeatureRequest,
@@ -39,11 +41,12 @@ MID_TOL_PX  = 10
 
 @dataclass
 class Grip:
-    layer_id:   str
-    fid:        int
-    vertex_idx: int
-    pt:         QgsPointXY
-    marker:     object = None   # QgsVertexMarker
+    layer_id:    str
+    fid:         int
+    vertex_idx:  int
+    pt:          QgsPointXY
+    marker:      object = None   # QgsVertexMarker
+    is_endpoint: bool   = False
 
 
 @dataclass
@@ -70,6 +73,17 @@ class SelectTool(BaseTool):
         self._hover_rb:      QgsRubberBand | None = None
         self._hover_key:     tuple | None  = None  # (layer_id, fid) currently hovered
 
+        # endpoint right-click modes
+        self._extend_grip:      Grip | None  = None
+        self._extend_dir:       tuple | None = None
+        self._extend_orig_pts:  list | None  = None
+        self._add_pts_grip:     Grip | None  = None
+        self._add_pts_orig_pts: list | None  = None
+        self._add_pts_new:      list         = []
+        self._add_pts_rb:       object       = None
+        self._ep_preview_rb:    object       = None
+        self._last_snap_ep:     QgsPointXY | None = None
+
     # ── lifecycle ──────────────────────────────────────────────────────────
     def activate(self):
         super().activate()
@@ -93,8 +107,29 @@ class SelectTool(BaseTool):
 
     # ── canvas events ──────────────────────────────────────────────────────
     def canvasPressEvent(self, event):
+        # right-click commits/cancels active endpoint modes
+        if event.button() == Qt.MouseButton.RightButton:
+            if self._add_pts_grip is not None:
+                if self._add_pts_new:
+                    self._commit_add_pts()
+                else:
+                    self._cancel_add_pts()
+                return
+            if self._extend_grip is not None:
+                if self._last_snap_ep:
+                    self._commit_extend(self._last_snap_ep)
+                else:
+                    self._cancel_extend()
+                return
+
         if event.button() != Qt.MouseButton.LeftButton:
             super().canvasPressEvent(event)
+            return
+
+        # in extend/add_pts, left-click picks point via normal dispatch
+        if self._extend_grip is not None or self._add_pts_grip is not None:
+            sem = self._translator.translate_press(event, self._ctx)
+            self._dispatch(sem)
             return
 
         raw = self._translator._canvas_point(event, self._ctx)
@@ -141,6 +176,20 @@ class SelectTool(BaseTool):
         self._dispatch(sem)
 
     def canvasMoveEvent(self, event):
+        if self._extend_grip is not None:
+            sem = self._translator.translate_move(event, self._ctx)
+            self._update_snap_marker(sem)
+            if sem.point:
+                self._last_snap_ep = sem.point
+                self._update_extend_preview(sem.point)
+            return
+        if self._add_pts_grip is not None:
+            sem = self._translator.translate_move(event, self._ctx)
+            self._update_snap_marker(sem)
+            if sem.point:
+                self._last_snap_ep = sem.point
+                self._update_add_pts_preview(sem.point)
+            return
         if self._hot_grip:
             sem = self._translator.translate_move(event, self._ctx)
             self._update_snap_marker(sem)
@@ -160,6 +209,16 @@ class SelectTool(BaseTool):
         super().canvasMoveEvent(event)
 
     def canvasReleaseEvent(self, event):
+        # Right-click on a line endpoint → context menu (only when fully idle)
+        if event.button() == Qt.MouseButton.RightButton:
+            if (self._hot_grip is None and self._drag_start is None
+                    and self._extend_grip is None and self._add_pts_grip is None):
+                raw = self._translator._canvas_point(event, self._ctx)
+                eg  = self._endpoint_grip_at(raw)
+                if eg:
+                    self._show_endpoint_menu(eg)
+            return
+
         if event.button() != Qt.MouseButton.LeftButton:
             return
         # Grip placement is confirmed by a second PRESS, not by release.
@@ -174,6 +233,48 @@ class SelectTool(BaseTool):
 
     # ── semantic events ────────────────────────────────────────────────────
     def _on_event(self, sem: SemanticEvent):
+        # extend mode
+        if self._extend_grip is not None:
+            if sem.type == EventType.VALUE_ENTERED:
+                try:
+                    dist = float(sem.value)
+                    dx, dy = self._extend_dir
+                    ep = (self._extend_orig_pts[0] if self._extend_grip.vertex_idx == 0
+                          else self._extend_orig_pts[-1])
+                    self._commit_extend(QgsPointXY(ep.x() + dist * dx, ep.y() + dist * dy))
+                except (TypeError, ValueError):
+                    pass
+            elif sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:
+                self._commit_extend(sem.point)
+            elif sem.type == EventType.CONFIRM and self._last_snap_ep:
+                self._commit_extend(self._last_snap_ep)
+            elif sem.type == EventType.CANCEL:
+                self._cancel_extend()
+            return
+
+        # add-points mode
+        if self._add_pts_grip is not None:
+            if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:
+                self._add_pts_new.append(sem.point)
+                self._last_snap_ep = sem.point
+                self._update_add_pts_committed()
+                self._request_input("polar",
+                    f"Next point [{len(self._add_pts_new)} added | Enter=commit]:")
+            elif sem.type == EventType.VALUE_ENTERED:
+                pt = self._try_extension_distance(sem.value)
+                if pt:
+                    self._add_pts_new.append(pt)
+                    self._last_snap_ep = pt
+                    self._update_add_pts_committed()
+            elif sem.type == EventType.CONFIRM:
+                if self._add_pts_new:
+                    self._commit_add_pts()
+                else:
+                    self._cancel_add_pts()
+            elif sem.type == EventType.CANCEL:
+                self._cancel_add_pts()
+            return
+
         if sem.type == EventType.POINT_PICKED:
             self._pick_at_point(sem.point, shift=False)
         elif sem.type == EventType.SHIFT_CLICK:
@@ -318,14 +419,18 @@ class SelectTool(BaseTool):
             verts = list(geom.vertices())
 
             # Blue box grips at every vertex
+            n        = len(verts)
+            is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
             for i, v in enumerate(verts):
-                pt     = QgsPointXY(v.x(), v.y())
+                pt    = QgsPointXY(v.x(), v.y())
+                is_ep = (wtype == 1 and not is_multi
+                         and n >= 2 and (i == 0 or i == n - 1))
                 marker = QgsVertexMarker(self.canvas())
                 marker.setCenter(pt)
                 marker.setColor(_style.GRIP_COLOR)
                 marker.setIconSize(7)
                 marker.setIconType(QgsVertexMarker.ICON_BOX)
-                self._grips.append(Grip(lid, fid, i, pt, marker))
+                self._grips.append(Grip(lid, fid, i, pt, marker, is_endpoint=is_ep))
 
             # Green + marks at edge midpoints (lines and polygons only)
             if wtype in (1, 2):
@@ -356,6 +461,147 @@ class SelectTool(BaseTool):
                 pass
         self._grips.clear()
         self._midgrips.clear()
+
+    # ── endpoint right-click menu ──────────────────────────────────────────
+    def _endpoint_grip_at(self, pt: QgsPointXY) -> 'Grip | None':
+        tol = self._px_to_mu(GRIP_TOL_PX)
+        best, best_d = None, tol
+        for g in self._grips:
+            if not g.is_endpoint:
+                continue
+            d = math.hypot(g.pt.x() - pt.x(), g.pt.y() - pt.y())
+            if d < best_d:
+                best_d, best = d, g
+        return best
+
+    def _show_endpoint_menu(self, grip: 'Grip'):
+        menu = QMenu(self.canvas())
+        act_ext = menu.addAction("Extend line")
+        act_add = menu.addAction("Add points")
+        chosen  = menu.exec_(QCursor.pos())
+        if chosen == act_ext:
+            self._start_extend(grip)
+        elif chosen == act_add:
+            self._start_add_points(grip)
+
+    # ── extend mode ───────────────────────────────────────────────────────
+    def _start_extend(self, grip: 'Grip'):
+        layer = QgsProject.instance().mapLayer(grip.layer_id)
+        if layer is None:
+            return
+        feat = layer.getFeature(grip.fid)
+        if not feat.isValid():
+            return
+        pts = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        if len(pts) < 2:
+            return
+        ep, adj = (pts[0], pts[1]) if grip.vertex_idx == 0 else (pts[-1], pts[-2])
+        dx, dy  = ep.x() - adj.x(), ep.y() - adj.y()
+        dist    = math.hypot(dx, dy)
+        if dist < 1e-10:
+            return
+        self._extend_grip     = grip
+        self._extend_dir      = (dx / dist, dy / dist)
+        self._extend_orig_pts = pts
+        self._last_snap_ep    = None
+        self._request_input("value", "Extension distance / click new endpoint:")
+
+    def _commit_extend(self, new_pt: QgsPointXY):
+        grip  = self._extend_grip
+        layer = QgsProject.instance().mapLayer(grip.layer_id)
+        if layer is None:
+            return
+        pts = list(self._extend_orig_pts)
+        pts = ([new_pt] + pts) if grip.vertex_idx == 0 else (pts + [new_pt])
+        if not layer.isEditable():
+            layer.startEditing()
+        layer.changeGeometry(grip.fid, QgsGeometry.fromPolylineXY(pts))
+        self._cancel_extend()
+        self._rebuild_grips()
+
+    def _cancel_extend(self):
+        self._extend_grip     = None
+        self._extend_dir      = None
+        self._extend_orig_pts = None
+        self._last_snap_ep    = None
+        self._clear_ep_preview()
+
+    # ── add-points mode ───────────────────────────────────────────────────
+    def _start_add_points(self, grip: 'Grip'):
+        layer = QgsProject.instance().mapLayer(grip.layer_id)
+        if layer is None:
+            return
+        feat = layer.getFeature(grip.fid)
+        if not feat.isValid():
+            return
+        pts = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        if len(pts) < 2:
+            return
+        if grip.vertex_idx == 0:
+            pts = list(reversed(pts))
+        self._add_pts_grip     = grip
+        self._add_pts_orig_pts = pts
+        self._add_pts_new      = []
+        self._last_snap_ep     = None
+        self._request_input("polar", "Specify next point [Enter=commit]:")
+
+    def _commit_add_pts(self):
+        grip  = self._add_pts_grip
+        layer = QgsProject.instance().mapLayer(grip.layer_id)
+        if layer is None:
+            return
+        pts = list(self._add_pts_orig_pts) + self._add_pts_new
+        if not layer.isEditable():
+            layer.startEditing()
+        layer.changeGeometry(grip.fid, QgsGeometry.fromPolylineXY(pts))
+        self._cancel_add_pts()
+        self._rebuild_grips()
+
+    def _cancel_add_pts(self):
+        self._add_pts_grip     = None
+        self._add_pts_orig_pts = None
+        self._add_pts_new      = []
+        self._add_pts_rb       = None
+        self._last_snap_ep     = None
+        self._clear_ep_preview()
+
+    def _clear_ep_preview(self):
+        self._clear_rubber_bands()
+        self._ep_preview_rb = None
+        self._add_pts_rb    = None
+        self._ext_guide_rb  = None
+
+    def _update_extend_preview(self, pt: QgsPointXY):
+        grip    = self._extend_grip
+        orig    = self._extend_orig_pts
+        preview = ([pt] + orig) if grip.vertex_idx == 0 else (orig + [pt])
+        if self._ep_preview_rb is None:
+            self._ep_preview_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1)
+        self._ep_preview_rb.reset(QgsWkbTypes.LineGeometry)
+        for i, p in enumerate(preview):
+            self._ep_preview_rb.addPoint(p, i == len(preview) - 1)
+
+    def _update_add_pts_preview(self, pt: QgsPointXY):
+        anchor = self._add_pts_new[-1] if self._add_pts_new else self._add_pts_orig_pts[-1]
+        if self._ep_preview_rb is None:
+            self._ep_preview_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1)
+        self._ep_preview_rb.reset(QgsWkbTypes.LineGeometry)
+        self._ep_preview_rb.addPoint(anchor, False)
+        self._ep_preview_rb.addPoint(pt, True)
+
+    def _update_add_pts_committed(self):
+        if not self._add_pts_new:
+            return
+        if self._add_pts_rb is None:
+            self._add_pts_rb = self._new_rubber_band(
+                QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH + 1)
+            self._add_pts_rb.setLineStyle(Qt.PenStyle.SolidLine)
+        self._add_pts_rb.reset(QgsWkbTypes.LineGeometry)
+        chain = [self._add_pts_orig_pts[-1]] + self._add_pts_new
+        for i, p in enumerate(chain):
+            self._add_pts_rb.addPoint(p, i == len(chain) - 1)
 
     # ── hit testing ────────────────────────────────────────────────────────
     def _grip_at(self, pt: QgsPointXY) -> Grip | None:
@@ -515,8 +761,14 @@ class SelectTool(BaseTool):
 
     # ── Esc override — SelectTool IS the home tool, never calls go_home ────
     def _handle_esc(self):
-        """Esc: disarm any active grip and clear selection. Tool stays active."""
+        """Esc: cancel active mode or disarm grip; clear selection on second Esc."""
         self._esc_count = 0
+        if self._extend_grip is not None:
+            self._cancel_extend()
+            return
+        if self._add_pts_grip is not None:
+            self._cancel_add_pts()
+            return
         if self._hot_grip is not None:
             self._hot_grip      = None
             self._drag_geom_wkt = None
@@ -535,6 +787,15 @@ class SelectTool(BaseTool):
 
     # ── cancel hook (deactivation — selection must NOT be cleared) ─────────
     def _on_cancel_hook(self):
+        self._extend_grip     = None
+        self._extend_dir      = None
+        self._extend_orig_pts = None
+        self._add_pts_grip     = None
+        self._add_pts_orig_pts = None
+        self._add_pts_new      = []
+        self._add_pts_rb       = None
+        self._ep_preview_rb    = None
+        self._last_snap_ep     = None
         if self._hot_grip is not None:
             self._hot_grip      = None
             self._drag_geom_wkt = None

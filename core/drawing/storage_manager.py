@@ -87,14 +87,18 @@ class StorageManager(QObject):
         lyr = getattr(self, attr)
         if self._layer_alive(lyr):
             return lyr
-        # Stale or None — attempt reload if we know the GPKG path.
-        if self._gpkg_path and os.path.exists(self._gpkg_path):
-            self._points_layer  = None
-            self._lines_layer   = None
-            self._cad_lyr_layer = None
-            self._load_layers(self._gpkg_path)
-        lyr = getattr(self, attr)
-        return lyr if self._layer_alive(lyr) else None
+        if not (self._gpkg_path and os.path.exists(self._gpkg_path)):
+            return None
+        # Stale reference — reopen from disk (don't reload all layers).
+        name = {"_points_layer": "points", "_lines_layer": "lines",
+                "_cad_lyr_layer": "cad_layers"}.get(attr)
+        if name is None:
+            return None
+        add_to_tree = attr in ("_points_layer", "_lines_layer")
+        lyr = self._open_gpkg_layer(name, add_to_tree=add_to_tree)
+        if lyr is not None:
+            setattr(self, attr, lyr)
+        return lyr
 
     def set_toolbar(self, toolbar):
         self._toolbar_ref = toolbar
@@ -110,8 +114,11 @@ class StorageManager(QObject):
         Add a line geometry (in current project CRS) to the lines layer.
         The geometry is transformed to EPSG:32636 (layer CRS) if needed.
         """
-        layer = self.lines_layer
-        if layer is None or not self._enabled:
+        if not self._enabled:
+            return False
+        self._ensure_lines_layer()
+        layer = self._lines_layer
+        if not self._layer_alive(layer):
             return False
         if self._crs_manager is not None:
             geom = self._crs_manager.transform_geom_to_layer(geom)
@@ -127,8 +134,11 @@ class StorageManager(QObject):
         Add a point geometry (in current project CRS) to the points layer.
         The geometry is transformed to EPSG:32636 (layer CRS) if needed.
         """
-        layer = self.points_layer
-        if layer is None or not self._enabled:
+        if not self._enabled:
+            return False
+        self._ensure_points_layer()
+        layer = self._points_layer
+        if not self._layer_alive(layer):
             return False
         if self._crs_manager is not None:
             geom = self._crs_manager.transform_geom_to_layer(geom)
@@ -150,8 +160,7 @@ class StorageManager(QObject):
     # ── project signal handlers ──────────────────────────────────────────
     def _on_project_saved(self):
         self._evaluate_gating()
-        if self._enabled and not self._gpkg_path:
-            self._create_or_load_gpkg()
+        # Do NOT auto-create the GPKG here — it is created on first actual use.
 
     def _on_project_cleared(self):
         self._gpkg_path     = None
@@ -169,7 +178,6 @@ class StorageManager(QObject):
 
     def _on_project_read(self):
         self._evaluate_gating()
-        # _evaluate_gating already calls _create_or_load_gpkg if needed
 
     # ── gating ────────────────────────────────────────────────────────────
     def _evaluate_gating(self):
@@ -179,59 +187,86 @@ class StorageManager(QObject):
             self._enabled = new_state
             self._apply_gating()
             self.gatingChanged.emit(self._enabled)
-        # Load GeoPackage immediately if project already exists on startup
+        # Re-attach to an existing GPKG when a project is opened, but never create one.
         if self._enabled and not self._gpkg_path:
-            self._create_or_load_gpkg()
+            self._load_existing_gpkg_if_present()
 
     def _apply_gating(self):
         if self._toolbar_ref:
             self._toolbar_ref.setEnabled(self._enabled)
 
     # ── GeoPackage creation / loading ─────────────────────────────────────
+    def _load_existing_gpkg_if_present(self):
+        """Re-attach to an existing GeoPackage when a project is opened. Never creates one."""
+        path = self._gpkg_path_from_project()
+        if os.path.exists(path):
+            self._gpkg_path = path
+            self._load_layers(path)
+
+    def _ensure_lines_layer(self):
+        """Create and load the lines layer on first actual use. No-op if already alive."""
+        if self._layer_alive(self._lines_layer):
+            return
+        self._ensure_gpkg_file()
+        lyr = self._open_gpkg_layer("lines", add_to_tree=True)
+        if lyr is None:
+            self._add_geom_table(self._gpkg_path, "lines", QgsWkbTypes.LineString)
+            lyr = self._open_gpkg_layer("lines", add_to_tree=True)
+        self._lines_layer = lyr
+
+    def _ensure_points_layer(self):
+        """Create and load the points layer on first actual use. No-op if already alive."""
+        if self._layer_alive(self._points_layer):
+            return
+        self._ensure_gpkg_file()
+        lyr = self._open_gpkg_layer("points", add_to_tree=True)
+        if lyr is None:
+            self._add_geom_table(self._gpkg_path, "points", QgsWkbTypes.MultiPoint)
+            lyr = self._open_gpkg_layer("points", add_to_tree=True)
+        self._points_layer = lyr
+
+    def _ensure_gpkg_file(self):
+        """Ensure the GPKG file and cad_layers metadata table exist. No geometry tables yet."""
+        if self._gpkg_path and os.path.exists(self._gpkg_path):
+            if not self._layer_alive(self._cad_lyr_layer):
+                self._cad_lyr_layer = self._open_gpkg_layer("cad_layers", add_to_tree=False)
+            return
+        path = self._gpkg_path_from_project()
+        self._create_gpkg_file(path)
+        self._gpkg_path = path
+        self._cad_lyr_layer = self._open_gpkg_layer("cad_layers", add_to_tree=False)
+
+    def _open_gpkg_layer(self, name: str, add_to_tree: bool = False) -> QgsVectorLayer | None:
+        """Return a layer from the current GPKG table, reusing an already-loaded one if present."""
+        if not self._gpkg_path:
+            return None
+        norm_path = os.path.normcase(os.path.normpath(self._gpkg_path))
+        for lyr in QgsProject.instance().mapLayers().values():
+            if not isinstance(lyr, QgsVectorLayer):
+                continue
+            src = lyr.source()
+            if f"|layername={name}" not in src:
+                continue
+            if os.path.normcase(os.path.normpath(src.split("|")[0])) == norm_path:
+                return lyr
+        uri = f"{self._gpkg_path}|layername={name}"
+        lyr = QgsVectorLayer(uri, name, "ogr")
+        if not lyr.isValid():
+            return None
+        if add_to_tree:
+            QgsProject.instance().addMapLayer(lyr, False)
+            self._get_or_create_group().addLayer(lyr)
+        else:
+            QgsProject.instance().addMapLayer(lyr, False)
+        return lyr
+
     def _gpkg_path_from_project(self) -> str:
         proj_path = QgsProject.instance().absoluteFilePath()
         base = os.path.splitext(proj_path)[0]
-        return base + "_geometries.gpkg"
+        return base + "_Ugsurv.gpkg"
 
-    def _create_or_load_gpkg(self):
-        path = self._gpkg_path_from_project()
-        if not os.path.exists(path):
-            self._create_gpkg(path)
-        self._gpkg_path = path
-        self._load_layers(path)
-
-    def _create_gpkg(self, path: str):
-        crs = QgsCoordinateReferenceSystem(f"EPSG:{_LAYER_EPSG}")
-
-        # Common geometry-table fields
-        geom_fields = QgsFields()
-        geom_fields.append(QgsField("cad_layer", QVariant.String))
-
-        tables = [
-            ("points", QgsWkbTypes.MultiPoint),
-            ("lines",  QgsWkbTypes.LineString),
-        ]
-        opts = QgsVectorFileWriter.SaveVectorOptions()
-        opts.driverName = "GPKG"
-
-        for idx, (tbl, wkb) in enumerate(tables):
-            opts.layerName = tbl
-            opts.actionOnExistingFile = (
-                QgsVectorFileWriter.CreateOrOverwriteFile if idx == 0
-                else QgsVectorFileWriter.CreateOrOverwriteLayer
-            )
-            tmp = QgsVectorLayer(
-                QgsWkbTypes.displayString(wkb) + "?crs=" + crs.authid(),
-                tbl, "memory"
-            )
-            for field in geom_fields:
-                tmp.dataProvider().addAttributes([field])
-            tmp.updateFields()
-            err, msg, _, _ = QgsVectorFileWriter.writeAsVectorFormatV3(
-                tmp, path, QgsProject.instance().transformContext(), opts
-            )
-
-        # Non-spatial cad_layers table
+    def _create_gpkg_file(self, path: str):
+        """Create a new GPKG containing only the cad_layers metadata table."""
         cad_fields = QgsFields()
         for fname, ftype in [
             ("name",       QVariant.String),
@@ -243,74 +278,56 @@ class StorageManager(QObject):
         ]:
             cad_fields.append(QgsField(fname, ftype))
 
-        opts2 = QgsVectorFileWriter.SaveVectorOptions()
-        opts2.driverName   = "GPKG"
-        opts2.layerName    = "cad_layers"
-        opts2.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+        opts = QgsVectorFileWriter.SaveVectorOptions()
+        opts.driverName   = "GPKG"
+        opts.layerName    = "cad_layers"
+        opts.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteFile
 
-        # "NoGeometry" is the correct URI for non-spatial memory layers
-        tmp2 = QgsVectorLayer("NoGeometry", "cad_layers", "memory")
+        tmp = QgsVectorLayer("NoGeometry", "cad_layers", "memory")
         for f in cad_fields:
-            tmp2.dataProvider().addAttributes([f])
-        tmp2.updateFields()
-        # seed default layer "0"
-        tmp2.dataProvider().addFeatures([_make_cad_layer_feat(tmp2.fields(),
+            tmp.dataProvider().addAttributes([f])
+        tmp.updateFields()
+        tmp.dataProvider().addFeatures([_make_cad_layer_feat(tmp.fields(),
             "0", "#ffffff", "solid", 1, 0, 0)])
-
         QgsVectorFileWriter.writeAsVectorFormatV3(
-            tmp2, path, QgsProject.instance().transformContext(), opts2
+            tmp, path, QgsProject.instance().transformContext(), opts
+        )
+
+    def _add_geom_table(self, path: str, name: str, wkb_type):
+        """Add a single geometry table to an existing GPKG."""
+        crs = QgsCoordinateReferenceSystem(f"EPSG:{_LAYER_EPSG}")
+        opts = QgsVectorFileWriter.SaveVectorOptions()
+        opts.driverName = "GPKG"
+        opts.layerName  = name
+        opts.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+        tmp = QgsVectorLayer(
+            QgsWkbTypes.displayString(wkb_type) + "?crs=" + crs.authid(), name, "memory"
+        )
+        tmp.dataProvider().addAttributes([QgsField("cad_layer", QVariant.String)])
+        tmp.updateFields()
+        QgsVectorFileWriter.writeAsVectorFormatV3(
+            tmp, path, QgsProject.instance().transformContext(), opts
         )
 
     def _get_or_create_group(self):
         root = QgsProject.instance().layerTreeRoot()
-        group = root.findGroup("Ugsurv geoms")
+        group = root.findGroup("Ugsurv")
         if group is None:
-            group = root.insertGroup(0, "Ugsurv geoms")
+            group = root.insertGroup(0, "Ugsurv")
         return group
 
     def _load_layers(self, path: str):
-        # Normalise path for case-insensitive comparison on Windows.
-        norm_path = os.path.normcase(os.path.normpath(path))
-        group = self._get_or_create_group()
+        """Reload all existing tables from a GPKG (used when opening a saved project)."""
+        self._gpkg_path     = path
+        self._points_layer  = self._open_gpkg_layer("points",     add_to_tree=True)
+        self._lines_layer   = self._open_gpkg_layer("lines",      add_to_tree=True)
+        self._cad_lyr_layer = self._open_gpkg_layer("cad_layers", add_to_tree=False)
 
-        def _find_existing(name):
-            """Return an already-loaded layer from the same gpkg table, or None."""
-            for lyr in QgsProject.instance().mapLayers().values():
-                if not isinstance(lyr, QgsVectorLayer):
-                    continue
-                src = lyr.source()
-                if f"|layername={name}" not in src:
-                    continue
-                src_file = os.path.normcase(os.path.normpath(src.split("|")[0]))
-                if src_file == norm_path:
-                    return lyr
-            return None
-
-        def open_layer(name, add_to_tree: bool = True):
-            existing = _find_existing(name)
-            if existing:
-                return existing          # reuse — avoids duplicate on reload
-            uri = f"{path}|layername={name}"
-            lyr = QgsVectorLayer(uri, name, "ogr")
-            if lyr.isValid():
-                if add_to_tree:
-                    QgsProject.instance().addMapLayer(lyr, False)
-                    group.addLayer(lyr)
-                else:
-                    QgsProject.instance().addMapLayer(lyr, False)
-            return lyr if lyr.isValid() else None
-
-        self._points_layer  = open_layer("points",   add_to_tree=True)
-        self._lines_layer   = open_layer("lines",    add_to_tree=True)
-        self._cad_lyr_layer = open_layer("cad_layers", add_to_tree=False)
-
-        # Migrate legacy MultiLineString → LineString if needed
         if self._lines_layer and QgsWkbTypes.isMultiType(self._lines_layer.wkbType()):
             self._lines_layer = self._migrate_lines_to_single(path, self._lines_layer)
 
-        # Migrate legacy polygons table → closed LineStrings in lines layer
-        poly_lyr = open_layer("polygons", add_to_tree=False)
-        if poly_lyr and poly_lyr.isValid():
+        poly_lyr = self._open_gpkg_layer("polygons", add_to_tree=False)
+        if poly_lyr:
             self._migrate_polygons_to_lines(poly_lyr)
 
 

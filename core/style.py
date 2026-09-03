@@ -62,6 +62,14 @@ RB_WIDTH        = 1    # standard — thin but visible
 RB_WIDTH_THICK  = 2    # for destructive-op indicators (trim target)
 RB_WIDTH_SELECT = 1    # drag-selection window box
 
+# Pure-primary colours for identify/pick tools (TopologySolver, AppendGeometry, …)
+# Stroke is fully opaque; fill is near-invisible so the map underneath shows through.
+RB_IDENTIFY_RED        = QColor(255,   0,   0)
+RB_IDENTIFY_RED_FILL   = QColor(255,   0,   0,  10)
+RB_IDENTIFY_BLUE       = QColor(  0,   0, 255)
+RB_IDENTIFY_BLUE_FILL  = QColor(  0,   0, 255,  10)
+RB_IDENTIFY_WIDTH      = RB_WIDTH_THICK   # 2 — prominent but not heavy
+
 # ── Semantic aliases ──────────────────────────────────────────────────────────
 RB_DRAW         = RB_ORANGE          # live drawing preview (vertices being placed)
 RB_DRAW_FILL    = RB_ORANGE_FILL

@@ -11,7 +11,8 @@ from qgis.core import (
     QgsCoordinateTransform,
 )
 from qgis.gui import QgsMapTool, QgsMapToolIdentifyFeature, QgsRubberBand
-from qgis.PyQt.QtGui import QIcon, QFont, QColor
+from qgis.PyQt.QtGui import QIcon, QFont
+from ..core import style as _style
 import math
 
 
@@ -25,19 +26,20 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         self.cursor_points = []
         self.selected_geoms = []
         self.adj_feature_properties = {}
+        self._picked_fids = set()
         self._maptool = None
 
         self.rubber_band1 = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
-        self.rubber_band1.setColor(QColor(255, 0, 0))
-        self.rubber_band1.setWidth(2)
-        self.rubber_band1.setLineStyle(Qt.PenStyle.DashLine)
-        self.rubber_band1.setFillColor(QColor(255, 0, 0, 10))
+        self.rubber_band1.setColor(_style.RB_IDENTIFY_RED)
+        self.rubber_band1.setWidth(_style.RB_IDENTIFY_WIDTH)
+        self.rubber_band1.setLineStyle(_style.RB_LINE_STYLE)
+        self.rubber_band1.setFillColor(_style.RB_IDENTIFY_RED_FILL)
 
         self.rubber_band2 = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
-        self.rubber_band2.setColor(QColor(0, 0, 255))
-        self.rubber_band2.setWidth(2)
-        self.rubber_band2.setLineStyle(Qt.PenStyle.DashLine)
-        self.rubber_band2.setFillColor(QColor(0, 0, 255, 10))
+        self.rubber_band2.setColor(_style.RB_IDENTIFY_BLUE)
+        self.rubber_band2.setWidth(_style.RB_IDENTIFY_WIDTH)
+        self.rubber_band2.setLineStyle(_style.RB_LINE_STYLE)
+        self.rubber_band2.setFillColor(_style.RB_IDENTIFY_BLUE_FILL)
 
     def _log(self, msg):
         self._cmd_dock.log(msg, '#aaddff')
@@ -67,6 +69,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         self.cursor_points.clear()
         self.selected_geoms.clear()
         self.adj_feature_properties = {}
+        self._picked_fids.clear()
 
         super().deactivate()
 
@@ -88,6 +91,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                 self.cursor_points.clear()
                 self.selected_geoms.clear()
                 self.adj_feature_properties = {}
+                self._picked_fids.clear()
 
                 self._cmd_dock.log('─' * 40, '#555555')
                 return
@@ -111,9 +115,13 @@ class TopologySolver(QgsMapToolIdentifyFeature):
                     results = [results[0]]
 
                 if results:
-                    self.cursor_points.append(point)
                     feature = results[0].mFeature
                     feat_layer = results[0].mLayer
+                    fid_key = (feat_layer.id(), feature.id())
+                    if fid_key in self._picked_fids:
+                        return
+                    self._picked_fids.add(fid_key)
+                    self.cursor_points.append(point)
                     geom = QgsGeometry(feature.geometry())
                     project_crs = QgsProject.instance().crs()
                     feat_crs = feat_layer.crs()

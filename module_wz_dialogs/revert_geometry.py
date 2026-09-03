@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QColor
 from qgis.core import (
     QgsProject,
     QgsVectorLayer,
@@ -9,6 +8,7 @@ from qgis.core import (
     QgsCoordinateTransform,
 )
 from qgis.gui import QgsMapToolIdentifyFeature, QgsRubberBand
+from ..core import style as _style
 
 
 class RevertMapTool(QgsMapToolIdentifyFeature):
@@ -31,13 +31,14 @@ class RevertMapTool(QgsMapToolIdentifyFeature):
         self._maptool  = None
 
         self._active_layer  = None
-        self._selected_fids = []
+        self._selected_fids = []    # ordered list of fids for _execute_revert
+        self._picked_fids   = set() # set of fids for O(1) duplicate check
 
         self._rubber_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
-        self._rubber_band.setColor(QColor(255, 140, 0))
-        self._rubber_band.setWidth(2)
-        self._rubber_band.setLineStyle(Qt.PenStyle.DashLine)
-        self._rubber_band.setFillColor(QColor(255, 140, 0, 30))
+        self._rubber_band.setColor(_style.RB_IDENTIFY_RED)
+        self._rubber_band.setWidth(_style.RB_IDENTIFY_WIDTH)
+        self._rubber_band.setLineStyle(_style.RB_LINE_STYLE)
+        self._rubber_band.setFillColor(_style.RB_IDENTIFY_RED_FILL)
 
     # ------------------------------------------------------------------ #
     #  Tool lifecycle                                                      #
@@ -98,13 +99,12 @@ class RevertMapTool(QgsMapToolIdentifyFeature):
                 feat_layer = results[0].mLayer
                 fid        = feature.id()
 
-                if fid in self._selected_fids:
-                    self._log(f'Feature {fid} already selected.')
+                if fid in self._picked_fids:
                     return
 
                 self._active_layer = active_layer
                 self._selected_fids.append(fid)
-                active_layer.select(fid)
+                self._picked_fids.add(fid)
 
                 geom        = QgsGeometry(feature.geometry())
                 project_crs = QgsProject.instance().crs()
@@ -193,7 +193,6 @@ class RevertMapTool(QgsMapToolIdentifyFeature):
             '[NOT committed — Save Layer to keep changes]'
         )
 
-        layer.deselect(self._selected_fids)
         self._clear_state(keep_layer=True)
 
     # ------------------------------------------------------------------ #
@@ -203,6 +202,7 @@ class RevertMapTool(QgsMapToolIdentifyFeature):
     def _clear_state(self, keep_layer=False):
         self._rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         self._selected_fids.clear()
+        self._picked_fids.clear()
         if not keep_layer:
             self._active_layer = None
 
