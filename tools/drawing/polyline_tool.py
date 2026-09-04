@@ -21,8 +21,8 @@ _ARC_PX      = 48    # angle-arc radius in screen pixels
 _REF_PX      = 60    # horizontal reference line length in screen pixels
 _LBL_PAD_PX  = 16    # extra gap past arc for angle-label
 
-_DIST_CLR  = QColor(140, 230, 140)   # soft green  — distance
-_ANGLE_CLR = QColor(255, 205, 55)    # golden yellow — angle arc / label
+_DIST_CLR  = _style.RB_BLUE
+_ANGLE_CLR = _style.RB_BLUE
 
 
 class PolylineTool(BaseTool):

@@ -83,6 +83,7 @@ class CircleTool(BaseTool):
             if self._mode == "center_radius" and len(self._pts) == 1:
                 radius = self._pts[0].distance(sem.point)
                 self._draw_preview(self._pts[0], radius)
+                self._update_prompt(f"Specify radius <{radius:.3f}m>:")
             elif self._mode == "2pt" and len(self._pts) == 1:
                 ctr = QgsPointXY(
                     (self._pts[0].x() + sem.point.x()) / 2,

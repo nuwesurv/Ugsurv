@@ -12,7 +12,7 @@ import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
@@ -48,6 +48,9 @@ _HINT = {
 class ExtendTool(QgsMapTool):
     """AutoCAD-style EXTEND tool — multi-select extensions then confirm all at once."""
 
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
+
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
         self._canvas     = canvas
@@ -66,6 +69,20 @@ class ExtendTool(QgsMapTool):
 
         self._pending       = []
         self._pending_bands = []
+
+        # Hovered endpoint (updated every mouse-move, used to lock on click)
+        self._hover_layer  = None
+        self._hover_fid    = None
+        self._hover_ep_idx = None
+        self._hover_ep     = None
+        self._hover_dir    = (0.0, 1.0)
+
+        # Locked endpoint — set on left-click; cursor is then constrained to this gradient
+        self._locked_layer  = None
+        self._locked_fid    = None
+        self._locked_ep_idx = None
+        self._locked_ep     = None      # QgsPointXY; None = not locked
+        self._locked_dir    = (0.0, 1.0)
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -150,6 +167,24 @@ class ExtendTool(QgsMapTool):
             if f.isValid() and not f.geometry().isEmpty():
                 geoms.append(f.geometry())
         return geoms
+
+    def _ep_and_direction(self, line_geom, map_pt):
+        """Return (ep_idx, ep, dx, dy) — unit vector pointing away from the line end nearest map_pt."""
+        pts = line_geom.asPolyline()
+        if len(pts) < 2:
+            return None, None, 0.0, 1.0
+        d_start = map_pt.distance(pts[0])
+        d_end   = map_pt.distance(pts[-1])
+        if d_start <= d_end:
+            ep_idx, ep, adj = 0, pts[0], pts[1]
+        else:
+            ep_idx, ep, adj = -1, pts[-1], pts[-2]
+        dx = ep.x() - adj.x()
+        dy = ep.y() - adj.y()
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist < 1e-10:
+            return None, None, 0.0, 1.0
+        return ep_idx, ep, dx / dist, dy / dist
 
     def _compute_extension(self, line_geom, map_pt, boundary_geoms):
         pts = line_geom.asPolyline()
@@ -316,6 +351,22 @@ class ExtendTool(QgsMapTool):
         self._pending_bands = []
         self._pending       = []
 
+    def _project_preview(self, ep, dx, dy, map_pt, ref_layer):
+        """Draw preview band as projection of map_pt onto the (ep, dir) ray."""
+        t = max(0.0, (map_pt.x() - ep.x()) * dx + (map_pt.y() - ep.y()) * dy)
+        projected = QgsPointXY(ep.x() + t * dx, ep.y() + t * dy)
+        dist = ep.distance(projected)
+        if dist > 1e-6:
+            self._preview_band.setToGeometry(
+                QgsGeometry.fromPolylineXY([ep, projected]), ref_layer
+            )
+            self._preview_band.setVisible(True)
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn:
+                dyn.set_live_value(dist)
+        else:
+            self._preview_band.setVisible(False)
+
     def _update_preview(self, map_pt):
         if self._state == _ST_SELECT:
             layer, feat = self._find_line_near(map_pt)
@@ -328,20 +379,33 @@ class ExtendTool(QgsMapTool):
             return
 
         self._hover_band.setVisible(False)
+
+        # If a line endpoint is locked, always project onto that frozen gradient
+        if self._locked_ep is not None:
+            dx, dy = self._locked_dir
+            self._project_preview(self._locked_ep, dx, dy, map_pt, self._locked_layer)
+            return
+
+        # Not yet locked — find nearest line and show a direction-constrained preview
         layer, feat = self._find_line_near(map_pt)
         if feat is None or feat.geometry().isMultipart():
             self._preview_band.setVisible(False)
+            self._hover_ep = None
             return
 
-        boundaries = self._boundary_geoms_for(exclude_layer=layer, exclude_fid=feat.id())
-        _, ep, ext_pt = self._compute_extension(feat.geometry(), map_pt, boundaries)
-        if ep is not None and ext_pt is not None:
-            self._preview_band.setToGeometry(
-                QgsGeometry.fromPolylineXY([ep, ext_pt]), layer
-            )
-            self._preview_band.setVisible(True)
-        else:
+        ep_idx, ep, dx, dy = self._ep_and_direction(feat.geometry(), map_pt)
+        if ep is None:
             self._preview_band.setVisible(False)
+            self._hover_ep = None
+            return
+
+        self._hover_layer  = layer
+        self._hover_fid    = feat.id()
+        self._hover_ep_idx = ep_idx
+        self._hover_ep     = ep
+        self._hover_dir    = (dx, dy)
+
+        self._project_preview(ep, dx, dy, map_pt, layer)
 
     def _advance_to_extend(self):
         if not self._boundary_edges:
@@ -358,19 +422,98 @@ class ExtendTool(QgsMapTool):
             self._log(f"  {len(self._boundary_edges)} boundary edge(s) confirmed")
 
         self._state = _ST_EXTEND
-        self._log("  Click line ends to mark", "#88ccff")
+        self._log("  Click line ends to mark  (or type distance + Enter)", "#88ccff")
+        self.inputModeChanged.emit("value", "Extension distance")
 
     def _finish(self):
         self._confirm_all_extends()
         self._go_home()
 
+    def _unlock(self):
+        self._locked_layer  = None
+        self._locked_fid    = None
+        self._locked_ep_idx = None
+        self._locked_ep     = None
+        self._locked_dir    = (0.0, 1.0)
+        self._preview_band.setVisible(False)
+
+    def _apply_locked_extension(self, map_pt):
+        """Extend the locked line to the cursor position projected onto the locked gradient."""
+        ep = self._locked_ep
+        dx, dy = self._locked_dir
+        t = max(0.0, (map_pt.x() - ep.x()) * dx + (map_pt.y() - ep.y()) * dy)
+        if t < 1e-6:
+            self._log("  Move cursor forward along the gradient first")
+            return
+        ext_pt = QgsPointXY(ep.x() + t * dx, ep.y() + t * dy)
+        self._commit_extension(self._locked_layer, self._locked_fid,
+                               self._locked_ep_idx, ep, ext_pt, t)
+
+    def _commit_extension(self, layer, fid, ep_idx, ep, ext_pt, dist):
+        feat = layer.getFeature(fid)
+        if not feat.isValid():
+            return
+        pts = list(feat.geometry().asPolyline())
+        if ep_idx == -1:
+            pts = pts + [ext_pt]
+        else:
+            pts = [ext_pt] + pts
+        new_geom = QgsGeometry.fromPolylineXY(pts)
+        if not layer.isEditable():
+            layer.startEditing()
+        layer.changeGeometry(fid, new_geom)
+        layer.triggerRepaint()
+        self._modified_layers.add(layer)
+        self._log(f"  Extended {dist:.3f} u on '{layer.name()}'", "#88ff88")
+        self._unlock()
+        self._go_home()
+
     def _dispatch(self, sem):
-        pass
+        if sem is None or self._state != _ST_EXTEND:
+            return
+        if getattr(sem, 'type', None) != EventType.VALUE_ENTERED:
+            return
+        if sem.value is None:
+            return
+        # Use locked endpoint if set, else hovered
+        ep     = self._locked_ep     if self._locked_ep     is not None else self._hover_ep
+        ep_idx = self._locked_ep_idx if self._locked_ep     is not None else self._hover_ep_idx
+        dx, dy = self._locked_dir    if self._locked_ep     is not None else self._hover_dir
+        layer  = self._locked_layer  if self._locked_ep     is not None else self._hover_layer
+        fid    = self._locked_fid    if self._locked_ep     is not None else self._hover_fid
+        if ep is None or layer is None:
+            return
+        try:
+            dist = float(sem.value)
+        except (TypeError, ValueError):
+            return
+        if dist <= 0:
+            return
+        ext_pt = QgsPointXY(ep.x() + dist * dx, ep.y() + dist * dy)
+        self._commit_extension(layer, fid, ep_idx, ep, ext_pt, dist)
 
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("EXTEND  ──  click boundary edges", "#aaddff")
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in sel:
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                if QgsWkbTypes.geometryType(layer.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
+                    continue
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._boundary_edges.append((layer, feat.id()))
+                    band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
+                    band.setToGeometry(feat.geometry(), layer)
+                    self._boundary_bands.append(band)
+        if self._boundary_edges:
+            self._log("EXTEND", "#aaddff")
+            self._advance_to_extend()
+        else:
+            self._log("EXTEND  ──  click boundary edges", "#aaddff")
 
     def deactivate(self):
         for band in self._boundary_bands:
@@ -382,7 +525,10 @@ class ExtendTool(QgsMapTool):
         self._rm(self._hover_band)
         self._state = _ST_SELECT
         self._modified_layers.clear()
+        self._hover_ep = None
+        self._unlock()
         self._hint.hide()
+        self.inputModeChanged.emit("", "")
         super().deactivate()
 
     def canvasMoveEvent(self, event):
@@ -411,18 +557,30 @@ class ExtendTool(QgsMapTool):
             else:
                 self._log("  No line found near click")
         elif self._state == _ST_EXTEND:
-            layer, feat = self._find_line_near(map_pt)
-            if feat is not None:
-                self._update_extend(layer, feat, map_pt, shift=shift)
+            if self._locked_ep is not None:
+                # Second click — apply extension at the projected cursor position
+                self._apply_locked_extension(map_pt)
             else:
-                self._log("  No line found near click")
+                # First click — lock onto the hovered endpoint/direction
+                if self._hover_ep is not None:
+                    self._locked_layer  = self._hover_layer
+                    self._locked_fid    = self._hover_fid
+                    self._locked_ep_idx = self._hover_ep_idx
+                    self._locked_ep     = self._hover_ep
+                    self._locked_dir    = self._hover_dir
+                    self._log("  Endpoint locked — move cursor along gradient or type distance", "#88ccff")
+                else:
+                    self._log("  No line found near click")
 
         self._canvas.setFocus()
 
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key.Key_Escape:
-            self._go_home()
+            if self._locked_ep is not None:
+                self._unlock()   # first Esc releases lock, stays in _ST_EXTEND
+            else:
+                self._go_home()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if self._state == _ST_SELECT:
                 self._advance_to_extend()

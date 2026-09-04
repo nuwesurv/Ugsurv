@@ -444,9 +444,14 @@ class Ugsurv:
                     prev.inputModeChanged.disconnect(dyn.set_mode)
                 with contextlib.suppress(Exception):
                     prev.inputModeChanged.disconnect(_on_mode_hint)
+            if prev is not None and hasattr(prev, 'promptChanged'):
+                with contextlib.suppress(Exception):
+                    prev.promptChanged.disconnect(dyn.set_prompt)
             if tool is not None and hasattr(tool, 'inputModeChanged'):
                 tool.inputModeChanged.connect(dyn.set_mode)
                 tool.inputModeChanged.connect(_on_mode_hint)
+                if hasattr(tool, 'promptChanged'):
+                    tool.promptChanged.connect(dyn.set_prompt)
                 # Re-sync: activate() fires inputModeChanged BEFORE toolChanged
                 # connects the signal, so the widget missed it — replay it now.
                 mode   = getattr(tool, '_last_input_mode',   "")
@@ -563,7 +568,8 @@ class Ugsurv:
         _home = _SelectTool(canvas, ctx, translator)
         _home._tool_key = 'select'
         tool_mgr.set_home(_home)
-        ctx.go_home = tool_mgr.go_home
+        ctx.go_home    = tool_mgr.go_home
+        ctx.launch_tool = dispatcher.dispatch_tool_key
 
     # ── extra utility panels ─────────────────────────────────────────────
     def _register_extra_tools(self, cmd_dock, iface, canvas, mw):
@@ -813,6 +819,7 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.drawing.polygon_tool      import PolygonTool
     from .tools.modify.move_tool          import MoveTool
     from .tools.modify.copy_tool          import CopyTool
+    from .tools.modify.crop_tool          import CropTool
     from .tools.modify.rotate_tool        import RotateTool
     from .tools.modify.scale_tool         import ScaleTool
     from .tools.modify.mirror_tool        import MirrorTool
@@ -841,7 +848,7 @@ def _make_tool(key: str, canvas, ctx, translator):
         "mirror":        MirrorTool,      "offset":        OffsetTool,
         "trim":          TrimTool,        "extend":        ExtendTool,
         "fillet":        FilletTool,      "array":         ArrayTool,
-        "erase":         EraseTool,
+        "erase":         EraseTool,       "crop":          CropTool,
         "stretch":       StretchTool,
         "grip_edit":     GripEditTool,
         "break":         BreakTool,
@@ -879,6 +886,7 @@ def _register_commands(registry):
         ("fillet",        "FILLET",  "F"),
         ("array",         "ARRAY",   "AR"),
         ("erase",         "ERASE",   "E", "DEL"),
+        ("crop",          "CROP",    "CR"),
         ("stretch",       "STRETCH", "S"),
         ("grip_edit",     "GRIPS",   "V"),
         ("break",         "BREAK",   "BR"),

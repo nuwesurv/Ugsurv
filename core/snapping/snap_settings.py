@@ -17,7 +17,7 @@ class SnapSettings:
             "center":        True,
             "intersection":  True,
             "perpendicular": True,
-            "extension":     True,
+            "extension":     False,
             "grid":          False,
             "self":          True,
             "nearest":       True,

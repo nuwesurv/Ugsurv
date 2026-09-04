@@ -42,6 +42,8 @@ from qgis.core import (
     QgsGeometry,
 )
 
+from ..core import style as _style
+
 try:
     import numpy as np
     HAS_NUMPY = True
@@ -211,8 +213,8 @@ class OverlapPointsDock(QDockWidget):
 
         marker = QgsVertexMarker(self.canvas)
         marker.setCenter(point)
-        marker.setColor(QColor(220, 30, 30))
-        marker.setFillColor(QColor(220, 30, 30, 80))
+        marker.setColor(_style.RB_RED)
+        marker.setFillColor(_style.RB_RED_FILL)
         marker.setIconType(QgsVertexMarker.IconType.ICON_CROSS)
         marker.setIconSize(16)
         marker.setPenWidth(3)

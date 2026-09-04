@@ -38,6 +38,9 @@ class BaseTool(QgsMapTool):
     # args: (mode, prompt)  mode ∈ {"xy", "polar", "value"}
     inputModeChanged = pyqtSignal(str, str)
 
+    # Emitted to update only the prompt label without rebuilding fields.
+    promptChanged = pyqtSignal(str)
+
     def __init__(self, canvas, tool_context, input_translator):
         super().__init__(canvas)
         self._ctx            = tool_context
@@ -271,6 +274,10 @@ class BaseTool(QgsMapTool):
         self._last_input_mode   = mode
         self._last_input_prompt = prompt
         self.inputModeChanged.emit(mode, prompt)
+
+    def _update_prompt(self, prompt: str):
+        """Update only the prompt label text without rebuilding fields."""
+        self.promptChanged.emit(prompt)
 
     # ── abstract interface for subclasses ─────────────────────────────────
     @abstractmethod

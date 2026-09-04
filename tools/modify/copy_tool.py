@@ -4,8 +4,8 @@ AutoCAD-style COPY tool.
 
 Workflow
 ────────
-1. Click features to build a selection set.
-   Shift+click removes a feature.  Enter/RMB (with selection) → proceed.
+1. Click features / rasters to build a selection set.
+   Shift+click removes an item.  Enter/RMB (with selection) → proceed.
 2. Click base point.
 3. Click destination(s) to create copies — stays active for multiple copies.
    Enter/RMB in this phase → exit.
@@ -14,13 +14,14 @@ Esc at any phase → cancel / exit.
 """
 
 import contextlib
+import os
 
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
-    QgsRectangle, QgsVectorLayer, QgsWkbTypes,
+    QgsRectangle, QgsVectorLayer, QgsWkbTypes, QgsRasterLayer,
 )
 
 from ...core.events import EventType
@@ -39,7 +40,7 @@ _ST_PLACE  = 2
 _HIT_PX = 10
 
 _HINT = {
-    _ST_SELECT: "Select features",
+    _ST_SELECT: "Select features / rasters",
     _ST_BASE:   "Click base point",
     _ST_PLACE:  "Click destination",
 }
@@ -52,7 +53,7 @@ _HINT_STYLE = (
 
 
 class CopyTool(QgsMapTool):
-    """Copy features — multi-select → base point → destination(s)."""
+    """Copy features and rasters — multi-select → base point → destination(s)."""
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -64,6 +65,9 @@ class CopyTool(QgsMapTool):
         self._sel_features = []
         self._sel_bands    = []
         self._prev_bands   = []
+        self._sel_rasters  = []   # [QgsRasterLayer, ...]
+        self._raster_bands = []   # parallel highlight bands
+        self._raster_prevs = []   # parallel preview bands
         self._base_pt: QgsPointXY | None = None
         self._last_input_ref: QgsPointXY | None = None
 
@@ -115,6 +119,28 @@ class CopyTool(QgsMapTool):
                     best = (lyr, feat.id(), QgsGeometry(geom))
         return best
 
+    def _find_raster_at(self, map_pt):
+        """Return the topmost file-based QgsRasterLayer whose extent contains map_pt."""
+        root = QgsProject.instance().layerTreeRoot()
+        for lyr in root.layerOrder():
+            if not isinstance(lyr, QgsRasterLayer) or not lyr.isValid():
+                continue
+            if lyr.providerType() != 'gdal':
+                continue
+            if lyr.extent().contains(map_pt):
+                return lyr
+        return None
+
+    def _raster_extent_geom(self, lyr):
+        ext = lyr.extent()
+        pts = [
+            QgsPointXY(ext.xMinimum(), ext.yMinimum()),
+            QgsPointXY(ext.xMaximum(), ext.yMinimum()),
+            QgsPointXY(ext.xMaximum(), ext.yMaximum()),
+            QgsPointXY(ext.xMinimum(), ext.yMaximum()),
+        ]
+        return QgsGeometry.fromPolygonXY([pts])
+
     def _make_band(self, geom_type, color, fill_color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, geom_type)
         band.setColor(color)
@@ -133,6 +159,8 @@ class CopyTool(QgsMapTool):
         if go and callable(go):
             from qgis.PyQt.QtCore import QTimer
             QTimer.singleShot(0, go)
+
+    # ── vector selection ──────────────────────────────────────────────────
 
     def _sel_key(self, layer, fid):
         return (id(layer), fid)
@@ -164,28 +192,71 @@ class CopyTool(QgsMapTool):
         self._rm(self._prev_bands.pop(idx))
         return True
 
+    # ── raster selection ──────────────────────────────────────────────────
+
+    def _add_raster_to_selection(self, lyr):
+        if any(id(r) == id(lyr) for r in self._sel_rasters):
+            return False
+        self._sel_rasters.append(lyr)
+        hl = self._make_band(QgsWkbTypes.PolygonGeometry, _C_HIGHLIGHT, _C_HL_FILL, width=2)
+        hl.setToGeometry(self._raster_extent_geom(lyr), None)
+        self._raster_bands.append(hl)
+        prev = self._make_band(QgsWkbTypes.PolygonGeometry, _C_PREVIEW, _C_PREV_FILL, width=2)
+        prev.setVisible(False)
+        self._raster_prevs.append(prev)
+        return True
+
+    def _remove_raster_from_selection(self, lyr):
+        ids = [id(r) for r in self._sel_rasters]
+        if id(lyr) not in ids:
+            return False
+        idx = ids.index(id(lyr))
+        self._sel_rasters.pop(idx)
+        self._rm(self._raster_bands.pop(idx))
+        self._rm(self._raster_prevs.pop(idx))
+        return True
+
     def _clear_selection(self):
-        for b in self._sel_bands:
-            self._rm(b)
-        for b in self._prev_bands:
+        for b in (self._sel_bands + self._prev_bands
+                  + self._raster_bands + self._raster_prevs):
             self._rm(b)
         self._sel_features = []
         self._sel_bands    = []
         self._prev_bands   = []
+        self._sel_rasters  = []
+        self._raster_bands = []
+        self._raster_prevs = []
+
+    # ── state transitions ─────────────────────────────────────────────────
+
+    def _sel_count(self):
+        parts = []
+        n_v = len(self._sel_features)
+        n_r = len(self._sel_rasters)
+        if n_v:
+            parts.append(f"{n_v} feature(s)")
+        if n_r:
+            parts.append(f"{n_r} raster(s)")
+        return " + ".join(parts) if parts else "0 items"
+
+    def _has_selection(self):
+        return bool(self._sel_features or self._sel_rasters)
 
     def _enter_base(self):
-        for b in self._prev_bands:
+        for b in self._prev_bands + self._raster_prevs:
             b.setVisible(False)
         self._state = _ST_BASE
-        n = len(self._sel_features)
-        self._log(f"  {n} feature(s) selected  →  click base point", "#88ccff")
+        self._log(f"  {self._sel_count()} selected  →  click base point", "#88ccff")
 
     def _enter_place(self, base_pt: QgsPointXY):
-        self._base_pt = base_pt
+        self._base_pt        = base_pt
         self._last_input_ref = base_pt
-        self._state   = _ST_PLACE
+        self._state          = _ST_PLACE
         for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
             band.setToGeometry(geom, layer)
+            band.setVisible(True)
+        for lyr, band in zip(self._sel_rasters, self._raster_prevs):
+            band.setToGeometry(self._raster_extent_geom(lyr), None)
             band.setVisible(True)
         self._log("  Click destination(s)  or  type \"@dx,dy\"", "#88ccff")
 
@@ -197,6 +268,47 @@ class CopyTool(QgsMapTool):
                 moved = QgsGeometry(geom)
                 moved.translate(dx, dy)
                 band.setToGeometry(moved, layer)
+            for lyr, band in zip(self._sel_rasters, self._raster_prevs):
+                ext = lyr.extent()
+                pts = [
+                    QgsPointXY(ext.xMinimum()+dx, ext.yMinimum()+dy),
+                    QgsPointXY(ext.xMaximum()+dx, ext.yMinimum()+dy),
+                    QgsPointXY(ext.xMaximum()+dx, ext.yMaximum()+dy),
+                    QgsPointXY(ext.xMinimum()+dx, ext.yMaximum()+dy),
+                ]
+                band.setToGeometry(QgsGeometry.fromPolygonXY([pts]), None)
+
+    def _apply_raster_copy(self, lyr, dx, dy):
+        """Create a shifted copy of the raster file and add it to the project."""
+        from osgeo import gdal
+        src = lyr.source()
+        base, ext = os.path.splitext(src)
+        dest = base + '_copy' + ext
+        i = 2
+        while os.path.exists(dest):
+            dest = base + f'_copy{i}' + ext
+            i += 1
+        ds = gdal.Open(src)
+        if ds is None:
+            self._log(f"  Cannot open '{lyr.name()}'", "#ff8844")
+            return False
+        gt = list(ds.GetGeoTransform())
+        gt[0] += dx
+        gt[3] += dy
+        ds_new = gdal.Translate(dest, ds)
+        if ds_new is None:
+            self._log(f"  Failed to create copy of '{lyr.name()}'", "#ff8844")
+            ds = None
+            return False
+        ds_new.SetGeoTransform(gt)
+        ds_new.SetProjection(ds.GetProjection())
+        ds_new = None
+        ds     = None
+        copy_name = os.path.splitext(os.path.basename(dest))[0]
+        new_lyr = QgsRasterLayer(dest, copy_name)
+        if new_lyr.isValid():
+            QgsProject.instance().addMapLayer(new_lyr)
+        return True
 
     def _apply_copy(self, dest_pt: QgsPointXY):
         if not self._base_pt:
@@ -227,13 +339,19 @@ class CopyTool(QgsMapTool):
             modified.add(layer)
         for lyr in modified:
             lyr.triggerRepaint()
-        n = len(self._sel_features)
-        self._log(f"  Copied {n} feature(s)  Δ({dx:.3f}, {dy:.3f})", "#88ff88")
+        n_r = sum(1 for lyr in self._sel_rasters
+                  if self._apply_raster_copy(lyr, dx, dy))
+        parts = []
+        if self._sel_features:
+            parts.append(f"{len(self._sel_features)} feature(s)")
+        if n_r:
+            parts.append(f"{n_r} raster(s)")
+        self._log(f"  Copied {' + '.join(parts)}  Δ({dx:.3f}, {dy:.3f})", "#88ff88")
 
     def _reset(self):
         self._clear_selection()
-        self._state   = _ST_SELECT
-        self._base_pt = None
+        self._state          = _ST_SELECT
+        self._base_pt        = None
         self._last_input_ref = None
 
     def _dispatch(self, sem):
@@ -248,13 +366,30 @@ class CopyTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("COPY  ──  select features to copy", "#aaddff")
+        preselected = getattr(self._ctx, 'selected_raster', None)
+        if preselected is not None and preselected.isValid():
+            self._add_raster_to_selection(preselected)
+            self._ctx.selected_raster = None
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in sel:
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._add_to_selection(layer, fid, feat.geometry())
+        if self._has_selection():
+            self._state = _ST_BASE
+            self._log(f"COPY  ──  {self._sel_count()} selected  →  click base point", "#aaddff")
+        else:
+            self._log("COPY  ──  select features / rasters to copy", "#aaddff")
 
     def deactivate(self):
         self._clear_selection()
         self._hint.hide()
-        self._state   = _ST_SELECT
-        self._base_pt = None
+        self._state          = _ST_SELECT
+        self._base_pt        = None
         self._last_input_ref = None
         super().deactivate()
 
@@ -269,7 +404,7 @@ class CopyTool(QgsMapTool):
 
         if event.button() == Qt.MouseButton.RightButton:
             if self._state == _ST_SELECT:
-                if self._sel_features:
+                if self._has_selection():
                     self._enter_base()
                 else:
                     self._go_home()
@@ -289,15 +424,27 @@ class CopyTool(QgsMapTool):
                 layer, fid, geom = result
                 if shift:
                     if self._remove_from_selection(layer, fid):
-                        self._log(f"  Deselected  ({len(self._sel_features)} selected)")
+                        self._log(f"  Deselected  ({self._sel_count()} selected)")
                 else:
                     if self._add_to_selection(layer, fid, geom):
                         self._log(f"  Selected '{layer.name()}' fid {fid}"
-                                  f"  ({len(self._sel_features)} selected)")
+                                  f"  ({self._sel_count()} selected)")
                     else:
                         self._log(f"  Already selected")
             else:
-                self._log("  No feature found near click")
+                raster = self._find_raster_at(map_pt)
+                if raster:
+                    if shift:
+                        if self._remove_raster_from_selection(raster):
+                            self._log(f"  Raster deselected  ({self._sel_count()} selected)")
+                    else:
+                        if self._add_raster_to_selection(raster):
+                            self._log(f"  Raster '{raster.name()}' selected"
+                                      f"  ({self._sel_count()} selected)")
+                        else:
+                            self._log(f"  Already selected")
+                else:
+                    self._log("  No feature or raster found near click")
 
         elif self._state == _ST_BASE:
             self._enter_place(map_pt)
@@ -317,7 +464,7 @@ class CopyTool(QgsMapTool):
                 self._go_home()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if self._state == _ST_SELECT:
-                if self._sel_features:
+                if self._has_selection():
                     self._enter_base()
                 else:
                     self._go_home()

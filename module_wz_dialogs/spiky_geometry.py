@@ -41,6 +41,8 @@ from qgis.core import (
     QgsCoordinateTransform,
 )
 
+from ..core import style as _style
+
 try:
     import numpy as np
     HAS_NUMPY = True
@@ -207,8 +209,8 @@ class SpikyGeomsDock(QDockWidget):
 
         marker = QgsVertexMarker(self.canvas)
         marker.setCenter(point)
-        marker.setColor(QColor(220, 30, 30))          # red
-        marker.setFillColor(QColor(220, 30, 30, 80))  # translucent fill
+        marker.setColor(_style.RB_RED)
+        marker.setFillColor(_style.RB_RED_FILL)
         marker.setIconType(QgsVertexMarker.IconType.ICON_CROSS)
         marker.setIconSize(16)
         marker.setPenWidth(3)

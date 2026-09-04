@@ -22,11 +22,11 @@ import math
 from dataclasses import dataclass
 
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QCursor
+from qgis.PyQt.QtGui import QColor, QCursor
 from qgis.PyQt.QtWidgets import QMenu
 from qgis.core import (
     QgsPointXY, QgsRectangle, QgsGeometry, QgsWkbTypes,
-    QgsProject, QgsFeatureRequest,
+    QgsProject, QgsFeatureRequest, QgsRasterLayer,
 )
 from qgis.gui import QgsRubberBand, QgsVertexMarker
 
@@ -86,6 +86,7 @@ class SelectTool(BaseTool):
 
         self._circle_center: QgsPointXY | None = None
         self._radius_rb     = None   # radius guide line — NOT in _rubber_bands
+        self._raster_sel_rb: QgsRubberBand | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     def activate(self):
@@ -99,6 +100,7 @@ class SelectTool(BaseTool):
         except Exception:
             pass
         self._clear_grips()
+        self._clear_raster_selection()
         if self._hover_rb is not None:
             try:
                 self.canvas().scene().removeItem(self._hover_rb)
@@ -177,7 +179,7 @@ class SelectTool(BaseTool):
                         self._radius_rb = QgsRubberBand(
                             self.canvas(), QgsWkbTypes.LineGeometry)
                         self._radius_rb.setColor(_style.RB_DRAW)
-                        self._radius_rb.setWidth(1)
+                        self._radius_rb.setWidth(_style.RB_WIDTH)
                         self._request_input("value",
                                             f"New radius <{r:.3f}>:")
             self._hide_overlay()
@@ -233,7 +235,7 @@ class SelectTool(BaseTool):
         super().canvasMoveEvent(event)
 
     def canvasReleaseEvent(self, event):
-        # Right-click on a line endpoint → context menu (only when fully idle)
+        # Right-click context menus (only when fully idle — no armed grip, no drag)
         if event.button() == Qt.MouseButton.RightButton:
             if (self._hot_grip is None and self._drag_start is None
                     and self._extend_grip is None and self._add_pts_grip is None):
@@ -241,6 +243,10 @@ class SelectTool(BaseTool):
                 eg  = self._endpoint_grip_at(raw)
                 if eg:
                     self._show_endpoint_menu(eg)
+                else:
+                    raster = self._find_raster_at(raw)
+                    if raster:
+                        self._show_raster_menu(raster)
             return
 
         if event.button() != Qt.MouseButton.LeftButton:
@@ -357,6 +363,9 @@ class SelectTool(BaseTool):
                 layer.startEditing()
             layer.deleteFeature(grip.fid)
             self._ctx.selection_model.remove(grip.layer_id, grip.fid)
+            cmd_dock = getattr(self._ctx, 'cmd_dock', None)
+            if cmd_dock:
+                cmd_dock.log(f"Deleted 1 point from '{layer.name()}'.", "#ff8888")
             # selectionChanged fires → overlay rebuilds automatically
             self._rebuild_grips()
             return
@@ -392,18 +401,29 @@ class SelectTool(BaseTool):
         sel = self._ctx.selection_model
         if sel.is_empty():
             return
-        count = len(sel)
+        _GTYPE = {0: "point", 1: "line", 2: "polygon"}
+        layer_counts = {}  # lid -> {name, count, gtype}
         for lid, fid in list(sel):
             layer = QgsProject.instance().mapLayer(lid)
             if layer is None:
                 continue
             if not layer.isEditable():
                 layer.startEditing()
+            if lid not in layer_counts:
+                feat = layer.getFeature(fid)
+                gtype = int(QgsWkbTypes.geometryType(feat.geometry().wkbType())) if feat.isValid() else None
+                layer_counts[lid] = {"name": layer.name(), "count": 0, "gtype": gtype}
+            layer_counts[lid]["count"] += 1
             layer.deleteFeature(fid)
         sel.clear()
         cmd_dock = getattr(self._ctx, 'cmd_dock', None)
-        if cmd_dock:
-            cmd_dock.log(f"Deleted {count} feature{'s' if count != 1 else ''}.", "#ff8888")
+        if cmd_dock and layer_counts:
+            parts = []
+            for info in layer_counts.values():
+                n = info["count"]
+                g = _GTYPE.get(info["gtype"], "feature")
+                parts.append(f"{n} {g}{'s' if n > 1 else ''} from '{info['name']}'")
+            cmd_dock.log("Deleted " + ", ".join(parts) + ".", "#ff8888")
 
     def _on_hover(self, sem: SemanticEvent):
         pass
@@ -538,6 +558,16 @@ class SelectTool(BaseTool):
         elif chosen == act_add:
             self._start_add_points(grip)
 
+    def _show_raster_menu(self, raster: 'QgsRasterLayer'):
+        menu     = QMenu(self.canvas())
+        act_crop = menu.addAction("Crop raster")
+        chosen   = menu.exec_(QCursor.pos())
+        if chosen == act_crop:
+            self._ctx.selected_raster = raster
+            launch = getattr(self._ctx, 'launch_tool', None)
+            if launch:
+                launch("crop")
+
     # ── extend mode ───────────────────────────────────────────────────────
     def _start_extend(self, grip: 'Grip'):
         layer = QgsProject.instance().mapLayer(grip.layer_id)
@@ -631,7 +661,7 @@ class SelectTool(BaseTool):
         preview = ([pt] + orig) if grip.vertex_idx == 0 else (orig + [pt])
         if self._ep_preview_rb is None:
             self._ep_preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1)
+                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, _style.RB_WIDTH)
         self._ep_preview_rb.reset(QgsWkbTypes.LineGeometry)
         for i, p in enumerate(preview):
             self._ep_preview_rb.addPoint(p, i == len(preview) - 1)
@@ -640,7 +670,7 @@ class SelectTool(BaseTool):
         anchor = self._add_pts_new[-1] if self._add_pts_new else self._add_pts_orig_pts[-1]
         if self._ep_preview_rb is None:
             self._ep_preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1)
+                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, _style.RB_WIDTH)
         self._ep_preview_rb.reset(QgsWkbTypes.LineGeometry)
         self._ep_preview_rb.addPoint(anchor, False)
         self._ep_preview_rb.addPoint(pt, True)
@@ -650,7 +680,7 @@ class SelectTool(BaseTool):
             return
         if self._add_pts_rb is None:
             self._add_pts_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH + 1)
+                QgsWkbTypes.LineGeometry, _style.RB_DRAW, _style.RB_WIDTH)
             self._add_pts_rb.setLineStyle(Qt.PenStyle.SolidLine)
         self._add_pts_rb.reset(QgsWkbTypes.LineGeometry)
         chain = [self._add_pts_orig_pts[-1]] + self._add_pts_new
@@ -725,6 +755,7 @@ class SelectTool(BaseTool):
         sel = self._ctx.selection_model
         if not shift:
             sel.clear()
+            self._clear_raster_selection()
         tol = (self._ctx.snap_engine._px_to_map_units(5, self._ctx.canvas)
                if self._ctx.snap_engine else 0.001)
         rect = QgsRectangle(pt.x() - tol, pt.y() - tol,
@@ -741,6 +772,52 @@ class SelectTool(BaseTool):
                 sel.toggle(best_lid, best_fid)
             else:
                 sel.add(best_lid, best_fid)
+        elif not shift:
+            raster = self._find_raster_at(pt)
+            if raster:
+                self._ctx.selected_raster = raster
+                self._show_raster_selection(raster)
+                cmd_dock = getattr(self._ctx, 'cmd_dock', None)
+                if cmd_dock:
+                    cmd_dock.log(f"Raster selected: {raster.name()}", "#aaddff")
+
+    # ── raster selection ───────────────────────────────────────────────────
+    def _find_raster_at(self, pt: QgsPointXY):
+        """Return the topmost file-based QgsRasterLayer whose extent contains pt."""
+        root = QgsProject.instance().layerTreeRoot()
+        for lyr in root.layerOrder():
+            if not isinstance(lyr, QgsRasterLayer) or not lyr.isValid():
+                continue
+            if lyr.providerType() != 'gdal':
+                continue
+            if lyr.extent().contains(pt):
+                return lyr
+        return None
+
+    def _show_raster_selection(self, lyr: QgsRasterLayer):
+        ext = lyr.extent()
+        pts = [
+            QgsPointXY(ext.xMinimum(), ext.yMinimum()),
+            QgsPointXY(ext.xMaximum(), ext.yMinimum()),
+            QgsPointXY(ext.xMaximum(), ext.yMaximum()),
+            QgsPointXY(ext.xMinimum(), ext.yMaximum()),
+        ]
+        if self._raster_sel_rb is None:
+            self._raster_sel_rb = QgsRubberBand(self.canvas(), QgsWkbTypes.PolygonGeometry)
+        self._raster_sel_rb.setColor(_style.RB_BLUE_FILL)
+        self._raster_sel_rb.setStrokeColor(_style.RB_BLUE)
+        self._raster_sel_rb.setWidth(_style.RB_WIDTH)
+        self._raster_sel_rb.setToGeometry(QgsGeometry.fromPolygonXY([pts]), None)
+        self._raster_sel_rb.setVisible(True)
+
+    def _clear_raster_selection(self):
+        self._ctx.selected_raster = None
+        if self._raster_sel_rb is not None:
+            try:
+                self.canvas().scene().removeItem(self._raster_sel_rb)
+            except Exception:
+                pass
+            self._raster_sel_rb = None
 
     def _update_drag_preview(self, start: QgsPointXY, end: QgsPointXY):
         if self._drag_rb is None:
@@ -855,6 +932,7 @@ class SelectTool(BaseTool):
             self._clear_circle_input()
         self._ctx.selection_model.clear()
         self._clear_grips()
+        self._clear_raster_selection()
         self._show_overlay()
         if self._drag_rb:
             try:

@@ -62,6 +62,7 @@ _CONFIGS = {
     "en":    [("E",     "0.000"), ("N",    "0.000")],   # georeferencing GCP input
     "polar": [("Dist",  "0.000"), ("Brg",  "0.0°" )],
     "value": [("Value", "0.000")],
+    "d1d2":  [("d1",    "2.000"), ("d2",   "2.000")],   # chamfer / fillet distances
 }
 
 
@@ -160,6 +161,7 @@ class DynamicInputWidget(QWidget):
 
         self._rebuild_fields(_CONFIGS[mode])
         self._refresh_fields()
+        self._refresh_live_placeholders()   # show current live values immediately
         self.adjustSize()
         self._reposition()
         self.show()
@@ -177,11 +179,26 @@ class DynamicInputWidget(QWidget):
     def set_live_polar(self, dist: float, angle_deg: float):
         """Update live cursor values used as fallbacks when a polar field is empty."""
         self._live = [dist, angle_deg]
+        self._refresh_live_placeholders()
+
+    def set_live_value(self, v: float):
+        """Update live cursor value used as fallback when the value field is empty."""
+        if self._live:
+            self._live[0] = v
+        else:
+            self._live = [v]
+        self._refresh_live_placeholders()
 
     def update_position(self, canvas_pt=None):
         """Called on every canvas xyCoordinates event — follow the cursor."""
         if self.isVisible():
             self._reposition()
+
+    def _refresh_live_placeholders(self):
+        """Show live values as placeholder text in empty fields."""
+        for i, field in enumerate(self._fields):
+            if i < len(self._texts) and not self._texts[i] and i < len(self._live):
+                field.setPlaceholderText(f"{self._live[i]:.3f}")
 
     # ── InputBuffer compat slots (no-op: interactive widget owns its text) ─
     def on_buffer_text_changed(self, text: str):
@@ -278,6 +295,20 @@ class DynamicInputWidget(QWidget):
             except (ValueError, IndexError):
                 return False
             self.valueEntered.emit(v)
+            self._clear()
+            return True
+
+        if mode == "d1d2":
+            t0 = self._texts[0].strip()
+            t1 = self._texts[1].strip()
+            if not t0 and not t1:
+                return False  # nothing typed — let Enter reach the tool as CONFIRM
+            try:
+                d1 = float(t0) if t0 else self._live[0]
+                d2 = float(t1) if t1 else self._live[1]
+            except (ValueError, IndexError):
+                return False
+            self.coordinateEntered.emit(d1, d2)
             self._clear()
             return True
 

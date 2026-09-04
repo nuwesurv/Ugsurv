@@ -67,10 +67,11 @@ class GripEditTool(BaseTool):
         self._last_snap_pt:  QgsPointXY | None = None   # last snapped pt during hover
         self._preview_rb                       = None   # geometry preview rubber band
 
-        # extend mode: right-click endpoint → type distance or click new endpoint
-        self._extend_grip:      Grip | None  = None
-        self._extend_dir:       tuple | None = None   # (dx, dy) unit outward vector
-        self._extend_orig_pts:  list | None  = None
+        # extend mode: right-click endpoint → slide last vertex along gradient
+        self._extend_grip:      Grip | None      = None
+        self._extend_dir:       tuple | None     = None   # (dx, dy) unit outward vector
+        self._extend_orig_pts:  list | None      = None
+        self._extend_proj_pt:   QgsPointXY | None = None  # cursor projected onto gradient
 
         # add-points mode: right-click endpoint → append multiple vertices interactively
         self._add_pts_grip:     Grip | None  = None
@@ -143,8 +144,8 @@ class GripEditTool(BaseTool):
                     self._cancel_add_pts()
                 return
             if self._extend_grip is not None:
-                if self._last_snap_pt:
-                    self._commit_extend(self._last_snap_pt)
+                if self._extend_proj_pt:
+                    self._commit_extend(self._extend_proj_pt)
                 else:
                     self._cancel_extend()
                 return
@@ -234,6 +235,17 @@ class GripEditTool(BaseTool):
                 self._request_input("value",
                                     "Extension distance  /  click to place:")
             return
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            event.accept()
+            if self._extend_grip is not None:
+                self._cancel_extend()
+                return
+            if self._add_pts_grip is not None:
+                self._cancel_add_pts()
+                return
+        super().keyPressEvent(event)
 
     # ── hover (all modes) ────────────────────────────────────────────────
     def _on_hover(self, sem: SemanticEvent):
@@ -351,7 +363,7 @@ class GripEditTool(BaseTool):
         self._extend_grip     = grip
         self._extend_dir      = (dx / dist, dy / dist)
         self._extend_orig_pts = pts
-        self._request_input("value", "Extension distance / click new endpoint:")
+        self._request_input("value", "Extend along gradient: distance or click:")
 
     def _handle_extend_event(self, sem: SemanticEvent):
         if sem.type == EventType.VALUE_ENTERED:
@@ -364,17 +376,47 @@ class GripEditTool(BaseTool):
             ep     = self._extend_orig_pts[0] if grip.vertex_idx == 0 else self._extend_orig_pts[-1]
             self._commit_extend(QgsPointXY(ep.x() + dist * dx, ep.y() + dist * dy))
 
-        elif sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:
-            self._commit_extend(sem.point)
+        elif sem.type == EventType.POINT_PICKED:
+            # Commit at the gradient-projected cursor position (not the raw snap point)
+            if self._extend_proj_pt:
+                self._commit_extend(self._extend_proj_pt)
 
-        elif sem.type == EventType.CONFIRM and self._last_snap_pt:
-            self._commit_extend(self._last_snap_pt)
+        elif sem.type == EventType.COORDINATE_ENTERED and sem.point:
+            # Project typed coordinates onto the gradient direction
+            grip  = self._extend_grip
+            ep    = self._extend_orig_pts[0] if grip.vertex_idx == 0 else self._extend_orig_pts[-1]
+            dx, dy = self._extend_dir
+            dot   = (sem.point.x() - ep.x()) * dx + (sem.point.y() - ep.y()) * dy
+            self._commit_extend(QgsPointXY(ep.x() + dot * dx, ep.y() + dot * dy))
+
+        elif sem.type == EventType.CONFIRM and self._extend_proj_pt:
+            self._commit_extend(self._extend_proj_pt)
 
     def _update_extend_preview(self, sem: SemanticEvent):
-        self._last_snap_pt = sem.point
-        grip    = self._extend_grip
-        orig    = self._extend_orig_pts
-        preview = ([sem.point] + orig) if grip.vertex_idx == 0 else (orig + [sem.point])
+        grip      = self._extend_grip
+        orig      = self._extend_orig_pts
+        ep        = orig[0] if grip.vertex_idx == 0 else orig[-1]
+        dx, dy    = self._extend_dir
+        cursor    = sem.point
+
+        # Project cursor onto the gradient ray so the endpoint slides along the bearing
+        dot       = (cursor.x() - ep.x()) * dx + (cursor.y() - ep.y()) * dy
+        proj_pt   = QgsPointXY(ep.x() + dot * dx, ep.y() + dot * dy)
+        self._extend_proj_pt = proj_pt
+        self._last_snap_pt   = proj_pt
+
+        # Show live distance in the dynamic input placeholder
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn is not None:
+            dyn.set_live_value(dot)
+
+        # Preview: original line with the endpoint replaced (not added)
+        preview = list(orig)
+        if grip.vertex_idx == 0:
+            preview[0] = proj_pt
+        else:
+            preview[-1] = proj_pt
+
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
                 QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1
@@ -391,9 +433,9 @@ class GripEditTool(BaseTool):
             return
         pts = list(self._extend_orig_pts)
         if grip.vertex_idx == 0:
-            pts = [new_pt] + pts
+            pts[0] = new_pt
         else:
-            pts = pts + [new_pt]
+            pts[-1] = new_pt
         new_geom = QgsGeometry.fromPolylineXY(pts)
         if not layer.isEditable():
             layer.startEditing()
@@ -405,10 +447,12 @@ class GripEditTool(BaseTool):
         self._extend_grip     = None
         self._extend_dir      = None
         self._extend_orig_pts = None
+        self._extend_proj_pt  = None
         self._last_snap_pt    = None
         self._clear_rubber_bands()
         self._preview_rb      = None
         self._ext_guide_rb    = None
+        self._request_input("", "")
 
     # ── add-points mode ───────────────────────────────────────────────────
     def _start_add_points(self, grip: 'Grip'):
@@ -430,12 +474,14 @@ class GripEditTool(BaseTool):
         self._add_pts_grip     = grip
         self._add_pts_orig_pts = pts
         self._add_pts_new      = []
+        self._last_input_ref   = pts[-1]   # polar offsets anchor from the endpoint
         self._request_input("polar", "Specify next point [Enter=commit]:")
 
     def _handle_add_pts_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:
             self._add_pts_new.append(sem.point)
-            self._last_snap_pt = sem.point
+            self._last_snap_pt   = sem.point
+            self._last_input_ref = sem.point   # keep polar anchor current
             self._update_add_pts_committed()
             n = len(self._add_pts_new)
             self._request_input("polar", f"Next point [{n} added | Enter=commit]:")
@@ -444,8 +490,11 @@ class GripEditTool(BaseTool):
             pt = self._try_extension_distance(sem.value)
             if pt:
                 self._add_pts_new.append(pt)
-                self._last_snap_pt = pt
+                self._last_snap_pt   = pt
+                self._last_input_ref = pt   # keep polar anchor current
                 self._update_add_pts_committed()
+                n = len(self._add_pts_new)
+                self._request_input("polar", f"Next point [{n} added | Enter=commit]:")
 
         elif sem.type == EventType.CONFIRM:
             if self._add_pts_new:
@@ -456,6 +505,16 @@ class GripEditTool(BaseTool):
     def _update_add_pts_preview(self, sem: SemanticEvent):
         self._last_snap_pt = sem.point
         anchor = self._add_pts_new[-1] if self._add_pts_new else self._add_pts_orig_pts[-1]
+
+        # Live polar display: dist + bearing from anchor to cursor
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn is not None:
+            ddx  = sem.point.x() - anchor.x()
+            ddy  = sem.point.y() - anchor.y()
+            dist = math.hypot(ddx, ddy)
+            brg  = math.degrees(math.atan2(ddx, ddy)) % 360
+            dyn.set_live_polar(dist, brg)
+
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
                 QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1
@@ -501,6 +560,7 @@ class GripEditTool(BaseTool):
         self._clear_rubber_bands()
         self._preview_rb       = None
         self._ext_guide_rb     = None
+        self._request_input("", "")
 
     # ── grip geometry ──────────────────────────────────────────────────────
     def _grip_at(self, pt: QgsPointXY) -> 'Grip | None':
@@ -603,6 +663,7 @@ class GripEditTool(BaseTool):
         self._extend_grip     = None
         self._extend_dir      = None
         self._extend_orig_pts = None
+        self._extend_proj_pt  = None
         self._add_pts_grip     = None
         self._add_pts_orig_pts = None
         self._add_pts_new      = []

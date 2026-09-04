@@ -17,6 +17,8 @@ class ToolContext:
         self.iface = None                          # QgsInterface, set by plugin_main
         self.dyn_widget = None                     # DynamicInputWidget, set by plugin_main
         self.cmd_dock = None                       # CommandLineWidget, set by plugin_main
+        self.selected_raster = None                # QgsRasterLayer picked via SelectTool
+        self.launch_tool     = None                # callable(tool_key) → activates a tool by key
 
     # convenience ----------------------------------------------------------
     @property

@@ -11,6 +11,8 @@ from qgis.gui import (
     QgsMapLayerComboBox, QgsExpressionBuilderDialog,
     QgsRubberBand, QgsMapCanvasItem,
 )
+
+from ..core import style as _style
 from qgis.core import (
     QgsFeatureRequest,
     QgsMapLayerProxyModel,
@@ -501,8 +503,9 @@ class FeatureNavigatorDock(QDockWidget):
         ml_geom = QgsGeometry.fromMultiPolylineXY(line_segments)
         rb = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
         rb.setToGeometry(ml_geom, None)   # geometry already in canvas CRS
-        rb.setColor(QColor(255, 140, 0, 220))
-        rb.setWidth(1)
+        rb.setColor(_style.RB_RED)
+        rb.setWidth(_style.RB_WIDTH)
+        rb.setLineStyle(_style.RB_LINE_STYLE)
         self._dist_rubber_band = rb
 
         # One floating label per line at the midpoint

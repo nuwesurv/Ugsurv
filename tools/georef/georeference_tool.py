@@ -38,6 +38,7 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 from osgeo import gdal, osr
 
 from ...core.base_tool import BaseTool, ToolState
+from ...core import style as _style
 from ...core.events import SemanticEvent, EventType
 
 
@@ -68,14 +69,23 @@ class GeoreferenceTool(BaseTool):
         super().activate()
         self._reset_session()
 
-        # Pick raster file
-        from qgis.PyQt.QtWidgets import QFileDialog
-        filepath, _ = QFileDialog.getOpenFileName(
-            None,
-            'Select raster / image to georeference',
-            '',
-            'Raster / Image files (*.png *.jpg *.jpeg *.tif *.tiff *.pdf)',
-        )
+        # Use a raster pre-selected via the main maptool, or fall back to file dialog
+        preselected = getattr(self._ctx, 'selected_raster', None)
+        if preselected is not None and preselected.isValid():
+            filepath = preselected.source()
+            self._ctx.selected_raster = None
+            self._log(
+                f"Using selected raster: {os.path.basename(filepath)}", "#aaddff"
+            )
+        else:
+            from qgis.PyQt.QtWidgets import QFileDialog
+            filepath, _ = QFileDialog.getOpenFileName(
+                None,
+                'Select raster / image to georeference',
+                '',
+                'Raster / Image files (*.png *.jpg *.jpeg *.tif *.tiff *.pdf)',
+            )
+
         if not filepath or not os.path.exists(filepath):
             self._log("Georeferencing cancelled — no file selected.", "#ffaa44")
             self._go_home()
@@ -163,9 +173,9 @@ class GeoreferenceTool(BaseTool):
         """Draw a rectangle outline that tracks the cursor (bottom-right corner)."""
         if self._placement_rb is None:
             self._placement_rb = QgsRubberBand(self.canvas(), QgsWkbTypes.PolygonGeometry)
-            self._placement_rb.setColor(QColor(255, 180, 50, 60))
-            self._placement_rb.setStrokeColor(QColor(255, 180, 50, 220))
-            self._placement_rb.setWidth(2)
+            self._placement_rb.setColor(_style.RB_BLUE_FILL)
+            self._placement_rb.setStrokeColor(_style.RB_BLUE)
+            self._placement_rb.setWidth(_style.RB_WIDTH)
 
         px, py = map_pt.x(), map_pt.y()
         x0 = px - self._raster_w
@@ -492,7 +502,7 @@ class GeoreferenceTool(BaseTool):
         m = QgsVertexMarker(self.canvas())
         m.setCenter(map_pt)
         m.setIconType(QgsVertexMarker.ICON_CROSS)
-        m.setColor(QColor(255, 100, 0))
+        m.setColor(_style.RB_RED)
         m.setIconSize(18)
         m.setPenWidth(3)
         self._gcp_markers.append(m)
