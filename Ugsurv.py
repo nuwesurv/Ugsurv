@@ -764,6 +764,62 @@ class Ugsurv:
             self._tool_manager.activate_tool(_align_ref[0])
         cmd_dock.register_ui_command("ALIGN", "AL", callback=_activate_align)
 
+        # 15. Basemap — add Google Satellite or Hybrid XYZ tile layer
+        def _add_basemap():
+            from urllib.parse import quote
+            from qgis.PyQt.QtWidgets import (
+                QDialog, QVBoxLayout, QRadioButton,
+                QDialogButtonBox, QLabel,
+            )
+            from qgis.core import QgsRasterLayer, QgsProject
+
+            _BASEMAPS = [
+                ("Google Satellite",        "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}"),
+                ("Google Satellite Hybrid", "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"),
+            ]
+
+            dlg = QDialog(mw)
+            dlg.setWindowTitle("Add Basemap")
+            dlg.setMinimumWidth(280)
+            layout = QVBoxLayout(dlg)
+            layout.addWidget(QLabel("Select basemap to add:"))
+
+            radios = []
+            for name, _ in _BASEMAPS:
+                rb = QRadioButton(name)
+                layout.addWidget(rb)
+                radios.append(rb)
+            radios[0].setChecked(True)
+
+            bbox = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok |
+                QDialogButtonBox.StandardButton.Cancel
+            )
+            bbox.accepted.connect(dlg.accept)
+            bbox.rejected.connect(dlg.reject)
+            layout.addWidget(bbox)
+
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            chosen_name, chosen_url = next(
+                (n, u) for rb, (n, u) in zip(radios, _BASEMAPS) if rb.isChecked()
+            )
+            # quote(safe='/') encodes : = & { } but leaves / intact —
+            # the standard format QGIS's WMS/XYZ provider expects.
+            # QGIS decodes the url param before making tile requests and before
+            # displaying it in layer properties.
+            encoded = quote(chosen_url, safe='/:')
+            uri = f"type=xyz&url={encoded}&zmin=0&zmax=19"
+            lyr = QgsRasterLayer(uri, chosen_name, 'wms')
+            if lyr.isValid():
+                QgsProject.instance().addMapLayer(lyr)
+                cmd_dock.log(f'Basemap added: {chosen_name}', '#aaddff')
+            else:
+                cmd_dock.log(f'Failed to add basemap: {lyr.error().message()}', '#ff6666')
+
+        cmd_dock.register_ui_command("BASEMAP", "BMP", callback=_add_basemap)
+
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
