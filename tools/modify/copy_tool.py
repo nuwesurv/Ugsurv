@@ -405,14 +405,14 @@ class CopyTool(QgsMapTool):
         if self._has_selection():
             self._state = _ST_BASE
             self._log(f"COPY  ──  {self._sel_count()} selected  →  click base point", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click base point:"
-            self.inputModeChanged.emit("value", "Click base point:")
+            self.inputModeChanged.emit("no_value", "Click base point:")
         else:
             self._log("COPY  ──  select features / rasters to copy", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Select features to copy:"
-            self.inputModeChanged.emit("value", "Select features to copy:")
+            self.inputModeChanged.emit("no_value", "Select features to copy:")
 
     def deactivate(self):
         self._clear_selection()

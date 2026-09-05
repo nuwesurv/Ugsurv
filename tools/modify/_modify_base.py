@@ -91,7 +91,7 @@ class _ModifyBase(BaseTool):
             self._request_input("xy", "Click base point:")
         else:
             self._transition(ToolState.SELECTING)
-            self._request_input("xy", "Select features:")
+            self._request_input("no_value", "Select features:")
 
     # ── canvas overrides for SELECTING drag ──────────────────────────────
     def canvasPressEvent(self, event):

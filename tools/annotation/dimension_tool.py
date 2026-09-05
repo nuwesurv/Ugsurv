@@ -452,7 +452,7 @@ class AutoDimensionTool(BaseTool):
         self._dim_layer = _get_or_create_dim_layer(self._ctx)
         self._transition(ToolState.ACTING)
         self._log("ADIM — click a feature to dimension all its segments")
-        self._request_input("xy", "Click a feature to auto-dimension:")
+        self._request_input("no_value", "Click a feature to auto-dimension:")
 
     # ── events ────────────────────────────────────────────────────────────
 

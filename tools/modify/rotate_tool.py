@@ -283,15 +283,15 @@ class RotateTool(QgsMapTool):
                     self._add_to_selection(layer, fid, feat.geometry())
         if self._sel_features:
             self._log("ROTATE", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click rotation centre:"
-            self.inputModeChanged.emit("value", "Click rotation centre:")
+            self.inputModeChanged.emit("no_value", "Click rotation centre:")
             self._enter_base()
         else:
             self._log("ROTATE  ──  select features to rotate", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Select features to rotate:"
-            self.inputModeChanged.emit("value", "Select features to rotate:")
+            self.inputModeChanged.emit("no_value", "Select features to rotate:")
 
     def deactivate(self):
         self._clear_selection()

@@ -372,13 +372,50 @@ class ExtendTool(QgsMapTool):
                 self._canvas.scene().removeItem(self._snap_marker)
             self._snap_marker = None
 
+    def _lock_from_pending(self, pending: dict) -> bool:
+        """Lock directly onto an endpoint passed from grip/select tool. Returns True on success."""
+        layer = QgsProject.instance().mapLayer(pending['layer_id'])
+        if not layer:
+            return False
+        feat = layer.getFeature(pending['fid'])
+        if not feat.isValid():
+            return False
+        pts = feat.geometry().asPolyline()
+        if len(pts) < 2:
+            return False
+        if pending['at_start']:
+            ep, adj, ep_idx = pts[0], pts[1], 0
+        else:
+            ep, adj, ep_idx = pts[-1], pts[-2], -1
+        dx   = ep.x() - adj.x()
+        dy   = ep.y() - adj.y()
+        dist = math.hypot(dx, dy)
+        if dist < 1e-10:
+            return False
+        self._locked_layer  = layer
+        self._locked_fid    = feat.id()
+        self._locked_ep_idx = ep_idx
+        self._locked_ep     = ep
+        self._locked_dir    = (dx / dist, dy / dist)
+        self._state         = _ST_LOCKED
+        self._log(f"EXTEND  ──  locked on '{layer.name()}' endpoint", "#aaddff")
+        self._last_input_mode   = "value"
+        self._last_input_prompt = "Click or type extension distance:"
+        self.inputModeChanged.emit("value", "Click or type extension distance:")
+        return True
+
     def activate(self):
         super().activate()
         self._canvas.setFocus()
+        pending = getattr(self._ctx, 'extend_pending', None)
+        if pending:
+            self._ctx.extend_pending = None
+            if self._lock_from_pending(pending):
+                return
         self._log("EXTEND  ──  click a line near its endpoint", "#aaddff")
-        self._last_input_mode   = "value"
+        self._last_input_mode   = "no_value"
         self._last_input_prompt = "Click a line near its endpoint:"
-        self.inputModeChanged.emit("value", "Click a line near its endpoint:")
+        self.inputModeChanged.emit("no_value", "Click a line near its endpoint:")
 
     def deactivate(self):
         self._clear_snap_marker()

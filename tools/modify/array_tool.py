@@ -12,7 +12,7 @@ from qgis.PyQt.QtGui import QColor
 from qgis.core import QgsPointXY, QgsGeometry, QgsFeature
 
 from ._modify_base import _ModifyBase, _translate_geom, selected_features
-from ...core.base_tool import ToolState
+from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 
 
@@ -30,10 +30,43 @@ class ArrayTool(_ModifyBase):
         self._angle   = 360.0  # polar total
         self._center: QgsPointXY | None = None
 
+    def activate(self):
+        # Skip _ModifyBase.activate() which sets up a base-point/destination flow
+        # that array doesn't use.
+        BaseTool.activate(self)
+        self._base_pt = None
+        self._center  = None
+        sel = self._ctx.selection_model
+        if sel and not sel.is_empty():
+            self._transition(ToolState.ACTING)
+            self._request_input("no_value", self._prompt())
+        else:
+            self._transition(ToolState.SELECTING)
+            self._request_input("no_value", "Select features [Enter=confirm]:")
+
+    def _prompt(self) -> str:
+        if self._array_type == "rect":
+            return (f"Rect {self._rows}×{self._cols}  gap {self._col_gap:.1f}/{self._row_gap:.1f}"
+                    f"  [P=polar  Enter=execute]:")
+        center_str = "click center" if self._center is None else "center set"
+        return (f"Polar ×{self._count}  {self._angle:.0f}°  {center_str}"
+                f"  [R=rect  Enter=execute]:")
+
+    def canvasReleaseEvent(self, event):
+        # Let base handle drag-selection; after it may auto-transition to ACTING
+        # with the wrong prompt — fix it here.
+        super().canvasReleaseEvent(event)
+        if self._state == ToolState.ACTING:
+            self._request_input("no_value", self._prompt())
+
     def _on_event(self, sem: SemanticEvent):
         if self._state == ToolState.SELECTING:
-            if sem.type == EventType.CONFIRM and not self._ctx.selection_model.is_empty():
-                self._transition(ToolState.ACTING)
+            # Delegate picking (POINT_PICKED / SHIFT_CLICK) to base class; it
+            # also handles CONFIRM → ACTING transition, but sets the wrong prompt.
+            super()._on_event(sem)
+            if self._state == ToolState.ACTING:
+                # Base transitioned on CONFIRM — fix the input prompt for array.
+                self._request_input("no_value", self._prompt())
             return
 
         if self._state == ToolState.ACTING:
@@ -42,11 +75,13 @@ class ArrayTool(_ModifyBase):
                 if ch == 'P':   self._array_type = "polar"
                 elif ch == 'R': self._array_type = "rect"
                 elif ch == 'T': self._array_type = "path"
+                self._update_prompt(self._prompt())
             elif sem.type == EventType.CONFIRM:
                 self._execute_array()
             elif sem.type == EventType.POINT_PICKED and sem.point:
                 if self._array_type == "polar" and self._center is None:
                     self._center = sem.point
+                    self._update_prompt(self._prompt())
 
     def _execute_array(self):
         if self._array_type == "rect":

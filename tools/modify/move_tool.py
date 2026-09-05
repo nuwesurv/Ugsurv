@@ -426,14 +426,14 @@ class MoveTool(QgsMapTool):
         if self._has_selection():
             self._state = _ST_BASE
             self._log(f"MOVE  ──  {self._sel_count()} selected  →  click base point", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click base point:"
-            self.inputModeChanged.emit("value", "Click base point:")
+            self.inputModeChanged.emit("no_value", "Click base point:")
         else:
             self._log("MOVE  ──  select features / rasters to move", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Select features to move:"
-            self.inputModeChanged.emit("value", "Select features to move:")
+            self.inputModeChanged.emit("no_value", "Select features to move:")
 
     def deactivate(self):
         self._clear_selection()

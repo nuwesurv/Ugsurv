@@ -333,7 +333,14 @@ class GripEditTool(BaseTool):
         act_add    = menu.addAction("Add points")
         chosen = menu.exec_(QCursor.pos())
         if chosen == act_extend:
-            self._start_extend(grip)
+            self._ctx.extend_pending = {
+                'layer_id': grip.layer_id,
+                'fid':      grip.fid,
+                'at_start': grip.vertex_idx == 0,
+            }
+            launch = getattr(self._ctx, 'launch_tool', None)
+            if launch:
+                launch("extend")
         elif chosen == act_add:
             self._start_add_points(grip)
 

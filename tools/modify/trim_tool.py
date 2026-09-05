@@ -473,15 +473,15 @@ class TrimTool(QgsMapTool):
                     self._cutting_bands.append(band)
         if self._cutting_edges:
             self._log("TRIM", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click segment to trim:"
-            self.inputModeChanged.emit("value", "Click segment to trim:")
+            self.inputModeChanged.emit("no_value", "Click segment to trim:")
             self._advance_to_trim()
         else:
             self._log("TRIM  ──  click cutting edges  (Enter = skip, use all)", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click cutting edges:"
-            self.inputModeChanged.emit("value", "Click cutting edges:")
+            self.inputModeChanged.emit("no_value", "Click cutting edges:")
 
     def deactivate(self):
         self._clear_cutting_edges()

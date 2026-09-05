@@ -3,10 +3,11 @@
 DynamicInputWidget — floating interactive input prompt near the cursor.
 
 Modes (set by tool.inputModeChanged signal):
-  "xy"    – two fields: X, Y  (absolute coordinates)
-  "polar" – two fields: Dist, Angle°
-  "value" – one field:  single numeric value
-  ""      – hidden / no active tool
+  "xy"       – two fields: X, Y  (absolute coordinates)
+  "polar"    – two fields: Dist, Angle°
+  "value"    – one field:  single numeric value
+  "no_value" – display-only prompt label, no input fields
+  ""         – hidden / no active tool
 
 All key input is routed here from GlobalKeyFilter via handle_key().
 The canvas never loses focus — the widget has NoFocus / WA_TransparentForMouseEvents.
@@ -146,9 +147,30 @@ class DynamicInputWidget(QWidget):
         self._mode   = mode
         self._active = 0
 
+        if mode == "no_value":
+            for w in self._field_widgets:
+                self._layout.removeWidget(w)
+                w.deleteLater()
+            self._field_widgets = []
+            self._fields        = []
+            self._texts         = []
+            self._crs_badge.setVisible(False)
+            display_prompt = _re.sub(r'\s*\[[^\]]+\]', '', prompt).strip()
+            if display_prompt:
+                self._prompt_lbl.setText(display_prompt)
+                self._prompt_lbl.show()
+            else:
+                self._prompt_lbl.hide()
+            self.adjustSize()
+            self._reposition()
+            self.show()
+            return
+
         if not mode or mode not in _CONFIGS:
             self.hide()
             return
+
+        self._crs_badge.setVisible(mode in ("xy", "en"))
 
         # Strip key-hint blocks like [U=undo C=close] — those belong in the
         # command line only; the cursor-side prompt stays concise.
@@ -175,6 +197,22 @@ class DynamicInputWidget(QWidget):
         else:
             self._prompt_lbl.hide()
         self.adjustSize()
+        self._extract_live_from_prompt(text)
+
+    def _extract_live_from_prompt(self, text: str):
+        """Parse <number[unit]> tokens from prompt and push values into live fields."""
+        if not self._fields:
+            return
+        numbers = _re.findall(r'<([-\d.]+)', text)
+        for i, raw in enumerate(numbers):
+            if i >= len(self._live):
+                break
+            try:
+                self._live[i] = float(raw)
+            except ValueError:
+                pass
+        if numbers:
+            self._refresh_live_placeholders()
 
     def set_live_polar(self, dist: float, angle_deg: float):
         """Update live cursor values used as fallbacks when a polar field is empty."""
@@ -195,10 +233,10 @@ class DynamicInputWidget(QWidget):
             self._reposition()
 
     def _refresh_live_placeholders(self):
-        """Show live values as placeholder text in empty fields."""
+        """Show live cursor values as actual field text when the user hasn't typed."""
         for i, field in enumerate(self._fields):
             if i < len(self._texts) and not self._texts[i] and i < len(self._live):
-                field.setPlaceholderText(f"{self._live[i]:.3f}")
+                field.setText(f"{self._live[i]:.3f}")
 
     # ── InputBuffer compat slots (no-op: interactive widget owns its text) ─
     def on_buffer_text_changed(self, text: str):
@@ -327,7 +365,13 @@ class DynamicInputWidget(QWidget):
 
     def _refresh_fields(self):
         for i, field in enumerate(self._fields):
-            field.setText(self._texts[i] if i < len(self._texts) else "")
+            typed = self._texts[i] if i < len(self._texts) else ""
+            if typed:
+                field.setText(typed)
+            elif i < len(self._live):
+                field.setText(f"{self._live[i]:.3f}")
+            else:
+                field.setText("")
             field.setStyleSheet(_FIELD_ACTIVE if i == self._active else _FIELD_IDLE)
         self.adjustSize()
 

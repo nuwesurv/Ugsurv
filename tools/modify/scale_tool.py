@@ -269,15 +269,15 @@ class ScaleTool(QgsMapTool):
                     self._add_to_selection(layer, fid, feat.geometry())
         if self._sel_features:
             self._log("SCALE", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click scale origin:"
-            self.inputModeChanged.emit("value", "Click scale origin:")
+            self.inputModeChanged.emit("no_value", "Click scale origin:")
             self._enter_base()
         else:
             self._log("SCALE  ──  select features to scale", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Select features to scale:"
-            self.inputModeChanged.emit("value", "Select features to scale:")
+            self.inputModeChanged.emit("no_value", "Select features to scale:")
 
     def deactivate(self):
         self._clear_selection()

@@ -554,7 +554,14 @@ class SelectTool(BaseTool):
         act_add = menu.addAction("Add points")
         chosen  = menu.exec_(QCursor.pos())
         if chosen == act_ext:
-            self._start_extend(grip)
+            self._ctx.extend_pending = {
+                'layer_id': grip.layer_id,
+                'fid':      grip.fid,
+                'at_start': grip.vertex_idx == 0,
+            }
+            launch = getattr(self._ctx, 'launch_tool', None)
+            if launch:
+                launch("extend")
         elif chosen == act_add:
             self._start_add_points(grip)
 
@@ -648,6 +655,7 @@ class SelectTool(BaseTool):
         self._add_pts_rb       = None
         self._last_snap_ep     = None
         self._clear_ep_preview()
+        self._request_input("", "")
 
     def _clear_ep_preview(self):
         self._clear_rubber_bands()
@@ -783,12 +791,15 @@ class SelectTool(BaseTool):
 
     # ── raster selection ───────────────────────────────────────────────────
     def _find_raster_at(self, pt: QgsPointXY):
-        """Return the topmost file-based QgsRasterLayer whose extent contains pt."""
+        """Return the topmost visible file-based QgsRasterLayer whose extent contains pt."""
         root = QgsProject.instance().layerTreeRoot()
         for lyr in root.layerOrder():
             if not isinstance(lyr, QgsRasterLayer) or not lyr.isValid():
                 continue
             if lyr.providerType() != 'gdal':
+                continue
+            node = root.findLayer(lyr.id())
+            if not node or not node.isVisible():
                 continue
             if lyr.extent().contains(pt):
                 return lyr
@@ -857,13 +868,18 @@ class SelectTool(BaseTool):
 
     def _all_geometry_layers(self):
         sm = self._ctx.storage_manager
+        root = QgsProject.instance().layerTreeRoot()
         result = []
         for attr in ("points_layer", "lines_layer", "circles_layer"):
             lyr = getattr(sm, attr, None)
             if lyr and lyr.isValid():
-                result.append((lyr.id(), lyr))
+                node = root.findLayer(lyr.id())
+                if node and node.isVisible():
+                    result.append((lyr.id(), lyr))
         for lyr in self._ctx.plugin_extra_layers:
-            result.append((lyr.id(), lyr))
+            node = root.findLayer(lyr.id())
+            if node and node.isVisible():
+                result.append((lyr.id(), lyr))
         return result
 
     # ── overlay visibility helpers ─────────────────────────────────────────

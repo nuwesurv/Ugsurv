@@ -168,9 +168,9 @@ class BreakTool(QgsMapTool):
         super().activate()
         self._canvas.setFocus()
         self._log("BREAK  ──  click any line to split it  (both halves kept)", "#aaddff")
-        self._last_input_mode   = "value"
+        self._last_input_mode   = "no_value"
         self._last_input_prompt = "Click a line to break:"
-        self.inputModeChanged.emit("value", "Click a line to break:")
+        self.inputModeChanged.emit("no_value", "Click a line to break:")
 
     def deactivate(self):
         self._hover_band.setVisible(False)

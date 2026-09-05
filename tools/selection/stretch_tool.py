@@ -32,7 +32,7 @@ class StretchTool(BaseTool):
 
     def activate(self):
         super().activate()
-        self._request_input("xy", "Drag crossing window to select vertices:")
+        self._request_input("no_value", "Drag crossing window to select vertices:")
 
     def canvasPressEvent(self, event):
         from qgis.PyQt.QtCore import Qt as _Qt
@@ -151,9 +151,12 @@ class StretchTool(BaseTool):
 
 
 def _geo_layers(sm):
+    root = QgsProject.instance().layerTreeRoot()
     result = []
     for attr in ("points_layer", "lines_layer"):
         lyr = getattr(sm, attr, None)
         if lyr and lyr.isValid():
-            result.append(lyr)
+            node = root.findLayer(lyr.id())
+            if node and node.isVisible():
+                result.append(lyr)
     return result

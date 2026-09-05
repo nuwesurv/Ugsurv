@@ -268,15 +268,15 @@ class JoinTool(QgsMapTool):
 
         if len(self._selected) >= 2:
             self._log(f"JOIN  ──  {len(self._selected)} lines pre-selected, joining…", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click polylines to join:"
-            self.inputModeChanged.emit("value", "Click polylines to join:")
+            self.inputModeChanged.emit("no_value", "Click polylines to join:")
             self._join_and_commit()
         else:
             self._log("JOIN  ──  click polylines to select", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click polylines to join:"
-            self.inputModeChanged.emit("value", "Click polylines to join:")
+            self.inputModeChanged.emit("no_value", "Click polylines to join:")
 
     def deactivate(self):
         self._clear_all()

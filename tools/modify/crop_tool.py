@@ -181,15 +181,15 @@ class CropTool(QgsMapTool):
         preselected = getattr(self._ctx, 'selected_raster', None)
         if preselected is not None and preselected.isValid():
             self._ctx.selected_raster = None
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Drag to draw clip rectangle:"
-            self.inputModeChanged.emit("value", "Drag to draw clip rectangle:")
+            self.inputModeChanged.emit("no_value", "Drag to draw clip rectangle:")
             self._select_raster(preselected)
         else:
             self._log("CROP  ──  click a raster, then drag to clip rectangle", "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click a raster to crop:"
-            self.inputModeChanged.emit("value", "Click a raster to crop:")
+            self.inputModeChanged.emit("no_value", "Click a raster to crop:")
 
     def deactivate(self):
         self._clear_rubber_bands()

@@ -172,9 +172,9 @@ class ExplodeTool(QgsMapTool):
             "EXPLODE  ──  click a feature to break it apart"
             "  (multipart → parts | polyline → segments)", "#aaddff"
         )
-        self._last_input_mode   = "value"
+        self._last_input_mode   = "no_value"
         self._last_input_prompt = "Click a feature to explode:"
-        self.inputModeChanged.emit("value", "Click a feature to explode:")
+        self.inputModeChanged.emit("no_value", "Click a feature to explode:")
 
     def deactivate(self):
         self._hover_band.setVisible(False)

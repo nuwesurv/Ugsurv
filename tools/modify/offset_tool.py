@@ -347,9 +347,9 @@ class OffsetTool(QgsMapTool):
         else:
             self._log("OFFSET  ──  click a line, then move cursor or type distance",
                       "#aaddff")
-            self._last_input_mode   = "value"
+            self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click a line to offset:"
-            self.inputModeChanged.emit("value", "Click a line to offset:")
+            self.inputModeChanged.emit("no_value", "Click a line to offset:")
 
     def deactivate(self):
         self._preview_band.setVisible(False)

@@ -27,11 +27,15 @@ class VertexProvider:
 
 
 def _layer_ok(lyr) -> bool:
-    """Safely test a layer reference — guards against deleted C++ objects."""
+    """Safely test a layer reference — guards against deleted C++ objects and hidden layers."""
     if lyr is None:
         return False
     try:
-        return lyr.isValid()
+        if not lyr.isValid():
+            return False
+        from qgis.core import QgsProject
+        node = QgsProject.instance().layerTreeRoot().findLayer(lyr.id())
+        return node is not None and node.isVisible()
     except RuntimeError:
         return False
 
