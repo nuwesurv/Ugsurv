@@ -23,8 +23,7 @@ import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -91,43 +90,12 @@ class ExtendTool(QgsMapTool):
         self._modified_layers = set()
         self._snap_marker = None
 
-        # Cursor-side hint label
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(
-            "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-            "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-            "padding:3px 8px;font-size:9pt;}"
-        )
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
-    # ── logging & hint ─────────────────────────────────────────────────────────
+    # ── logging ────────────────────────────────────────────────────────────────
 
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    _HINTS = {
-        _ST_SEARCH: "Hover line end → click to lock gradient",
-        _ST_LOCKED: "Click or type distance to extend",
-    }
-
-    def _show_hint(self, screen_pos):
-        text = self._HINTS.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(12, 16)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     # ── rubber-band helpers ────────────────────────────────────────────────────
 
@@ -211,6 +179,7 @@ class ExtendTool(QgsMapTool):
         self._locked_dir    = self._hover_dir
         self._state         = _ST_LOCKED
         self._log("  Gradient locked", "#88ccff")
+        self.promptChanged.emit("Click  or  type extension distance:")
 
     def _unlock(self):
         """Release the lock and return to _ST_SEARCH."""
@@ -222,6 +191,7 @@ class ExtendTool(QgsMapTool):
         self._state         = _ST_SEARCH
         self._preview_band.setVisible(False)
         self._log("  Lock released — hover another line end")
+        self.promptChanged.emit("Click a line near its endpoint:")
 
     # ── extension commit ───────────────────────────────────────────────────────
 
@@ -282,6 +252,10 @@ class ExtendTool(QgsMapTool):
                     self._locked_layer,
                 )
                 self._preview_band.setVisible(True)
+                self.promptChanged.emit(f"Extension distance <{t:.3f}m>:")
+                dyn = getattr(self._ctx, 'dyn_widget', None)
+                if dyn:
+                    dyn.set_live_value(t)
             else:
                 self._preview_band.setVisible(False)
             return
@@ -313,6 +287,9 @@ class ExtendTool(QgsMapTool):
             layer,
         )
         self._preview_band.setVisible(True)
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn:
+            dyn.set_live_value(t)
 
     # ── typed-input dispatch ───────────────────────────────────────────────────
 
@@ -362,7 +339,6 @@ class ExtendTool(QgsMapTool):
         """Clear all rubber bands immediately, then return to the home tool."""
         self._preview_band.setVisible(False)
         self._hover_band.setVisible(False)
-        self._hint.hide()
         self._go_home()
 
     def _snapped(self, raw_pt):
@@ -400,30 +376,25 @@ class ExtendTool(QgsMapTool):
         super().activate()
         self._canvas.setFocus()
         self._log("EXTEND  ──  click a line near its endpoint", "#aaddff")
+        self._last_input_mode   = "value"
+        self._last_input_prompt = "Click a line near its endpoint:"
+        self.inputModeChanged.emit("value", "Click a line near its endpoint:")
 
     def deactivate(self):
         self._clear_snap_marker()
-        self._rm(self._preview_band)
-        self._rm(self._hover_band)
+        self._preview_band.setVisible(False)
+        self._hover_band.setVisible(False)
         self._hover_ep  = None
         self._locked_ep = None
         self._state     = _ST_SEARCH
         self._modified_layers.clear()
-        self._hint.hide()
         self.inputModeChanged.emit("", "")
         super().deactivate()
 
     # ── Qt event handlers ──────────────────────────────────────────────────────
 
     def canvasMoveEvent(self, event):
-        map_pt = self._snapped(self.toMapCoordinates(event.pos()))
-        self._update_preview(map_pt)
-        self._show_hint(event.pos())
-        if self._state == _ST_LOCKED and self._locked_ep is not None:
-            dx, dy = self._locked_dir
-            t = self._project_distance(self._locked_ep, dx, dy, map_pt)
-            if t > 1e-6:
-                self._log(f"  distance: {t:.4f}")
+        self._update_preview(self._snapped(self.toMapCoordinates(event.pos())))
 
     def canvasPressEvent(self, event):
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))

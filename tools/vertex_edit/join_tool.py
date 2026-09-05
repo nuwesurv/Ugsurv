@@ -275,7 +275,27 @@ class JoinTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("JOIN  ──  click polylines to select", "#aaddff")
+
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in sel:
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                feat = layer.getFeature(fid)
+                geom = feat.geometry()
+                if geom.isEmpty():
+                    continue
+                if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
+                    continue
+                if not self._is_selected(layer, fid):
+                    self._select(layer, fid)
+
+        if len(self._selected) >= 2:
+            self._log(f"JOIN  ──  {len(self._selected)} lines pre-selected, joining…", "#aaddff")
+            self._join_and_commit()
+        else:
+            self._log("JOIN  ──  click polylines to select", "#aaddff")
 
     def deactivate(self):
         self._clear_all()
