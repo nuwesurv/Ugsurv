@@ -5,7 +5,7 @@ Point features are handled by PointProvider with SnapType.POINT.
 """
 
 import math
-from qgis.core import QgsPointXY
+from qgis.core import QgsPointXY, QgsProject, QgsVectorLayer, QgsWkbTypes
 from ..snap_engine import SnapResult
 from ...events import SnapType
 
@@ -33,31 +33,44 @@ def _layer_ok(lyr) -> bool:
     try:
         if not lyr.isValid():
             return False
-        from qgis.core import QgsProject
         node = QgsProject.instance().layerTreeRoot().findLayer(lyr.id())
         return node is not None and node.isVisible()
     except RuntimeError:
         return False
 
 
+def _visible_vector_layers():
+    """All visible QgsVectorLayer instances in the current project."""
+    root = QgsProject.instance().layerTreeRoot()
+    result = []
+    for lyr in QgsProject.instance().mapLayers().values():
+        if not isinstance(lyr, QgsVectorLayer):
+            continue
+        try:
+            if not lyr.isValid():
+                continue
+        except RuntimeError:
+            continue
+        node = root.findLayer(lyr.id())
+        if node and node.isVisible():
+            result.append(lyr)
+    return result
+
+
 def _line_polygon_layers(storage):
-    """Lines and circles — for vertex/nearest snapping."""
-    layers = []
-    for attr in ("lines_layer", "circles_layer"):
-        lyr = getattr(storage, attr, None)
-        if _layer_ok(lyr):
-            layers.append(lyr)
-    return layers
+    """All visible line/polygon vector layers in the project."""
+    return [
+        lyr for lyr in _visible_vector_layers()
+        if lyr.geometryType() in (QgsWkbTypes.LineGeometry, QgsWkbTypes.PolygonGeometry)
+    ]
 
 
 def _geometry_layers(storage):
-    """All geometry layers — re-exported for use by other providers."""
-    layers = []
-    for attr in ("points_layer", "lines_layer", "circles_layer"):
-        lyr = getattr(storage, attr, None)
-        if _layer_ok(lyr):
-            layers.append(lyr)
-    return layers
+    """All visible vector layers in the project (any geometry type)."""
+    return [
+        lyr for lyr in _visible_vector_layers()
+        if lyr.geometryType() not in (QgsWkbTypes.UnknownGeometry, QgsWkbTypes.NullGeometry)
+    ]
 
 
 def _dist(a: QgsPointXY, b: QgsPointXY) -> float:

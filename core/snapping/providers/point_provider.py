@@ -5,9 +5,10 @@ Distinct from VertexProvider which handles line/polygon vertices (SnapType.VERTE
 """
 
 import math
-from qgis.core import QgsPointXY
+from qgis.core import QgsPointXY, QgsWkbTypes
 from ..snap_engine import SnapResult
 from ...events import SnapType
+from .vertex_provider import _visible_vector_layers
 
 
 class PointProvider:
@@ -15,17 +16,16 @@ class PointProvider:
 
     def query(self, raw: QgsPointXY, rect, storage) -> list[SnapResult]:
         results = []
-        layer = getattr(storage, "points_layer", None)
-        from .vertex_provider import _layer_ok
-        if not _layer_ok(layer):
-            return results
-        for feat in layer.getFeatures(rect):
-            geom = feat.geometry()
-            if geom.isEmpty():
+        for layer in _visible_vector_layers():
+            if layer.geometryType() != QgsWkbTypes.PointGeometry:
                 continue
-            for v in geom.vertices():
-                pt = QgsPointXY(v.x(), v.y())
-                results.append(SnapResult(pt, SnapType.POINT, _dist(raw, pt)))
+            for feat in layer.getFeatures(rect):
+                geom = feat.geometry()
+                if geom.isEmpty():
+                    continue
+                for v in geom.vertices():
+                    pt = QgsPointXY(v.x(), v.y())
+                    results.append(SnapResult(pt, SnapType.POINT, _dist(raw, pt)))
         return results
 
 

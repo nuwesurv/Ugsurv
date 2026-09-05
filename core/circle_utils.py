@@ -19,13 +19,32 @@ from qgis.core import (
 
 
 def is_circle(geom: QgsGeometry) -> bool:
-    """Return True if geometry is a QgsCircularString (drawn by CircleDrawer)."""
-    return QgsWkbTypes.flatType(geom.wkbType()) == QgsWkbTypes.CircularString
+    """Return True if geometry is a circle — bare CircularString or CompoundCurve(CircularString).
+
+    Circles are drawn as CircularString but the circles layer is CompoundCurve type,
+    so QGIS wraps them in CompoundCurve on write and returns CompoundCurve on read.
+    Both forms must be detected.
+    """
+    flat = QgsWkbTypes.flatType(geom.wkbType())
+    if flat == QgsWkbTypes.CircularString:
+        return True
+    if flat == QgsWkbTypes.CompoundCurve:
+        cc = geom.constGet()
+        return (cc.nCurves() == 1 and
+                QgsWkbTypes.flatType(cc.curveAt(0).wkbType()) == QgsWkbTypes.CircularString)
+    return False
+
+
+def _get_circular_string(geom: QgsGeometry):
+    """Extract the QgsCircularString from a circle geometry (bare or wrapped in CompoundCurve)."""
+    if QgsWkbTypes.flatType(geom.wkbType()) == QgsWkbTypes.CircularString:
+        return geom.constGet()
+    return geom.constGet().curveAt(0)
 
 
 def circle_params(geom: QgsGeometry) -> tuple[QgsPointXY, float]:
     """Extract (center, radius) from a CircularString circle geometry."""
-    cs = geom.constGet()
+    cs = _get_circular_string(geom)
     p0 = cs.pointN(0)   # East:  (cx+r, cy)
     p2 = cs.pointN(2)   # West:  (cx-r, cy)
     p1 = cs.pointN(1)   # South: (cx,   cy-r)

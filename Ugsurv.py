@@ -882,7 +882,6 @@ def _register_commands(registry):
         ("mirror",        "MIRROR",  "MI"),
         ("offset",        "OFFSET",  "O"),
         ("trim",          "TRIM",    "TR"),
-        ("extend",        "EXTEND",  "EX"),
         ("fillet",        "FILLET",  "F"),
         ("array",         "ARRAY",   "AR"),
         ("erase",         "ERASE",   "E", "DEL"),

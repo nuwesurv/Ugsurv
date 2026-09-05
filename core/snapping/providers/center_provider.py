@@ -21,12 +21,9 @@ class CenterProvider:
                     continue
 
                 cs = _find_circular_string(geom)
-                if cs is not None:
-                    pt = _arc_circle_center(cs)
-                else:
-                    c = geom.centroid().asPoint()
-                    pt = QgsPointXY(c.x(), c.y())
-
+                if cs is None:
+                    continue
+                pt = _arc_circle_center(cs)
                 if pt is not None:
                     results.append(SnapResult(pt, SnapType.CENTER, _dist(raw, pt)))
         return results

@@ -229,9 +229,8 @@ class SelectTool(BaseTool):
             self._hide_hover_band()
             super().canvasMoveEvent(event)
             return
-        # Idle: show hover preview of whichever feature is under the cursor
         raw = self._translator._canvas_point(event, self._ctx)
-        self._update_hover_band(raw)
+        self._hide_hover_band()
         super().canvasMoveEvent(event)
 
     def canvasReleaseEvent(self, event):
@@ -773,7 +772,7 @@ class SelectTool(BaseTool):
         for layer_id, layer in self._all_geometry_layers():
             for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
                 d = feat.geometry().distance(click_geom)
-                if d < best_d:
+                if d < best_d and d <= tol:
                     best_d, best_lid, best_fid = d, layer_id, feat.id()
         if best_lid is not None:
             if shift:

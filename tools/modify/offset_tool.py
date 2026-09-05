@@ -16,14 +16,14 @@ Workflow
 import contextlib
 import math
 
-from qgis.gui import QgsMapTool, QgsRubberBand
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
 
-from ...core.events import EventType
+from ...core.events import EventType, SnapType
 from ...core import style as _style
 from ..layer_utils import polyline_attrs
 from ...core.circle_utils import (
@@ -39,6 +39,19 @@ _HIT_PX = 10
 
 _ST_SELECT    = 0
 _ST_PICK_DIST = 1
+
+_SNAP_ICONS = {
+    SnapType.VERTEX:        (_style.SNAP_ICON['endpoint'],     _style._CC_COLOR),
+    SnapType.POINT:         (_style.SNAP_ICON['point'],        _style._CC_COLOR),
+    SnapType.MIDPOINT:      (_style.SNAP_ICON['midpoint'],     _style._CC_COLOR),
+    SnapType.CENTER:        (_style.SNAP_ICON['center'],       _style._CC_COLOR),
+    SnapType.INTERSECTION:  (_style.SNAP_ICON['intersection'], _style._CC_COLOR),
+    SnapType.PERPENDICULAR: (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.EXTENSION:     (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.NEAREST:       (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.SELF:          (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.GRID:          (QgsVertexMarker.ICON_CROSS,       _style.SNAP_GRID_COLOR),
+}
 
 
 class OffsetTool(QgsMapTool):
@@ -58,6 +71,7 @@ class OffsetTool(QgsMapTool):
         self._sel_fid     = None
         self._sel_geom    = None
         self._last_map_pt = None
+        self._snap_marker = None
 
         self._hover_band   = self._make_band(_C_HOVER,    width=_style.RB_WIDTH)
         self._hover_band.setVisible(False)
@@ -93,6 +107,37 @@ class OffsetTool(QgsMapTool):
 
     def _hit_tol(self):
         return _HIT_PX * self._canvas.mapUnitsPerPixel()
+
+    def _snapped(self, raw_pt):
+        engine = getattr(self._ctx, 'snap_engine', None)
+        if engine:
+            result = engine.resolve(raw_pt, self._canvas)
+            if result:
+                self._show_snap_marker(result.point, result.snap_type)
+                return result.point
+        self._hide_snap_marker()
+        return raw_pt
+
+    def _show_snap_marker(self, pt, snap_type):
+        icon, color = _SNAP_ICONS.get(snap_type, (QgsVertexMarker.ICON_BOX, _style._CC_COLOR))
+        if self._snap_marker is None:
+            self._snap_marker = QgsVertexMarker(self._canvas)
+            self._snap_marker.setIconSize(_style.SNAP_ICON_SIZE)
+            self._snap_marker.setPenWidth(_style.SNAP_PEN_WIDTH)
+        self._snap_marker.setIconType(icon)
+        self._snap_marker.setColor(color)
+        self._snap_marker.setCenter(pt)
+        self._snap_marker.show()
+
+    def _hide_snap_marker(self):
+        if self._snap_marker:
+            self._snap_marker.hide()
+
+    def _clear_snap_marker(self):
+        if self._snap_marker is not None:
+            with contextlib.suppress(Exception):
+                self._canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
 
     def _line_layers(self):
         return [
@@ -352,6 +397,7 @@ class OffsetTool(QgsMapTool):
             self.inputModeChanged.emit("no_value", "Click a line to offset:")
 
     def deactivate(self):
+        self._clear_snap_marker()
         self._preview_band.setVisible(False)
         self._hover_band.setVisible(False)
         self._sel_band.setVisible(False)
@@ -363,7 +409,7 @@ class OffsetTool(QgsMapTool):
         super().deactivate()
 
     def canvasMoveEvent(self, event):
-        map_pt = self.toMapCoordinates(event.pos())
+        map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         self._last_map_pt = map_pt
         self._update_preview(map_pt)
 
@@ -377,7 +423,7 @@ class OffsetTool(QgsMapTool):
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        map_pt = self.toMapCoordinates(event.pos())
+        map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         self._last_map_pt = map_pt
 
         if self._state == _ST_SELECT:

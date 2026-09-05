@@ -12,6 +12,7 @@ from qgis.core import (
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
+from ...core.circle_utils import is_circle
 
 
 def _closest_endpoint(pts: list, click_pt: QgsPointXY) -> QgsPointXY:
@@ -118,6 +119,8 @@ class FilletTool(BaseTool):
                 QgsRectangle(pt.x()-tol, pt.y()-tol, pt.x()+tol, pt.y()+tol)
             )
         ):
+            if is_circle(feat.geometry()):
+                continue
             pts = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
             return (lyr, feat, pts)
         return None

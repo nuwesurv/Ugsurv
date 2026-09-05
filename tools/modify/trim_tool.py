@@ -30,6 +30,7 @@ from qgis.core import (
 
 from ...core.events import EventType, SnapType
 from ...core import style as _style
+from ...core.circle_utils import is_circle
 
 _SNAP_ICONS = {
     SnapType.VERTEX:        (_style.SNAP_ICON['endpoint'],     _style._CC_COLOR),
@@ -159,9 +160,10 @@ class TrimTool(QgsMapTool):
         best_layer, best_feat, best_d = None, None, float('inf')
         for lyr in self._line_layers():
             for feat in lyr.getFeatures(rect):
-                if feat.geometry().isEmpty():
+                geom = feat.geometry()
+                if geom.isEmpty() or is_circle(geom):
                     continue
-                d = feat.geometry().distance(pt_geom)
+                d = geom.distance(pt_geom)
                 if d < best_d:
                     best_d, best_layer, best_feat = d, lyr, feat
         return (best_layer, best_feat) if best_d <= tol else (None, None)

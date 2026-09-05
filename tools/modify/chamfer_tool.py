@@ -26,6 +26,7 @@ from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 from ...core import style as _style
 from ..layer_utils import polyline_attrs
+from ...core.circle_utils import is_circle
 
 _HIT_PX = 10       # pixel hit tolerance for segment picking
 _ST_LINE1 = 0      # waiting for first segment
@@ -144,9 +145,10 @@ class ChamferTool(BaseTool):
         best_layer, best_feat, best_d = None, None, float('inf')
         for lyr in self._line_layers():
             for feat in lyr.getFeatures(rect):
-                if feat.geometry().isEmpty():
+                geom = feat.geometry()
+                if geom.isEmpty() or is_circle(geom):
                     continue
-                d = feat.geometry().distance(cg)
+                d = geom.distance(cg)
                 if d < best_d:
                     best_d, best_layer, best_feat = d, lyr, feat
         return (best_layer, best_feat) if best_d <= tol else (None, None)

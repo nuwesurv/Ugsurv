@@ -22,6 +22,7 @@ from qgis.core import (
 
 from ...core.events import EventType
 from ...core import style as _style
+from ...core.circle_utils import is_circle
 
 _C_HOVER = _style.RB_HOVER
 
@@ -97,6 +98,9 @@ class ExplodeTool(QgsMapTool):
         geom = feat.geometry()
         if geom.isEmpty():
             self._log("  Empty geometry — nothing to explode")
+            return
+        if is_circle(geom):
+            self._log("  Circles cannot be exploded", "#ffaaaa")
             return
 
         gt = QgsWkbTypes.geometryType(geom.wkbType())

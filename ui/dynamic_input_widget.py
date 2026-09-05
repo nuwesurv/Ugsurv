@@ -59,12 +59,18 @@ _CRS_LBL = (
 
 # (field_label, placeholder) lists per mode
 _CONFIGS = {
-    "xy":    [("X",     "0.000"), ("Y",    "0.000")],
-    "en":    [("E",     "0.000"), ("N",    "0.000")],   # georeferencing GCP input
-    "polar": [("Dist",  "0.000"), ("Brg",  "0.0°" )],
-    "value": [("Value", "0.000")],
-    "d1d2":  [("d1",    "2.000"), ("d2",   "2.000")],   # chamfer / fillet distances
+    "xy":        [("X",       "0.000"), ("Y",       "0.000")],
+    "en":        [("E",       "0.000"), ("N",       "0.000")],   # georeferencing GCP input
+    "polar":     [("Dist",    "0.000"), ("Brg",     "0.0°" )],
+    "value":     [("Value",   "0.000")],
+    "d1d2":      [("d1",      "2.000"), ("d2",      "2.000")],   # chamfer / fillet distances
+    "rowcol":    [("Rows",    "3"),     ("Cols",    "3")],        # array row/col count
+    "dxdy":      [("dX",      "1.000"), ("dY",      "1.000")],   # array x/y spacing
+    "count_ang": [("Count",   "6"),     ("Angle°",  "360")],     # polar array
 }
+
+# Modes that only accept numeric keystrokes
+_NUMERIC_MODES = {"polar", "xy", "en", "value", "d1d2", "rowcol", "dxdy", "count_ang"}
 
 
 class DynamicInputWidget(QWidget):
@@ -142,6 +148,13 @@ class DynamicInputWidget(QWidget):
         """Update the CRS badge (e.g. 'WGS84 36N') shown in the widget."""
         self._crs_badge.setText(text)
 
+    @staticmethod
+    def _clean_prompt(text: str) -> str:
+        """Strip [key-hint] blocks and <value> tokens — those go to fields, not the label."""
+        text = _re.sub(r'\s*\[[^\]]+\]', '', text)
+        text = _re.sub(r'\s*<[^>]+>', '', text)
+        return text.strip()
+
     def set_mode(self, mode: str, prompt: str = ""):
         """Called by tool's inputModeChanged signal."""
         self._mode   = mode
@@ -155,7 +168,7 @@ class DynamicInputWidget(QWidget):
             self._fields        = []
             self._texts         = []
             self._crs_badge.setVisible(False)
-            display_prompt = _re.sub(r'\s*\[[^\]]+\]', '', prompt).strip()
+            display_prompt = self._clean_prompt(prompt)
             if display_prompt:
                 self._prompt_lbl.setText(display_prompt)
                 self._prompt_lbl.show()
@@ -172,9 +185,7 @@ class DynamicInputWidget(QWidget):
 
         self._crs_badge.setVisible(mode in ("xy", "en"))
 
-        # Strip key-hint blocks like [U=undo C=close] — those belong in the
-        # command line only; the cursor-side prompt stays concise.
-        display_prompt = _re.sub(r'\s*\[[^\]]+\]', '', prompt).strip()
+        display_prompt = self._clean_prompt(prompt)
         if display_prompt:
             self._prompt_lbl.setText(display_prompt)
             self._prompt_lbl.show()
@@ -190,7 +201,7 @@ class DynamicInputWidget(QWidget):
 
     def set_prompt(self, text: str):
         """Update only the prompt label — does NOT rebuild fields or clear typed text."""
-        display_prompt = _re.sub(r'\s*\[[^\]]+\]', '', text).strip()
+        display_prompt = self._clean_prompt(text)
         if display_prompt:
             self._prompt_lbl.setText(display_prompt)
             self._prompt_lbl.show()
@@ -225,6 +236,11 @@ class DynamicInputWidget(QWidget):
             self._live[0] = v
         else:
             self._live = [v]
+        self._refresh_live_placeholders()
+
+    def set_live_pair(self, a: float, b: float):
+        """Set live fallback values for two-field modes (rowcol, dxdy, count_ang, d1d2)."""
+        self._live = [a, b]
         self._refresh_live_placeholders()
 
     def update_position(self, canvas_pt=None):
@@ -291,7 +307,7 @@ class DynamicInputWidget(QWidget):
         # fall through so single-key commands (C=close, U=undo, A=arc…)
         # still reach the tool even while fields have content.
         if ch and ch.isprintable() and ch not in ('\t', ','):
-            if self._mode in ('polar', 'xy', 'en', 'value') and not (ch.isdigit() or ch in '.-'):
+            if self._mode in _NUMERIC_MODES and not (ch.isdigit() or ch in '.-'):
                 return False
             self._texts[self._active] += ch
             self._refresh_fields()
@@ -336,7 +352,7 @@ class DynamicInputWidget(QWidget):
             self._clear()
             return True
 
-        if mode == "d1d2":
+        if mode in ("d1d2", "rowcol", "dxdy", "count_ang"):
             t0 = self._texts[0].strip()
             t1 = self._texts[1].strip()
             if not t0 and not t1:
