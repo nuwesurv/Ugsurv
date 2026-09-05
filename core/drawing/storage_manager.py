@@ -10,7 +10,7 @@ Hard rules (§5):
   - Hooks cleared/readProject to re-evaluate gating state.
 
 GeoPackage schema (§4):
-  - points   (MultiPoint) — cad_layer attribute
+  - points   (Point) — cad_layer attribute
   - lines    (CompoundCurve) — cad_layer attribute; stores true circles as CircularString
   - cad_layers (non-spatial) — name, color, linetype, visible, locked, sort_order
 
@@ -30,6 +30,15 @@ from qgis.core import (
 
 _LAYER_EPSG = 32636   # WGS 84 / UTM Zone 36N — all geometry stored here
 from qgis.PyQt.QtCore import QVariant
+
+try:
+    from ...module_wz_dialogs.layer_utils import (
+        apply_polyline_color_renderer,
+        apply_point_color_renderer,
+    )
+except Exception:
+    def apply_polyline_color_renderer(layer): pass
+    def apply_point_color_renderer(layer): pass
 
 
 def _geom_has_circular_string(geom: QgsGeometry) -> bool:
@@ -177,12 +186,11 @@ class StorageManager(QObject):
         return layer.addFeature(feat)
 
     def add_point(self, geom: QgsGeometry, cad_layer: str,
-                  description: str = "", symbol: str = "") -> bool:
+                  description=None, symbol: str = "basic") -> bool:
         """
         Add a point geometry (in current project CRS) to the points layer.
         The geometry is transformed to EPSG:32636 (layer CRS) if needed.
-        Optional description and symbol attributes are written when the
-        corresponding columns exist on the layer.
+        Description defaults to NULL; Symbol (SVG) and symbol (shape) default to "basic".
         """
         if not self._enabled:
             return False
@@ -198,10 +206,12 @@ class StorageManager(QObject):
         feat.setGeometry(geom)
         feat["cad_layer"] = cad_layer
         flds = layer.fields()
-        if description and flds.indexOf("Description") >= 0:
+        if description is not None and flds.indexOf("Description") >= 0:
             feat["Description"] = description
-        if symbol and flds.indexOf("Symbol") >= 0:
+        if flds.indexOf("Symbol") >= 0:
             feat["Symbol"] = symbol
+        if flds.indexOf("symbol") >= 0:
+            feat["symbol"] = symbol
         return layer.addFeature(feat)
 
     def unload(self):
@@ -269,6 +279,9 @@ class StorageManager(QObject):
             self._add_geom_table(self._gpkg_path, "lines", QgsWkbTypes.CompoundCurve)
             lyr = self._open_gpkg_layer("lines", add_to_tree=True)
         self._lines_layer = lyr
+        self._ensure_extra_line_fields()
+        if self._layer_alive(lyr):
+            apply_polyline_color_renderer(lyr)
 
     def _ensure_circles_layer(self):
         if self._layer_alive(self._circles_layer):
@@ -287,27 +300,43 @@ class StorageManager(QObject):
         self._ensure_gpkg_file()
         lyr = self._open_gpkg_layer("points", add_to_tree=True)
         if lyr is None:
-            self._add_geom_table(self._gpkg_path, "points", QgsWkbTypes.MultiPoint)
+            self._add_geom_table(self._gpkg_path, "points", QgsWkbTypes.Point)
             lyr = self._open_gpkg_layer("points", add_to_tree=True)
         self._points_layer = lyr
         self._ensure_extra_point_fields()
+        if self._layer_alive(lyr):
+            apply_point_color_renderer(lyr)
 
     def _ensure_extra_point_fields(self):
-        """Add Description and Symbol columns to the points layer if missing.
-
-        Uses the data provider directly so the schema change is written to the
-        GeoPackage immediately without needing commitChanges on the edit buffer.
-        Safe to call on an already-migrated layer (no-op if both columns exist).
-        """
+        """Add any missing columns to the points layer (safe no-op if all exist)."""
         lyr = self._points_layer
         if not self._layer_alive(lyr):
             return
-        missing = []
-        flds = lyr.fields()
-        if flds.indexOf("Description") < 0:
-            missing.append(QgsField("Description", QVariant.String))
-        if flds.indexOf("Symbol") < 0:
-            missing.append(QgsField("Symbol", QVariant.String))
+        needed = [
+            ("Description",  QVariant.String),
+            ("color",        QVariant.String),
+            ("symbol",       QVariant.String),
+            ("symbol_size",  QVariant.Double),
+        ]
+        # Case-insensitive check: SQLite treats "Symbol" and "symbol" as the same column.
+        existing = {f.name().lower() for f in lyr.fields()}
+        missing = [QgsField(n, t) for n, t in needed if n.lower() not in existing]
+        if not missing:
+            return
+        lyr.dataProvider().addAttributes(missing)
+        lyr.updateFields()
+
+    def _ensure_extra_line_fields(self):
+        """Add any missing columns to the lines layer (safe no-op if all exist)."""
+        lyr = self._lines_layer
+        if not self._layer_alive(lyr):
+            return
+        needed = [
+            ("color",           QVariant.String),
+            ("line_type",       QVariant.String),
+            ("line_thickness",  QVariant.Double),
+        ]
+        missing = [QgsField(n, t) for n, t in needed if lyr.fields().indexOf(n) < 0]
         if not missing:
             return
         lyr.dataProvider().addAttributes(missing)
@@ -411,12 +440,17 @@ class StorageManager(QObject):
         self._lines_layer   = self._open_gpkg_layer("lines",      add_to_tree=True)
         self._circles_layer = self._open_gpkg_layer("circles",    add_to_tree=True)
         self._cad_lyr_layer = self._open_gpkg_layer("cad_layers", add_to_tree=False)
+        if self._points_layer and self._points_layer.wkbType() != QgsWkbTypes.Point:
+            self._points_layer = self._migrate_points_to_point(path, self._points_layer)
+
         # Migrate existing points layers that predate the Description/Symbol columns
         if self._points_layer is not None:
             self._ensure_extra_point_fields()
 
         if self._lines_layer and self._lines_layer.wkbType() != QgsWkbTypes.CompoundCurve:
             self._lines_layer = self._migrate_lines_to_compound_curve(path, self._lines_layer)
+        if self._lines_layer is not None:
+            self._ensure_extra_line_fields()
 
         poly_lyr = self._open_gpkg_layer("polygons", add_to_tree=False)
         if poly_lyr:
@@ -424,6 +458,48 @@ class StorageManager(QObject):
 
         self._migrate_circles_to_own_layer()
 
+        if self._layer_alive(self._lines_layer):
+            apply_polyline_color_renderer(self._lines_layer)
+        if self._layer_alive(self._points_layer):
+            apply_point_color_renderer(self._points_layer)
+
+
+    def _migrate_points_to_point(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:
+        """Migrate a MultiPoint (or other non-Point) points table to Point."""
+        crs = old_lyr.crs()
+        old_fields = old_lyr.fields()
+        new_feats = []
+        for feat in old_lyr.getFeatures():
+            geom = feat.geometry()
+            for part in geom.parts():
+                nf = QgsFeature(old_fields)
+                nf.setGeometry(QgsGeometry(QgsPoint(part.x(), part.y())))
+                for field in old_fields:
+                    nf[field.name()] = feat[field.name()]
+                new_feats.append(nf)
+
+        QgsProject.instance().removeMapLayer(old_lyr.id())
+
+        tmp = QgsVectorLayer(f"Point?crs={crs.authid()}", "points", "memory")
+        tmp.dataProvider().addAttributes(list(old_fields))
+        tmp.updateFields()
+        tmp.dataProvider().addFeatures(new_feats)
+
+        opts = QgsVectorFileWriter.SaveVectorOptions()
+        opts.driverName = "GPKG"
+        opts.layerName  = "points"
+        opts.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+        QgsVectorFileWriter.writeAsVectorFormatV3(
+            tmp, path, QgsProject.instance().transformContext(), opts
+        )
+
+        new_lyr = QgsVectorLayer(f"{path}|layername=points", "points", "ogr")
+        if new_lyr.isValid():
+            QgsProject.instance().addMapLayer(new_lyr, False)
+            self._get_or_create_group().addLayer(new_lyr)
+            print(f"[UgSurv] Migrated {len(new_feats)} point(s) from MultiPoint to Point.")
+            return new_lyr
+        return None
 
     def _migrate_lines_to_compound_curve(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:
         """Migrate any LineString/MultiLineString lines layer to CompoundCurve.

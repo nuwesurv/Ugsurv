@@ -2,7 +2,7 @@ import math
 import os
 
 from qgis.PyQt.QtCore import Qt, QRectF, QSize, QTimer, QVariant, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPixmap
+from qgis.PyQt.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from qgis.PyQt.QtSvg import QSvgRenderer
 from qgis.PyQt.QtWidgets import (
     QColorDialog, QComboBox, QDockWidget, QFileDialog, QFormLayout, QFrame,
@@ -193,15 +193,15 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("FID:",   self._ro(str(self._fid)))
         self._form.addRow(self._sep())
 
-        if lyr_name == "_polylines" and not geom.isEmpty():
+        if lyr_name == "lines" and not geom.isEmpty():
             self._build_polyline_rows(feat, geom)
-        elif lyr_name == "_circles" and not geom.isEmpty():
+        elif lyr_name == "circles" and not geom.isEmpty():
             self._build_circle_rows(feat, geom)
-        elif lyr_name == "_points" and not geom.isEmpty():
+        elif lyr_name == "points" and not geom.isEmpty():
             self._build_point_rows(feat, geom)
         elif lyr_name == "_hatches" and not geom.isEmpty():
             self._build_hatch_rows(feat)
-        elif lyr_name == "_dimension_layer" and not geom.isEmpty():
+        elif lyr_name == "_dimensions" and not geom.isEmpty():
             self._build_dimension_rows(feat)
         elif not geom.isEmpty():
             self._form.addRow("Type:", self._ro(QgsWkbTypes.displayString(geom.wkbType())))
@@ -226,6 +226,21 @@ class PropertiesDock(QDockWidget):
 
         self._form.addRow("Area (m²):", self._ro(f"{area_sqm:.3f}"))
         self._form.addRow("Area (ac):", self._ro(f"{area_ac:.6f}"))
+        self._form.addRow(self._sep())
+
+        cl_idx = self._layer.fields().indexOf("cad_layer")
+        current_cl = self._attr(feat, cl_idx) or ""
+        cl_edit = self._edit(current_cl, "cad layer name")
+
+        def on_cl_edited(_idx=cl_idx):
+            text = cl_edit.text().strip()
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+
+        cl_edit.editingFinished.connect(on_cl_edited)
+        self._form.addRow("Cad Layer:", cl_edit)
         self._form.addRow(self._sep())
         self._form.addRow("Color:", self._make_color_button())
 
@@ -413,6 +428,53 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("X:", x_edit)
         self._form.addRow("Y:", y_edit)
         self._form.addRow(self._sep())
+
+        cl_idx = self._layer.fields().indexOf("cad_layer")
+        current_cl = self._attr(feat, cl_idx) or ""
+        cl_edit = self._edit(current_cl, "cad layer name")
+
+        def on_cl_edited(_idx=cl_idx):
+            text = cl_edit.text().strip()
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, text)
+
+        cl_edit.editingFinished.connect(on_cl_edited)
+        self._form.addRow("Cad Layer:", cl_edit)
+        self._form.addRow(self._sep())
+
+        desc_idx = self._layer.fields().indexOf("Description")
+        current_desc = self._attr(feat, desc_idx)
+        desc_edit = self._edit(current_desc or "", "e.g. BM, TP, WH…")
+
+        def on_desc_edited(_didx=desc_idx):
+            text = desc_edit.text().strip()
+            stored = text if text else None
+            if _didx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _didx, stored)
+                if stored is not None:
+                    _svg_idx = self._layer.fields().indexOf("Symbol")
+                    if _svg_idx >= 0:
+                        if stored.lower() == "basic":
+                            self._layer.changeAttributeValue(self._fid, _svg_idx, "basic")
+                            apply_point_color_renderer(self._layer)
+                        elif os.path.isdir(_PLUGIN_ICONS_DIR):
+                            for _fname in os.listdir(_PLUGIN_ICONS_DIR):
+                                if _fname.lower().endswith(".svg"):
+                                    if os.path.splitext(_fname)[0].lower() == stored.lower():
+                                        _svg_path = os.path.join(_PLUGIN_ICONS_DIR, _fname)
+                                        self._layer.changeAttributeValue(self._fid, _svg_idx, _svg_path)
+                                        apply_point_color_renderer(self._layer)
+                                        break
+                self._layer.triggerRepaint()
+                self._deferred_refresh()
+
+        desc_edit.editingFinished.connect(on_desc_edited)
+        self._form.addRow("Description:", desc_edit)
+        self._form.addRow(self._sep())
         self._form.addRow("Color:", self._make_color_button())
 
         sym_idx = self._layer.fields().indexOf("symbol")
@@ -450,7 +512,7 @@ class PropertiesDock(QDockWidget):
         size_edit.editingFinished.connect(on_size_edited)
         self._form.addRow("Size:", size_edit)
 
-        svg_idx     = self._layer.fields().indexOf("symbol_svg")
+        svg_idx     = self._layer.fields().indexOf("Symbol")
         current_svg = self._attr(feat, svg_idx) or ""
 
         self._form.addRow(self._sep())
@@ -671,8 +733,6 @@ class PropertiesDock(QDockWidget):
         svgs = sorted(
             f for f in os.listdir(_PLUGIN_ICONS_DIR) if f.lower().endswith(".svg")
         )
-        if not svgs:
-            return None
 
         ICON_PX = 44
         COLS    = 4
@@ -682,8 +742,47 @@ class PropertiesDock(QDockWidget):
         grid.setContentsMargins(2, 2, 2, 2)
         grid.setSpacing(4)
 
+        # ── "Basic" tile — white circle, replicates the shipped QML style ──
+        basic_pix = QPixmap(ICON_PX, ICON_PX)
+        basic_pix.fill(Qt.transparent)
+        bp = QPainter(basic_pix)
+        bp.setRenderHint(QPainter.Antialiasing)
+        bp.setPen(QPen(QColor(47, 47, 47), 1.5))
+        bp.setBrush(QBrush(QColor(255, 255, 255)))
+        r = ICON_PX // 3
+        cx, cy = ICON_PX // 2, ICON_PX // 2
+        bp.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+        bp.end()
+
+        basic_btn = QPushButton()
+        basic_btn.setIcon(QIcon(basic_pix))
+        basic_btn.setIconSize(QSize(ICON_PX - 4, ICON_PX - 4))
+        basic_btn.setFixedSize(ICON_PX + 6, ICON_PX + 6)
+        basic_btn.setToolTip("basic")
+        basic_btn.setFlat(True)
+        basic_selected = not bool(current_svg)
+        basic_btn.setStyleSheet(
+            "border: 2px solid #0078d4; background: #e3f2fd; border-radius: 4px;"
+            if basic_selected else
+            "border: 1px solid #bbb; border-radius: 4px;"
+        )
+
+        def on_pick_basic(checked=False, _idx=svg_idx):
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, "basic")
+                apply_point_color_renderer(self._layer)
+                self._layer.triggerRepaint()
+            self._deferred_refresh()
+
+        basic_btn.clicked.connect(on_pick_basic)
+        grid.addWidget(basic_btn, 0, 0)
+
+        # ── SVG icon tiles ──────────────────────────────────────────────────
         for i, fname in enumerate(svgs):
             path = os.path.join(_PLUGIN_ICONS_DIR, fname)
+            pos  = i + 1  # offset by 1 for the Basic tile
 
             pix = QPixmap(ICON_PX, ICON_PX)
             pix.fill(Qt.transparent)
@@ -718,12 +817,14 @@ class PropertiesDock(QDockWidget):
                 self._deferred_refresh()
 
             btn.clicked.connect(on_pick)
-            grid.addWidget(btn, i // COLS, i % COLS)
+            grid.addWidget(btn, pos // COLS, pos % COLS)
 
+        n_items = len(svgs) + 1
+        n_rows  = (n_items + COLS - 1) // COLS
         scroll = QScrollArea()
         scroll.setWidget(container)
         scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(min(len(svgs), 3) * (ICON_PX + 10) + 8)
+        scroll.setFixedHeight(min(n_rows, 3) * (ICON_PX + 10) + 8)
         scroll.setFrameShape(QFrame.StyledPanel)
         return scroll
 
@@ -772,15 +873,15 @@ class PropertiesDock(QDockWidget):
                         self._layer.startEditing()
                     self._layer.changeAttributeValue(self._fid, color_idx, chosen.name())
                 lyr_name = self._layer.name()
-                if lyr_name == "_circles":
+                if lyr_name == "circles":
                     apply_circle_color_renderer(self._layer)
-                elif lyr_name == "_polylines":
+                elif lyr_name == "lines":
                     apply_polyline_color_renderer(self._layer)
-                elif lyr_name == "_points":
+                elif lyr_name == "points":
                     apply_point_color_renderer(self._layer)
                 elif lyr_name == "_hatches":
                     apply_hatch_renderer(self._layer)
-                elif lyr_name == "_dimension_layer":
+                elif lyr_name == "_dimensions":
                     apply_dimension_style(self._layer)
                 self._layer.triggerRepaint()
                 self._deferred_refresh()

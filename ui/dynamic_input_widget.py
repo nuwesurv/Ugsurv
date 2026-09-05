@@ -16,6 +16,7 @@ Signals:
   coordinateEntered(x, y)  – emitted in "xy" mode with absolute X, Y
   polarEntered(dist, angle) – emitted in "polar" mode with dist and angle°
   valueEntered(v)           – emitted in "value" mode
+  textEntered(s)            – emitted in "text" mode with the raw string
 """
 
 import re as _re
@@ -63,6 +64,7 @@ _CONFIGS = {
     "en":        [("E",       "0.000"), ("N",       "0.000")],   # georeferencing GCP input
     "polar":     [("Dist",    "0.000"), ("Brg",     "0.0°" )],
     "value":     [("Value",   "0.000")],
+    "text":      [("",        "pt")],                            # free-text single field
     "d1d2":      [("d1",      "2.000"), ("d2",      "2.000")],   # chamfer / fillet distances
     "rowcol":    [("Rows",    "3"),     ("Cols",    "3")],        # array row/col count
     "dxdy":      [("dX",      "1.000"), ("dY",      "1.000")],   # array x/y spacing
@@ -77,6 +79,7 @@ class DynamicInputWidget(QWidget):
     coordinateEntered = pyqtSignal(float, float)   # absolute X, Y
     polarEntered      = pyqtSignal(float, float)   # dist, angle°
     valueEntered      = pyqtSignal(float)
+    textEntered       = pyqtSignal(str)             # free-text ("text" mode)
 
     def __init__(self, canvas, input_translator=None, parent=None):
         super().__init__(
@@ -250,6 +253,8 @@ class DynamicInputWidget(QWidget):
 
     def _refresh_live_placeholders(self):
         """Show live cursor values as actual field text when the user hasn't typed."""
+        if self._mode not in _NUMERIC_MODES:
+            return
         for i, field in enumerate(self._fields):
             if i < len(self._texts) and not self._texts[i] and i < len(self._live):
                 field.setText(f"{self._live[i]:.3f}")
@@ -352,6 +357,14 @@ class DynamicInputWidget(QWidget):
             self._clear()
             return True
 
+        if mode == "text":
+            text = self._texts[0].strip() if self._texts else ""
+            if not text:
+                return False  # empty → let CONFIRM reach the tool
+            self.textEntered.emit(text)
+            self._clear()
+            return True
+
         if mode in ("d1d2", "rowcol", "dxdy", "count_ang"):
             t0 = self._texts[0].strip()
             t1 = self._texts[1].strip()
@@ -384,7 +397,7 @@ class DynamicInputWidget(QWidget):
             typed = self._texts[i] if i < len(self._texts) else ""
             if typed:
                 field.setText(typed)
-            elif i < len(self._live):
+            elif i < len(self._live) and self._mode in _NUMERIC_MODES:
                 field.setText(f"{self._live[i]:.3f}")
             else:
                 field.setText("")

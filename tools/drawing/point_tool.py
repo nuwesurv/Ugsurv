@@ -2,7 +2,7 @@
 """
 PointTool — places individual point features.
 
-Each click commits one MultiPoint feature to the points layer.
+Each click commits one Point feature to the points layer.
 Enter or Esc exits the command.  Multiple points can be placed in a single
 command session.
 """
@@ -34,7 +34,6 @@ class PointTool(BaseTool):
 
     def _commit_point(self, pt: QgsPointXY):
         geom = QgsGeometry.fromPointXY(pt)
-        geom.convertToMultiType()
 
         ef = getattr(self._ctx, 'entity_factory', None)
         if ef:

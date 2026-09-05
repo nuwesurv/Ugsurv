@@ -63,6 +63,8 @@ class Ugsurv:
         self._tool_for_cmdline_slot = None
         self._unknown_cmd_slot      = None
         self._reload_layers_slot    = None
+        self._props_sel_slot        = None
+        self._sel                   = None
         self._extra_docks           = []
         self._revert_tool           = None
         self._tfix_tool             = None
@@ -229,8 +231,8 @@ class Ugsurv:
         from .ui.toolbar              import CadToolbar
         from .ui.command_line_widget  import CommandLineWidget
         from .ui.dynamic_input_widget import DynamicInputWidget
-        from .ui.properties_panel     import PropertiesPanel
         from .ui.cad_layers_dock      import CadLayersDock
+        from .module_wz_dialogs.properties_panel import PropertiesDock
         from .ui.snap_settings_dialog import SnapSettingsDialog
 
         for _stale in mw.findChildren(QToolBar, "UgsurvCadToolbar"):
@@ -279,13 +281,31 @@ class Ugsurv:
         canvas.installEventFilter(_key_filter)
         self._global_key_filter = _key_filter
 
-        props = PropertiesPanel(sel, mw)
-        iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, props)
-        props.hide()   # hidden by default; open with PROPS / PR
-        self._props_dock = props
+        props_dock = PropertiesDock(mw)
+        self._props_dock = props_dock
+
+        def _on_props_sel_changed():
+            try:
+                if sel.is_empty():
+                    props_dock.clear_selection()
+                    return
+                lid, fid = next(iter(sel))
+                layer = QgsProject.instance().mapLayer(lid)
+                if layer is not None:
+                    props_dock.update_feature(layer, fid)
+                else:
+                    props_dock.clear_selection()
+            except RuntimeError:
+                pass
+
+        sel.selectionChanged.connect(_on_props_sel_changed)
+        self._props_sel_slot = _on_props_sel_changed
+        self._sel = sel
 
         layers_dock = CadLayersDock(cad_lyr_mgr, sel, storage, mw)
-        iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, layers_dock)
+        iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, props_dock)
+        mw.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, layers_dock)
+        mw.splitDockWidget(props_dock, layers_dock, Qt.Vertical)
         layers_dock.hide()   # hidden by default; open with CADLAYERS / CL
         self._layers_dock = layers_dock
 
@@ -502,9 +522,17 @@ class Ugsurv:
             sem = SemanticEvent(EventType.VALUE_ENTERED, value=v)
             active._dispatch(sem)
 
+        def _on_dyn_text(s: str):
+            active = tool_mgr.active_tool
+            if active is None or not hasattr(active, '_dispatch'):
+                return
+            sem = SemanticEvent(EventType.VALUE_ENTERED, value=s)
+            active._dispatch(sem)
+
         dyn.coordinateEntered.connect(_on_dyn_xy)
         dyn.polarEntered.connect(_on_dyn_polar)
         dyn.valueEntered.connect(_on_dyn_value)
+        dyn.textEntered.connect(_on_dyn_text)
 
         # unknown command → log
         _unknown_cmd = lambda t: cmd_dock.log(f"Unknown command: {t}", "#ff6666")
@@ -648,10 +676,12 @@ class Ugsurv:
             dlg.exec()
         cmd_dock.register_ui_command("IMPORT", "LI", callback=_open_layout_importer)
 
-        # 10. Properties Dock — CAD feature properties editor
-        from .module_wz_dialogs.properties_panel import PropertiesDock
-        cmd_dock.register_ui_command("PROPSDOCK", "PD",
-            callback=_make_toggle(lambda: PropertiesDock(mw)))
+        # 10. Properties Dock — show/raise the startup properties dock
+        _pd = self._props_dock
+        def _toggle_props_dock():
+            _pd.show()
+            _pd.raise_()
+        cmd_dock.register_ui_command("PROPSDOCK", "PD", callback=_toggle_props_dock)
 
         # 11. Topology Fixer — interactive map tool: click to fix parcel topology
         _tfix_ref = [None]
@@ -672,6 +702,7 @@ class Ugsurv:
                 _georef_ref[0]._tool_key = 'georef'
             self._tool_manager.activate_tool(_georef_ref[0])
         cmd_dock.register_ui_command("GEOREF", "GR", callback=_activate_georef)
+
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
@@ -724,10 +755,18 @@ class Ugsurv:
                 slot = getattr(self, '_reload_layers_slot', None)
                 if slot:
                     self._storage.gatingChanged.disconnect(slot)
+        with contextlib.suppress(Exception):
+            sel = getattr(self, '_sel', None)
+            if sel:
+                slot = getattr(self, '_props_sel_slot', None)
+                if slot:
+                    sel.selectionChanged.disconnect(slot)
         self._tool_changed_slot     = None
         self._tool_for_cmdline_slot = None
         self._unknown_cmd_slot      = None
         self._reload_layers_slot    = None
+        self._props_sel_slot        = None
+        self._sel                   = None
 
         if self._snap_action:
             with contextlib.suppress(Exception):
@@ -837,6 +876,7 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.modify.explode_tool        import ExplodeTool
     from .tools.annotation.dimension_tool import DimensionTool, AutoDimensionTool
     from .tools.annotation.text_tool      import TextTool
+    from .tools.drawing.auto_point        import AutoPointTool
 
     _MAP = {
         "point":         PointTool,
@@ -856,6 +896,7 @@ def _make_tool(key: str, canvas, ctx, translator):
         "chamfer":       ChamferTool,     "explode":       ExplodeTool,
         "dimension":     DimensionTool,   "adimension":    AutoDimensionTool,
         "text":          TextTool,
+        "autopoint":     AutoPointTool,
     }
     cls = _MAP.get(key)
     if cls is None:
@@ -895,6 +936,7 @@ def _register_commands(registry):
         ("dimension",     "DIM",     "DIMLINEAR"),
         ("adimension",    "ADIM"),
         ("text",          "TEXT",    "T", "MTEXT"),
+        ("autopoint",     "APOINT",  "APT"),
     ]:
         registry.register(key, *aliases)
 
