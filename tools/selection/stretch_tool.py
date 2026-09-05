@@ -10,6 +10,7 @@ from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsPointXY, QgsGeometry, QgsRectangle,
     QgsWkbTypes, QgsProject, QgsFeatureRequest,
+    QgsPoint, QgsLineString, QgsCompoundCurve,
 )
 from qgis.gui import QgsRubberBand
 
@@ -85,6 +86,10 @@ class StretchTool(BaseTool):
                     if rect.contains(pt):
                         caught_indices.append(i)
                 if caught_indices:
+                    caught_indices = _add_closing_mirror(
+                        geom, caught_indices,
+                        8 * self.canvas().mapUnitsPerPixel()
+                    )
                     self._caught[(lyr.id(), feat.id())] = (lyr, geom, caught_indices)
         if self._caught:
             self._base_pt = None
@@ -136,7 +141,14 @@ class StretchTool(BaseTool):
     @staticmethod
     def _rebuild_geometry(orig: QgsGeometry, new_pts: list) -> QgsGeometry:
         wkb_type = int(QgsWkbTypes.geometryType(orig.wkbType()))
+        is_curve = QgsWkbTypes.isCurvedType(orig.wkbType())
         if wkb_type == 1:   # Line
+            if is_curve:
+                qgs_pts = [QgsPoint(p.x(), p.y()) for p in new_pts]
+                ls = QgsLineString(qgs_pts)
+                cc = QgsCompoundCurve()
+                cc.addCurve(ls)
+                return QgsGeometry(cc)
             return QgsGeometry.fromPolylineXY(new_pts)
         if wkb_type == 2:   # Polygon
             return QgsGeometry.fromPolygonXY([new_pts])
@@ -148,6 +160,27 @@ class StretchTool(BaseTool):
             self._crossing_rb = None
         self._caught.clear()
         self._drag_start = None
+
+
+def _add_closing_mirror(geom: QgsGeometry, indices: list, tol: float) -> list:
+    """If the line is closed (first ≈ last vertex within tol) and the crossing
+    caught one endpoint but not the other, add the missing partner so the line
+    stays closed after the stretch."""
+    if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
+        return indices
+    verts = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
+    n = len(verts)
+    if n < 3:
+        return indices
+    if math.hypot(verts[0].x() - verts[-1].x(),
+                  verts[0].y() - verts[-1].y()) >= max(tol, 1e-3):
+        return indices
+    result = list(indices)
+    if 0 in result and (n - 1) not in result:
+        result.append(n - 1)
+    elif (n - 1) in result and 0 not in result:
+        result.insert(0, 0)
+    return result
 
 
 def _geo_layers(sm):

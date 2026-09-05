@@ -188,11 +188,13 @@ class StorageManager(QObject):
         return layer.addFeature(feat)
 
     def add_point(self, geom: QgsGeometry, cad_layer: str,
-                  description=None, symbol: str = "basic") -> bool:
+                  description=None, symbol: str = "basic",
+                  symbol_size: float = None) -> bool:
         """
         Add a point geometry (in current project CRS) to the points layer.
         The geometry is transformed to EPSG:32636 (layer CRS) if needed.
         Description defaults to NULL; Symbol (SVG) and symbol (shape) default to "basic".
+        symbol_size sets the symbol_size field when provided.
         """
         if not self._enabled:
             return False
@@ -214,6 +216,8 @@ class StorageManager(QObject):
             feat["Symbol"] = symbol
         if flds.indexOf("symbol") >= 0:
             feat["symbol"] = symbol
+        if symbol_size is not None and flds.indexOf("symbol_size") >= 0:
+            feat["symbol_size"] = float(symbol_size)
         return layer.addFeature(feat)
 
     def unload(self):

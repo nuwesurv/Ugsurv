@@ -31,7 +31,7 @@ from qgis.PyQt.QtWidgets import QMenu
 from qgis.core import (
     QgsPointXY, QgsGeometry, QgsProject, QgsWkbTypes,
     QgsFeatureRequest, QgsRectangle,
-    QgsPoint, QgsCircle, QgsCompoundCurve,
+    QgsPoint, QgsLineString, QgsCircle, QgsCompoundCurve,
 )
 from qgis.gui import QgsVertexMarker
 
@@ -114,13 +114,15 @@ class GripEditTool(BaseTool):
             verts    = list(geom.vertices())
             n        = len(verts)
 
-            # Detect closed polyline: first and last vertex coincident (≤1 mm).
-            # For closed lines we show only one grip at the shared endpoint and
-            # store the closing vertex index in mirror_idx so both are updated.
+            # Detect closed polyline: first and last vertex coincident within the
+            # grip hit-zone (8 px in map units).  Using pixel-based tolerance
+            # means the detection matches whatever "same point" means visually,
+            # regardless of zoom level or minor snap imprecision.
+            closing_tol  = max(self._px_to_mu(GRIP_TOLERANCE_PX), 1e-3)
             closing_skip = -1   # vertex index to omit (the redundant closing vertex)
             if is_line and not is_multi and n >= 3:
                 if math.hypot(verts[0].x() - verts[-1].x(),
-                              verts[0].y() - verts[-1].y()) < 1e-3:
+                              verts[0].y() - verts[-1].y()) < closing_tol:
                     closing_skip = n - 1
 
             for i, v in enumerate(verts):
@@ -716,12 +718,24 @@ def _replace_vertex(geom: QgsGeometry, idx: int, new_pt: QgsPointXY) -> QgsGeome
         pts[idx] = new_pt
     wtype    = int(QgsWkbTypes.geometryType(geom.wkbType()))
     is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
+    is_curve = QgsWkbTypes.isCurvedType(geom.wkbType())
     if wtype == 0:    # Point
         g = QgsGeometry.fromMultiPointXY(pts) if is_multi else QgsGeometry.fromPointXY(pts[0])
     elif wtype == 1:  # Line
-        g = QgsGeometry.fromPolylineXY(pts)
-        if is_multi:
-            g.convertToMultiType()
+        if is_curve:
+            # Preserve CompoundCurve type so the closing vertex survives the
+            # GeoPackage round-trip (CompoundCurve layer rejects/strips plain
+            # LineString on changeGeometry, which would lose the duplicate
+            # closing vertex and break the closed-line detection next time).
+            qgs_pts = [QgsPoint(p.x(), p.y()) for p in pts]
+            ls = QgsLineString(qgs_pts)
+            cc = QgsCompoundCurve()
+            cc.addCurve(ls)
+            g = QgsGeometry(cc)
+        else:
+            g = QgsGeometry.fromPolylineXY(pts)
+            if is_multi:
+                g.convertToMultiType()
     else:             # Polygon
         g = QgsGeometry.fromPolygonXY([pts])
         if is_multi:

@@ -309,44 +309,48 @@ class MoveTool(QgsMapTool):
             dyn.set_live_value(dist)
 
     def _apply_raster_move(self, lyr, dx, dy):
-        """Shift raster geotransform by (dx, dy). In-place if writable, else Translate+replace."""
+        """Shift raster geotransform by (dx, dy). Always remove-and-readd to avoid QGIS file lock."""
         from osgeo import gdal
         src = lyr.source()
-        ds = gdal.Open(src, gdal.GA_Update)
-        if ds is not None:
-            gt = list(ds.GetGeoTransform())
-            gt[0] += dx
-            gt[3] += dy
-            ds.SetGeoTransform(gt)
-            ds.FlushCache()
-            ds = None
-            lyr.dataProvider().reloadData()
-            lyr.triggerRepaint()
-            return True
-        # File locked — translate to temp, swap files, re-add layer
         name = lyr.name()
+
         ds_r = gdal.Open(src)
         if ds_r is None:
             self._log(f"  Cannot open '{name}'", "#ff8844")
             return False
         gt = list(ds_r.GetGeoTransform())
+        proj = ds_r.GetProjection()
+        ds_r = None
         gt[0] += dx
         gt[3] += dy
+
+        # Write new geotransform to a temp file before touching QGIS (avoids lock issues)
         tmp = src + '.__mv_tmp__.tif'
-        ds_new = gdal.Translate(tmp, ds_r)
+        ds_r2 = gdal.Open(src)
+        if ds_r2 is None:
+            self._log(f"  Cannot re-open '{name}'", "#ff8844")
+            return False
+        ds_new = gdal.Translate(tmp, ds_r2, creationOptions=['COMPRESS=LZW'])
         ds_new.SetGeoTransform(gt)
-        ds_new.SetProjection(ds_r.GetProjection())
+        ds_new.SetProjection(proj)
         ds_new = None
-        ds_r   = None
+        ds_r2 = None
+
+        # Remove old layer — releases QGIS's file handle
         QgsProject.instance().removeMapLayer(lyr.id())
+
+        # Try to put temp in place of original; fall back to loading from temp
         try:
             shutil.move(tmp, src)
+            reload_src = src
         except Exception as exc:
-            self._log(f"  File replace failed: {exc}", "#ff8844")
-            with contextlib.suppress(Exception):
-                os.unlink(tmp)
+            self._log(f"  Could not replace original (loading from temp): {exc}", "#ffaa44")
+            reload_src = tmp
+
+        new_lyr = QgsRasterLayer(reload_src, name)
+        if not new_lyr.isValid():
+            self._log(f"  Reloaded layer is invalid: {reload_src}", "#ff8844")
             return False
-        new_lyr = QgsRasterLayer(src, name)
         QgsProject.instance().addMapLayer(new_lyr)
         return True
 

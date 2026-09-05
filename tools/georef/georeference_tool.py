@@ -54,8 +54,10 @@ class GeoreferenceTool(BaseTool):
         self._display_path = None        # temp TIFF shown on canvas
         self._raster_w = 0
         self._raster_h = 0
+        self._pixel_scale = 1.0          # map units per pixel (scaled to fit canvas)
         self._gcps = []                  # list of (col, row, E, N)
         self._pending_pixel = None       # (col, row) awaiting ground-coord input
+        self._pending_marker = None      # immediate marker shown on canvas click
         self._waiting_coord = False
         self._placing_raster = False     # True while user is picking placement point
         self._placement_origin = (0, 0)  # (x0, y0) top-left of display geotransform
@@ -108,7 +110,8 @@ class GeoreferenceTool(BaseTool):
 
     def deactivate(self):
         self._clear_placement_rb()
-        self._restore_display_layer()
+        self._clear_pending_marker()
+        self._display_layer = None   # leave on canvas; don't remove on terminate
         super().deactivate()
 
     # ── events ────────────────────────────────────────────────────────────
@@ -134,7 +137,8 @@ class GeoreferenceTool(BaseTool):
                 # Cancel the pending click (not the whole tool)
                 self._waiting_coord = False
                 self._pending_pixel = None
-                self._request_input("", "")
+                self._clear_pending_marker()
+                self._request_input("no_value", self._gcp_click_prompt())
                 self._log("Point cancelled. Click another image location.", "#ffaa44")
             else:
                 self._try_georeference()
@@ -150,7 +154,8 @@ class GeoreferenceTool(BaseTool):
         if self._waiting_coord:
             self._waiting_coord = False
             self._pending_pixel = None
-            self._request_input("", "")
+            self._clear_pending_marker()
+            self._request_input("no_value", self._gcp_click_prompt())
             self._log("Point cancelled.", "#ffaa44")
         elif self._gcps:
             self._gcps.pop()
@@ -165,6 +170,7 @@ class GeoreferenceTool(BaseTool):
         self._placing_raster = False
         self._gcps.clear()
         self._clear_gcp_markers()
+        self._clear_pending_marker()
         self._clear_placement_rb()
 
     # ── placement ────────────────────────────────────────────────────────
@@ -178,8 +184,10 @@ class GeoreferenceTool(BaseTool):
             self._placement_rb.setWidth(_style.RB_WIDTH)
 
         px, py = map_pt.x(), map_pt.y()
-        x0 = px - self._raster_w
-        y0 = py + self._raster_h   # top in map coords
+        w = self._raster_w * self._pixel_scale
+        h = self._raster_h * self._pixel_scale
+        x0 = px - w
+        y0 = py + h   # top in map coords
         points = [
             QgsPointXY(x0, y0),
             QgsPointXY(px, y0),
@@ -192,8 +200,9 @@ class GeoreferenceTool(BaseTool):
         """Commit the chosen placement and load the raster onto the canvas."""
         self._clear_placement_rb()
         px, py = map_pt.x(), map_pt.y()
-        x0 = px - self._raster_w
-        y0 = py + self._raster_h   # top-left of geotransform
+        s = self._pixel_scale
+        x0 = px - self._raster_w * s
+        y0 = py + self._raster_h * s   # top-left of geotransform
 
         try:
             tmp_dir = tempfile.mkdtemp(prefix='ugsurv_georef_')
@@ -203,8 +212,11 @@ class GeoreferenceTool(BaseTool):
                 self._log("Failed to open raster for display.", "#ff5555")
                 self._go_home()
                 return
-            ds_tmp = gdal.Translate(tmp_path, ds, format='GTiff')
-            ds_tmp.SetGeoTransform([x0, 1, 0, y0, 0, -1])
+            ds_tmp = gdal.Translate(
+                tmp_path, ds, format='GTiff',
+                creationOptions=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=IF_NEEDED'],
+            )
+            ds_tmp.SetGeoTransform([x0, s, 0, y0, 0, -s])
             ds_tmp = None
             ds = None
         except Exception as exc:
@@ -238,7 +250,7 @@ class GeoreferenceTool(BaseTool):
             "Click image points → type E, N.  Enter = georeference  Esc = cancel.",
             "#aaddff",
         )
-        self._request_input("", "")
+        self._request_input("no_value", "Click image point to set GCP 1")
 
     def _clear_placement_rb(self):
         if self._placement_rb is not None:
@@ -252,8 +264,9 @@ class GeoreferenceTool(BaseTool):
 
     def _handle_canvas_click(self, map_pt: QgsPointXY):
         x0, y0 = self._placement_origin
-        col = map_pt.x() - x0
-        row = y0 - map_pt.y()
+        s = self._pixel_scale
+        col = (map_pt.x() - x0) / s
+        row = (y0 - map_pt.y()) / s
 
         # Reject clicks outside the raster bounds (with a small tolerance)
         if not (-5 <= col <= self._raster_w + 5 and -5 <= row <= self._raster_h + 5):
@@ -262,6 +275,11 @@ class GeoreferenceTool(BaseTool):
 
         self._pending_pixel = (col, row)
         self._waiting_coord = True
+
+        # Immediately show a marker so the user sees their click position
+        self._clear_pending_marker()
+        self._add_pending_marker(map_pt)
+
         n = len(self._gcps) + 1
         epsg = self._project_epsg()
         self._request_input(
@@ -279,7 +297,9 @@ class GeoreferenceTool(BaseTool):
         self._gcps.append((col, row, e, n))
 
         x0, y0 = self._placement_origin
-        marker_map_pt = QgsPointXY(x0 + col, y0 - row)
+        s = self._pixel_scale
+        marker_map_pt = QgsPointXY(x0 + col * s, y0 - row * s)
+        self._clear_pending_marker()
         self._add_gcp_marker(marker_map_pt, len(self._gcps))
 
         self._log(
@@ -289,7 +309,6 @@ class GeoreferenceTool(BaseTool):
         )
         self._waiting_coord = False
         self._pending_pixel = None
-        self._request_input("", "")
 
         if len(self._gcps) >= 2:
             self._log(
@@ -297,8 +316,10 @@ class GeoreferenceTool(BaseTool):
                 "Add more for accuracy or press Enter to georeference.",
                 "#88ccff",
             )
+            self._request_input("no_value", self._gcp_click_prompt())
         else:
             self._log("Need 1 more point. Click another location.", "#aaddff")
+            self._request_input("no_value", self._gcp_click_prompt())
 
     # ── georeferencing ────────────────────────────────────────────────────
 
@@ -364,7 +385,8 @@ class GeoreferenceTool(BaseTool):
         warp_opts = gdal.WarpOptions(
             dstSRS=wkt,
             polynomialOrder=1,
-            resampleAlg=gdal.GRA_Bilinear,
+            resampleAlg=gdal.GRA_Cubic,
+            creationOptions=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=IF_NEEDED'],
         )
         ds_out = gdal.Warp(output_path, ds_mem, options=warp_opts)
         if ds_out is None:
@@ -383,7 +405,10 @@ class GeoreferenceTool(BaseTool):
             return
 
         output_path = self._output_path()
-        ds_out = gdal.Translate(output_path, ds, format='GTiff')
+        ds_out = gdal.Translate(
+            output_path, ds, format='GTiff',
+            creationOptions=['COMPRESS=LZW', 'PREDICTOR=2', 'BIGTIFF=IF_NEEDED'],
+        )
         ds_out.SetGeoTransform(geotransform)
         srs = osr.SpatialReference()
         srs.ImportFromEPSG(self._project_epsg())
@@ -418,22 +443,31 @@ class GeoreferenceTool(BaseTool):
             )
             return
 
+        _plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _symbol_path = os.path.join(_plugin_dir, "map_icons", "point_icons", "benchmark1.svg")
+
         saved = 0
-        for i, (col, row, e, n) in enumerate(self._gcps, 1):
+        for _col, _row, e, n in self._gcps:
             geom = QgsGeometry.fromPointXY(QgsPointXY(e, n))
             ok = storage.add_point(
                 geom,
                 cad_layer="0",
-                description=f"Georeference Point {i}",
-                symbol="benchmark2.svg",
+                description="GCP",
+                symbol=_symbol_path,
+                symbol_size=4.0,
             )
             if ok:
                 saved += 1
 
         if saved:
+            layer = storage._points_layer
+            if layer is not None:
+                from ...core.renderer_utils import apply_point_color_renderer
+                apply_point_color_renderer(layer)
+                layer.triggerRepaint()
             self._log(
                 f"{saved} GCP point(s) added to points layer  "
-                f"(Description='Georeference Point N', Symbol='benchmark2.svg').",
+                f"(Description='GCP', Symbol='benchmark1.svg', Size=4px).",
                 "#aaffaa",
             )
         else:
@@ -446,7 +480,7 @@ class GeoreferenceTool(BaseTool):
         try:
             src = filepath
             if filepath.lower().endswith('.pdf'):
-                src = self._pdf_first_page(filepath)
+                src = self._pdf_to_png(filepath)
                 if src is None:
                     return False
 
@@ -458,21 +492,46 @@ class GeoreferenceTool(BaseTool):
             self._raster_h = ds.RasterYSize
             self._raster_src = src
             ds = None
+
+            # Scale raster so its longest dimension is ~25% of the canvas shorter side
+            ext = self.canvas().extent()
+            if not ext.isNull() and ext.width() > 1e-10 and ext.height() > 1e-10:
+                canvas_min = min(ext.width(), ext.height())
+                raster_max = max(self._raster_w, self._raster_h) or 1
+                self._pixel_scale = canvas_min * 0.25 / raster_max
+            else:
+                self._pixel_scale = 1.0
+
             return True
         except Exception as exc:
             self._log(f"Load error: {exc}", "#ff5555")
             return False
 
-    def _pdf_first_page(self, pdf_path: str):
+    def _pdf_to_png(self, pdf_path: str):
         try:
             import fitz
-            from PIL import Image
             pdf = fitz.open(pdf_path)
-            pix = pdf[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            n_pages = len(pdf)
+            page_idx = 0
+            if n_pages > 1:
+                from qgis.PyQt.QtWidgets import QInputDialog
+                val, ok = QInputDialog.getInt(
+                    None,
+                    'Select PDF Page',
+                    f'PDF has {n_pages} pages.\nEnter page number (1 – {n_pages}):',
+                    1, 1, n_pages, 1,
+                )
+                if not ok:
+                    pdf.close()
+                    return None
+                page_idx = val - 1
+
+            # 300 DPI equivalent (PDF base is 72 DPI)
+            scale = 300 / 72
+            pix = pdf[page_idx].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             tmp_dir = tempfile.mkdtemp(prefix='ugsurv_georef_pdf_')
-            out = os.path.join(tmp_dir, 'page0.png')
-            img.save(out, 'PNG')
+            out = os.path.join(tmp_dir, f'page{page_idx}.png')
+            pix.save(out)
             pdf.close()
             return out
         except Exception as exc:
@@ -486,10 +545,6 @@ class GeoreferenceTool(BaseTool):
             except Exception:
                 pass
             self._display_layer = None
-
-    def _restore_display_layer(self):
-        """Called on deactivate — remove temp display layer if still present."""
-        self._remove_display_layer()
 
     def _output_path(self) -> str:
         """Output TIF placed next to the original input file."""
@@ -523,6 +578,29 @@ class GeoreferenceTool(BaseTool):
                 pass
         self._gcp_markers.clear()
 
+    def _add_pending_marker(self, map_pt: QgsPointXY):
+        m = QgsVertexMarker(self.canvas())
+        m.setCenter(map_pt)
+        m.setIconType(QgsVertexMarker.ICON_X)
+        m.setColor(QColor('#ffcc00'))
+        m.setIconSize(20)
+        m.setPenWidth(3)
+        self._pending_marker = m
+
+    def _clear_pending_marker(self):
+        if self._pending_marker is not None:
+            try:
+                self.canvas().scene().removeItem(self._pending_marker)
+            except Exception:
+                pass
+            self._pending_marker = None
+
+    def _gcp_click_prompt(self) -> str:
+        n = len(self._gcps) + 1
+        if len(self._gcps) >= 2:
+            return f"Click image point for GCP {n}  or  Enter to georeference"
+        return f"Click image point to set GCP {n}"
+
     # ── helpers ───────────────────────────────────────────────────────────
 
     def _reset_session(self):
@@ -531,9 +609,11 @@ class GeoreferenceTool(BaseTool):
         self._waiting_coord = False
         self._placing_raster = False
         self._placement_origin = (0, 0)
+        self._pixel_scale = 1.0
         self._clear_gcp_markers()
+        self._clear_pending_marker()
         self._clear_placement_rb()
-        self._remove_display_layer()
+        self._display_layer = None   # previous session's layer stays in project
 
     def _project_epsg(self) -> int:
         try:

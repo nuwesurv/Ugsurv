@@ -711,6 +711,16 @@ class Ugsurv:
             self._tool_manager.activate_tool(_georef_ref[0])
         cmd_dock.register_ui_command("GEOREF", "GR", callback=_activate_georef)
 
+        # 14. Align — re-georeference an existing on-canvas raster via GCPs
+        _align_ref = [None]
+        def _activate_align():
+            if _align_ref[0] is None:
+                from .tools.georef.align_tool import AlignTool
+                _align_ref[0] = AlignTool(canvas, self._tool_context, self._translator)
+                _align_ref[0]._tool_key = 'align'
+            self._tool_manager.activate_tool(_align_ref[0])
+        cmd_dock.register_ui_command("ALIGN", "AL", callback=_activate_align)
+
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):

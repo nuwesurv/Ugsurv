@@ -100,7 +100,7 @@ class SelectTool(BaseTool):
         except Exception:
             pass
         self._clear_grips()
-        self._clear_raster_selection()
+        self._remove_raster_rb()   # visual only; ctx.selected_raster kept for the next tool
         if self._hover_rb is not None:
             try:
                 self.canvas().scene().removeItem(self._hover_rb)
@@ -397,6 +397,24 @@ class SelectTool(BaseTool):
         self._rebuild_grips()
 
     def _delete_selected(self):
+        cmd_dock = getattr(self._ctx, 'cmd_dock', None)
+
+        # Delete selected raster layer if any
+        raster = getattr(self._ctx, 'selected_raster', None)
+        if raster is not None:
+            try:
+                valid = raster.isValid()
+            except RuntimeError:
+                valid = False
+            if valid:
+                name = raster.name()
+                self._clear_raster_selection()
+                QgsProject.instance().removeMapLayer(raster.id())
+                if cmd_dock:
+                    cmd_dock.log(f"Deleted raster '{name}'.", "#ff8888")
+            else:
+                self._clear_raster_selection()
+
         sel = self._ctx.selection_model
         if sel.is_empty():
             return
@@ -415,7 +433,6 @@ class SelectTool(BaseTool):
             layer_counts[lid]["count"] += 1
             layer.deleteFeature(fid)
         sel.clear()
-        cmd_dock = getattr(self._ctx, 'cmd_dock', None)
         if cmd_dock and layer_counts:
             parts = []
             for info in layer_counts.values():
@@ -822,6 +839,9 @@ class SelectTool(BaseTool):
 
     def _clear_raster_selection(self):
         self._ctx.selected_raster = None
+        self._remove_raster_rb()
+
+    def _remove_raster_rb(self):
         if self._raster_sel_rb is not None:
             try:
                 self.canvas().scene().removeItem(self._raster_sel_rb)
