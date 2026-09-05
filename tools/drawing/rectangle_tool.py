@@ -28,6 +28,7 @@ class RectangleTool(BaseTool):
         super().activate()
         self._corner1 = None
         self._transition(ToolState.ACTING)
+        self._request_input("xy", "First corner:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
@@ -37,6 +38,7 @@ class RectangleTool(BaseTool):
                 self._corner1 = sem.point
                 for c in self._ctx.constraints:
                     c.set_reference(sem.point)
+                self._update_prompt("Opposite corner:")
             else:
                 self._commit(self._corner1, sem.point)
                 self._corner1 = None

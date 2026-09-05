@@ -30,6 +30,7 @@ class AddVertexTool(BaseTool):
     def activate(self):
         super().activate()
         self._transition(ToolState.ACTING)
+        self._request_input("xy", "Click on a line to add a vertex:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
@@ -67,6 +68,7 @@ class AddVertexTool(BaseTool):
                     self._pending_layer = lyr
                     self._pending_fid   = feat.id()
                     self._insert_idx    = idx + 1
+                    self._update_prompt("Click to place new vertex:")
                     return
 
     def _update_preview(self, cursor_pt: QgsPointXY):

@@ -22,8 +22,7 @@ import contextlib
 from itertools import permutations
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -38,15 +37,11 @@ _C_HOVER = _style.RB_HOVER
 _HIT_PX    = 10
 _TOUCH_TOL = 1e-3
 
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
-
 class JoinTool(QgsMapTool):
     """Click polylines to build a join set; Enter chains them into one."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -59,30 +54,10 @@ class JoinTool(QgsMapTool):
         self._hover_band = None
         self._hover_key  = None
 
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    def _show_hint(self, screen_pos, text):
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _go_home(self):
         go = getattr(self._ctx, 'go_home', None)
@@ -293,13 +268,19 @@ class JoinTool(QgsMapTool):
 
         if len(self._selected) >= 2:
             self._log(f"JOIN  ──  {len(self._selected)} lines pre-selected, joining…", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click polylines to join:"
+            self.inputModeChanged.emit("value", "Click polylines to join:")
             self._join_and_commit()
         else:
             self._log("JOIN  ──  click polylines to select", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click polylines to join:"
+            self.inputModeChanged.emit("value", "Click polylines to join:")
 
     def deactivate(self):
         self._clear_all()
-        self._hint.hide()
+        self.inputModeChanged.emit("", "")
         super().deactivate()
 
     def canvasMoveEvent(self, event):
@@ -326,11 +307,11 @@ class JoinTool(QgsMapTool):
 
         n = len(self._selected)
         if n >= 2:
-            self._show_hint(event.pos(), f"{n} selected")
+            self.promptChanged.emit(f"{n} selected — Enter to join:")
         elif n == 1:
-            self._show_hint(event.pos(), "Select 1 more polyline")
+            self.promptChanged.emit("Select 1 more polyline:")
         else:
-            self._show_hint(event.pos(), "Click polylines to select")
+            self.promptChanged.emit("Click polylines to join:")
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:

@@ -16,10 +16,9 @@ import contextlib
 import os
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 from ...core import style as _style
-from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
     QgsRasterLayer, QgsRectangle, QgsWkbTypes,
@@ -28,20 +27,12 @@ from qgis.core import (
 _ST_PICK = 0   # waiting for user to click a raster
 _ST_RECT = 1   # raster selected; drawing clip rectangle
 
-_HINT = {
-    _ST_PICK: "Click a raster to crop",
-    _ST_RECT: "Drag to draw clip rectangle",
-}
-
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
 
 class CropTool(QgsMapTool):
     """Clip a raster to a user-drawn rectangle using GDAL Warp."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -55,33 +46,12 @@ class CropTool(QgsMapTool):
         self._drag_rb:    QgsRubberBand | None   = None
         self._extent_rb:  QgsRubberBand | None   = None   # raster extent indicator
 
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
-    # ── logging / hint ────────────────────────────────────────────────────
+    # ── logging ───────────────────────────────────────────────────────────
 
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -195,6 +165,7 @@ class CropTool(QgsMapTool):
             f"  Raster '{lyr.name()}' selected — drag to draw clip rectangle",
             "#aaddff",
         )
+        self.promptChanged.emit("Drag to draw clip rectangle:")
 
     def _reset(self):
         self._clear_rubber_bands()
@@ -210,27 +181,31 @@ class CropTool(QgsMapTool):
         preselected = getattr(self._ctx, 'selected_raster', None)
         if preselected is not None and preselected.isValid():
             self._ctx.selected_raster = None
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Drag to draw clip rectangle:"
+            self.inputModeChanged.emit("value", "Drag to draw clip rectangle:")
             self._select_raster(preselected)
         else:
             self._log("CROP  ──  click a raster, then drag to clip rectangle", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click a raster to crop:"
+            self.inputModeChanged.emit("value", "Click a raster to crop:")
 
     def deactivate(self):
         self._clear_rubber_bands()
-        self._hint.hide()
+        self.inputModeChanged.emit("", "")
         self._raster     = None
         self._drag_start = None
         self._state      = _ST_PICK
         super().deactivate()
 
     def canvasMoveEvent(self, event):
-        self._show_hint(event.pos())
         if self._state == _ST_RECT and self._drag_start:
             end = self.toMapCoordinates(event.pos())
             self._update_drag_rb(self._drag_start, end)
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
-            self._hint.hide()
             self._go_home()
             return
         if event.button() != Qt.MouseButton.LeftButton:
@@ -277,5 +252,4 @@ class CropTool(QgsMapTool):
                 self._reset()
                 self._log("  Crop cancelled — click a raster to restart", "#ffaaaa")
             else:
-                self._hint.hide()
                 self._go_home()

@@ -88,8 +88,10 @@ class _ModifyBase(BaseTool):
         sel = self._ctx.selection_model
         if sel and not sel.is_empty():
             self._transition(ToolState.ACTING)
+            self._request_input("xy", "Click base point:")
         else:
             self._transition(ToolState.SELECTING)
+            self._request_input("xy", "Select features:")
 
     # ── canvas overrides for SELECTING drag ──────────────────────────────
     def canvasPressEvent(self, event):
@@ -130,6 +132,7 @@ class _ModifyBase(BaseTool):
             elif sem.type == EventType.CONFIRM:
                 if not self._ctx.selection_model.is_empty():
                     self._transition(ToolState.ACTING)
+                    self._update_prompt("Click base point:")
 
         elif self._state == ToolState.ACTING:
             if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
@@ -144,6 +147,7 @@ class _ModifyBase(BaseTool):
         if self._base_pt is None:
             self._base_pt = pt
             self._show_base_marker(pt)
+            self._update_prompt("Click destination point:")
         else:
             self._commit_transform(pt)
             self._clear_base_marker()
@@ -203,6 +207,7 @@ class _ModifyBase(BaseTool):
             sel.add_batch(hits)
             # auto-transition: drawn the box, got features → go straight to ACTING
             self._transition(ToolState.ACTING)
+            self._update_prompt("Click base point:")
 
     def _update_sel_drag_preview(self, start: QgsPointXY, end: QgsPointXY):
         if self._sel_drag_rb is None:

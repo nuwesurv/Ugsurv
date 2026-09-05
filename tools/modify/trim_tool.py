@@ -22,8 +22,7 @@ Phase 2  (_ST_TRIM)
 import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -84,43 +83,12 @@ class TrimTool(QgsMapTool):
         self._modified_layers = set()
         self._snap_marker = None
 
-        # Cursor-side hint label
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(
-            "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-            "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-            "padding:3px 8px;font-size:9pt;}"
-        )
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
-    # ── logging & hint ─────────────────────────────────────────────────────────
+    # ── logging ────────────────────────────────────────────────────────────────
 
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    _HINTS = {
-        _ST_SELECT: "Click cutting edges  (Enter = all lines)",
-        _ST_TRIM:   "Click segment to mark for trim",
-    }
-
-    def _show_hint(self, screen_pos):
-        text = self._HINTS.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(12, 16)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     # ── rubber-band helpers ────────────────────────────────────────────────────
 
@@ -246,6 +214,7 @@ class TrimTool(QgsMapTool):
 
         self._state = _ST_TRIM
         self._log("  Click segments to mark for removal", "#88ccff")
+        self.promptChanged.emit("Click segment to trim:")
 
     # ── Phase 2: trim logic ────────────────────────────────────────────────────
 
@@ -483,7 +452,6 @@ class TrimTool(QgsMapTool):
         self._clear_cutting_edges()
         self._preview_band.setVisible(False)
         self._hover_band.setVisible(False)
-        self._hint.hide()
         self._go_home()
 
     def activate(self):
@@ -505,9 +473,15 @@ class TrimTool(QgsMapTool):
                     self._cutting_bands.append(band)
         if self._cutting_edges:
             self._log("TRIM", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click segment to trim:"
+            self.inputModeChanged.emit("value", "Click segment to trim:")
             self._advance_to_trim()
         else:
             self._log("TRIM  ──  click cutting edges  (Enter = skip, use all)", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click cutting edges:"
+            self.inputModeChanged.emit("value", "Click cutting edges:")
 
     def deactivate(self):
         self._clear_cutting_edges()
@@ -517,7 +491,6 @@ class TrimTool(QgsMapTool):
         self._rm(self._hover_band)
         self._state = _ST_SELECT
         self._modified_layers.clear()
-        self._hint.hide()
         self.inputModeChanged.emit("", "")
         super().deactivate()
 
@@ -525,7 +498,6 @@ class TrimTool(QgsMapTool):
 
     def canvasMoveEvent(self, event):
         self._update_preview(self._snapped(self.toMapCoordinates(event.pos())))
-        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))

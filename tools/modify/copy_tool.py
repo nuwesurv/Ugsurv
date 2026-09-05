@@ -14,11 +14,11 @@ Esc at any phase → cancel / exit.
 """
 
 import contextlib
+import math
 import os
 
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes, QgsRasterLayer,
@@ -52,21 +52,12 @@ _ST_PLACE  = 2
 
 _HIT_PX = 10
 
-_HINT = {
-    _ST_SELECT: "Select features / rasters",
-    _ST_BASE:   "Click base point",
-    _ST_PLACE:  "Click destination",
-}
-
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
 
 class CopyTool(QgsMapTool):
     """Copy features and rasters — multi-select → base point → destination(s)."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -85,31 +76,10 @@ class CopyTool(QgsMapTool):
         self._last_input_ref: QgsPointXY | None = None
         self._snap_marker = None
 
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _hit_tol(self):
         return _HIT_PX * self._canvas.mapUnitsPerPixel()
@@ -293,6 +263,7 @@ class CopyTool(QgsMapTool):
             b.setVisible(False)
         self._state = _ST_BASE
         self._log(f"  {self._sel_count()} selected  →  click base point", "#88ccff")
+        self.promptChanged.emit("Click base point:")
 
     def _enter_place(self, base_pt: QgsPointXY):
         self._base_pt        = base_pt
@@ -305,11 +276,13 @@ class CopyTool(QgsMapTool):
             band.setToGeometry(self._raster_extent_geom(lyr), None)
             band.setVisible(True)
         self._log("  Click destination(s)  or  type \"@dx,dy\"", "#88ccff")
+        self.promptChanged.emit('Click destination or type "@dx,dy":')
 
     def _update_preview(self, map_pt: QgsPointXY):
         if self._state == _ST_PLACE and self._base_pt:
             dx = map_pt.x() - self._base_pt.x()
             dy = map_pt.y() - self._base_pt.y()
+            dist = math.hypot(dx, dy)
             for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
                 moved = QgsGeometry(geom)
                 moved.translate(dx, dy)
@@ -323,6 +296,10 @@ class CopyTool(QgsMapTool):
                     QgsPointXY(ext.xMinimum()+dx, ext.yMaximum()+dy),
                 ]
                 band.setToGeometry(QgsGeometry.fromPolygonXY([pts]), None)
+            self.promptChanged.emit(f"Copy distance <{dist:.3f}m>:")
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn:
+                dyn.set_live_value(dist)
 
     def _apply_raster_copy(self, lyr, dx, dy):
         """Create a shifted copy of the raster file and add it to the project."""
@@ -428,13 +405,19 @@ class CopyTool(QgsMapTool):
         if self._has_selection():
             self._state = _ST_BASE
             self._log(f"COPY  ──  {self._sel_count()} selected  →  click base point", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click base point:"
+            self.inputModeChanged.emit("value", "Click base point:")
         else:
             self._log("COPY  ──  select features / rasters to copy", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Select features to copy:"
+            self.inputModeChanged.emit("value", "Select features to copy:")
 
     def deactivate(self):
         self._clear_selection()
         self._clear_snap_marker()
-        self._hint.hide()
+        self.inputModeChanged.emit("", "")
         self._state          = _ST_SELECT
         self._base_pt        = None
         self._last_input_ref = None
@@ -443,7 +426,6 @@ class CopyTool(QgsMapTool):
     def canvasMoveEvent(self, event):
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         self._update_preview(map_pt)
-        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))

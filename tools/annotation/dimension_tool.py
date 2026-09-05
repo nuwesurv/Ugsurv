@@ -307,6 +307,7 @@ class DimensionTool(BaseTool):
         self._pts.clear()
         self._transition(ToolState.ACTING)
         self._log("DIM — snap to edge to auto-dimension, or click two points")
+        self._request_input("xy", "Snap to edge or click first point:")
 
     # ── events ────────────────────────────────────────────────────────────
 
@@ -330,6 +331,7 @@ class DimensionTool(BaseTool):
 
         if len(self._pts) == 1:
             self._log(f"p1: ({round(pt.x(),3)}, {round(pt.y(),3)})  — pick end point")
+            self._update_prompt("End point:")
 
         elif len(self._pts) == 2:
             self._commit_two_point()
@@ -450,6 +452,7 @@ class AutoDimensionTool(BaseTool):
         self._dim_layer = _get_or_create_dim_layer(self._ctx)
         self._transition(ToolState.ACTING)
         self._log("ADIM — click a feature to dimension all its segments")
+        self._request_input("xy", "Click a feature to auto-dimension:")
 
     # ── events ────────────────────────────────────────────────────────────
 

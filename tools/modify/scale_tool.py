@@ -13,8 +13,7 @@ import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -36,18 +35,6 @@ _ST_BASE   = 1
 _ST_SCALE  = 2
 
 _HIT_PX = 10
-
-_HINT = {
-    _ST_SELECT: "Select features",
-    _ST_BASE:   "Click scale origin",
-    _ST_SCALE:  "Click or type scale factor",
-}
-
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
 
 
 def _scale_geom(geom, cx, cy, factor):
@@ -87,6 +74,9 @@ def _scale_geom(geom, cx, cy, factor):
 class ScaleTool(QgsMapTool):
     """Scale features — multi-select → origin → factor."""
 
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
+
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
         self._canvas     = canvas
@@ -101,31 +91,10 @@ class ScaleTool(QgsMapTool):
         self._ref_dist     = 1.0
         self._last_factor  = 1.0
 
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _hit_tol(self):
         return _HIT_PX * self._canvas.mapUnitsPerPixel()
@@ -213,6 +182,7 @@ class ScaleTool(QgsMapTool):
         self._state = _ST_BASE
         n = len(self._sel_features)
         self._log(f"  {n} feature(s) selected  →  click scale origin", "#88ccff")
+        self.promptChanged.emit("Click scale origin:")
 
     def _enter_scale(self, base_pt: QgsPointXY):
         self._base_pt = base_pt
@@ -229,6 +199,7 @@ class ScaleTool(QgsMapTool):
             band.setToGeometry(geom, layer)
             band.setVisible(True)
         self._log("  Click or type scale factor", "#88ccff")
+        self.promptChanged.emit("Click or type scale factor:")
 
     def _update_preview(self, map_pt: QgsPointXY):
         if self._state != _ST_SCALE or not self._base_pt:
@@ -243,6 +214,10 @@ class ScaleTool(QgsMapTool):
         for (layer, fid, geom), band in zip(self._sel_features, self._prev_bands):
             scaled = _scale_geom(geom, cx, cy, factor)
             band.setToGeometry(scaled, layer)
+        self.promptChanged.emit(f"Scale factor <{factor:.3f}>:")
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn:
+            dyn.set_live_value(factor)
 
     def _apply_scale(self, factor: float):
         if not self._base_pt or factor <= 0:
@@ -294,13 +269,19 @@ class ScaleTool(QgsMapTool):
                     self._add_to_selection(layer, fid, feat.geometry())
         if self._sel_features:
             self._log("SCALE", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click scale origin:"
+            self.inputModeChanged.emit("value", "Click scale origin:")
             self._enter_base()
         else:
             self._log("SCALE  ──  select features to scale", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Select features to scale:"
+            self.inputModeChanged.emit("value", "Select features to scale:")
 
     def deactivate(self):
         self._clear_selection()
-        self._hint.hide()
+        self.inputModeChanged.emit("", "")
         self._state   = _ST_SELECT
         self._base_pt = None
         super().deactivate()
@@ -308,7 +289,6 @@ class ScaleTool(QgsMapTool):
     def canvasMoveEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
         self._update_preview(map_pt)
-        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())

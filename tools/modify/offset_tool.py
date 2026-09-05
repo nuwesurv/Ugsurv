@@ -17,8 +17,7 @@ import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -38,23 +37,15 @@ _C_PERP     = _style.RB_OFFSET_GUIDE
 
 _HIT_PX = 10
 
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
 _ST_SELECT    = 0
 _ST_PICK_DIST = 1
-
-_HINT = {
-    _ST_SELECT:    "Click a line to select",
-    _ST_PICK_DIST: "Click to offset  |  type distance",
-}
 
 
 class OffsetTool(QgsMapTool):
     """AutoCAD-style OFFSET — select a line then click or type the distance."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -77,31 +68,10 @@ class OffsetTool(QgsMapTool):
         self._perp_band    = self._make_band(_C_PERP,     width=_style.RB_WIDTH, dashed=True)
         self._perp_band.setVisible(False)
 
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _make_band(self, color, width=_style.RB_WIDTH, dashed=False):
         band = QgsRubberBand(self._canvas, QgsWkbTypes.GeometryType.LineGeometry)
@@ -273,6 +243,10 @@ class OffsetTool(QgsMapTool):
                 if off_geom:
                     self._preview_band.setToGeometry(off_geom, self._sel_layer)
                     self._preview_band.setVisible(True)
+                    self.promptChanged.emit(f"Offset distance <{dist:.3f}m>:")
+                    dyn = getattr(self._ctx, 'dyn_widget', None)
+                    if dyn:
+                        dyn.set_live_value(dist)
                     return
             self._preview_band.setVisible(False)
             self._perp_band.setVisible(False)
@@ -289,6 +263,7 @@ class OffsetTool(QgsMapTool):
         self._state = _ST_PICK_DIST
         self._log(f"  Selected '{lyr.name()}'  —  move cursor to set distance, or click",
                   "#88ccff")
+        self.promptChanged.emit("Offset distance:")
 
     def _deselect(self):
         self._sel_layer = None
@@ -299,6 +274,7 @@ class OffsetTool(QgsMapTool):
         self._perp_band.setVisible(False)
         self._state = _ST_SELECT
         self._log("  Click a line to select for offsetting")
+        self.promptChanged.emit("Click a line to offset:")
 
     # --- Apply ---
 
@@ -365,16 +341,22 @@ class OffsetTool(QgsMapTool):
                     break
         if self._state != _ST_SELECT:
             self._log("OFFSET", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Offset distance:"
+            self.inputModeChanged.emit("value", "Offset distance:")
         else:
             self._log("OFFSET  ──  click a line, then move cursor or type distance",
                       "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click a line to offset:"
+            self.inputModeChanged.emit("value", "Click a line to offset:")
 
     def deactivate(self):
-        self._rm(self._preview_band)
-        self._rm(self._hover_band)
-        self._rm(self._sel_band)
-        self._rm(self._perp_band)
-        self._hint.hide()
+        self._preview_band.setVisible(False)
+        self._hover_band.setVisible(False)
+        self._sel_band.setVisible(False)
+        self._perp_band.setVisible(False)
+        self.inputModeChanged.emit("", "")
         self._state     = _ST_SELECT
         self._sel_layer = None
         self._sel_geom  = None
@@ -384,10 +366,6 @@ class OffsetTool(QgsMapTool):
         map_pt = self.toMapCoordinates(event.pos())
         self._last_map_pt = map_pt
         self._update_preview(map_pt)
-        self._show_hint(event.pos())
-        if self._state == _ST_PICK_DIST and self._sel_geom is not None:
-            dist = self._dist_to_sel(map_pt)
-            self._log(f"  distance: {dist:.4f}")
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:

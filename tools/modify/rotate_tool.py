@@ -15,8 +15,7 @@ import contextlib
 import math
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -38,18 +37,6 @@ _ST_BASE   = 1
 _ST_ANGLE  = 2
 
 _HIT_PX = 10
-
-_HINT = {
-    _ST_SELECT: "Select features",
-    _ST_BASE:   "Click rotation centre",
-    _ST_ANGLE:  "Click to set angle  or  type degrees",
-}
-
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
 
 
 def _rotate_pt(p, cx, cy, cos_a, sin_a):
@@ -111,6 +98,9 @@ def _rotate_geom(geom, cx, cy, angle_deg):
 class RotateTool(QgsMapTool):
     """Rotate features — multi-select → rotation centre → angle."""
 
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
+
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
         self._canvas     = canvas
@@ -124,31 +114,10 @@ class RotateTool(QgsMapTool):
         self._base_pt: QgsPointXY | None = None
         self._last_angle   = 0.0
 
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
-
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
-
-    def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
-        if not text:
-            self._hint.hide()
-            return
-        self._hint.setText(text)
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _hit_tol(self):
         return _HIT_PX * self._canvas.mapUnitsPerPixel()
@@ -236,6 +205,7 @@ class RotateTool(QgsMapTool):
         self._state = _ST_BASE
         n = len(self._sel_features)
         self._log(f"  {n} feature(s) selected  →  click rotation centre", "#88ccff")
+        self.promptChanged.emit("Click rotation centre:")
 
     def _enter_angle(self, base_pt: QgsPointXY):
         self._base_pt = base_pt
@@ -244,6 +214,7 @@ class RotateTool(QgsMapTool):
             band.setToGeometry(geom, layer)
             band.setVisible(True)
         self._log("  Click or type angle in degrees (CCW from east)", "#88ccff")
+        self.promptChanged.emit("Click or type angle in degrees:")
 
     def _update_preview(self, map_pt: QgsPointXY):
         if self._state != _ST_ANGLE or not self._base_pt:
@@ -257,6 +228,10 @@ class RotateTool(QgsMapTool):
             rotated = _rotate_geom(geom, cx, cy, angle_deg)
             band.setToGeometry(rotated, layer)
         self._last_angle = angle_deg
+        self.promptChanged.emit(f"Angle <{angle_deg:.2f}°>:")
+        dyn = getattr(self._ctx, 'dyn_widget', None)
+        if dyn:
+            dyn.set_live_value(angle_deg)
 
     def _apply_rotation(self, angle_deg: float):
         if not self._base_pt:
@@ -308,13 +283,19 @@ class RotateTool(QgsMapTool):
                     self._add_to_selection(layer, fid, feat.geometry())
         if self._sel_features:
             self._log("ROTATE", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Click rotation centre:"
+            self.inputModeChanged.emit("value", "Click rotation centre:")
             self._enter_base()
         else:
             self._log("ROTATE  ──  select features to rotate", "#aaddff")
+            self._last_input_mode   = "value"
+            self._last_input_prompt = "Select features to rotate:"
+            self.inputModeChanged.emit("value", "Select features to rotate:")
 
     def deactivate(self):
         self._clear_selection()
-        self._hint.hide()
+        self.inputModeChanged.emit("", "")
         self._state   = _ST_SELECT
         self._base_pt = None
         super().deactivate()
@@ -322,7 +303,6 @@ class RotateTool(QgsMapTool):
     def canvasMoveEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())
         self._update_preview(map_pt)
-        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         map_pt = self.toMapCoordinates(event.pos())

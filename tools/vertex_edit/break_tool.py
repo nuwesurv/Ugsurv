@@ -14,8 +14,7 @@ Workflow
 import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -29,15 +28,11 @@ _C_BREAK  = _style.RB_DESTROY
 
 _HIT_PX = 10
 
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
-
 class BreakTool(QgsMapTool):
     """BREAK — split a line into two at a clicked point without removing anything."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -55,11 +50,6 @@ class BreakTool(QgsMapTool):
         self._pt_band.setColor(_C_BREAK)
         self._pt_band.setIconSize(8)
         self._pt_band.setVisible(False)
-
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
 
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
@@ -102,18 +92,6 @@ class BreakTool(QgsMapTool):
         if go and callable(go):
             from qgis.PyQt.QtCore import QTimer
             QTimer.singleShot(0, go)
-
-    def _show_hint(self, screen_pos):
-        self._hint.setText("Click line to break")
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _sub_line(self, geom, d_from, d_to):
         if d_to - d_from < 1e-10:
@@ -190,11 +168,14 @@ class BreakTool(QgsMapTool):
         super().activate()
         self._canvas.setFocus()
         self._log("BREAK  ──  click any line to split it  (both halves kept)", "#aaddff")
+        self._last_input_mode   = "value"
+        self._last_input_prompt = "Click a line to break:"
+        self.inputModeChanged.emit("value", "Click a line to break:")
 
     def deactivate(self):
-        self._rm(self._hover_band)
-        self._rm(self._pt_band)
-        self._hint.hide()
+        self._hover_band.setVisible(False)
+        self._pt_band.setVisible(False)
+        self.inputModeChanged.emit("", "")
         super().deactivate()
 
     def canvasMoveEvent(self, event):
@@ -213,7 +194,6 @@ class BreakTool(QgsMapTool):
         else:
             self._hover_band.setVisible(False)
             self._pt_band.setVisible(False)
-        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:

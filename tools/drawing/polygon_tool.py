@@ -61,6 +61,7 @@ class PolygonTool(BaseTool):
         super().activate()
         self._center = None
         self._transition(ToolState.ACTING)
+        self._request_input("value", f"Sides ({self._sides}) or click centre:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type == EventType.VALUE_ENTERED:
@@ -73,6 +74,7 @@ class PolygonTool(BaseTool):
                 return
             if self._center is None:
                 self._center = sem.point
+                self._update_prompt("Click circumradius point or type radius:")
             else:
                 radius = self._center.distance(sem.point)
                 self._commit(self._center, radius)
@@ -99,6 +101,10 @@ class PolygonTool(BaseTool):
                 self._preview_rb.setFillColor(_style.RB_DRAW_FILL)
             geom = _regular_polygon(self._center, r, self._sides, self._inscribed)
             self._preview_rb.setToGeometry(geom)
+            self._update_prompt(f"Radius <{r:.3f}m>:")
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn:
+                dyn.set_live_value(r)
 
     def _commit(self, center: QgsPointXY, radius: float):
         if radius <= 0:

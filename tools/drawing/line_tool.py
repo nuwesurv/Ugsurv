@@ -27,6 +27,7 @@ class LineTool(BaseTool):
         super().activate()
         self._start_pt = None
         self._transition(ToolState.ACTING)
+        self._request_input("polar", "Start point:")
 
     # ── events ────────────────────────────────────────────────────────────
     def _on_event(self, sem: SemanticEvent):
@@ -60,6 +61,7 @@ class LineTool(BaseTool):
             # update ortho/polar reference
             for c in self._ctx.constraints:
                 c.set_reference(pt)
+            self._update_prompt("End point:")
         else:
             self._commit_segment(self._start_pt, pt)
             self._start_pt = pt
@@ -67,6 +69,7 @@ class LineTool(BaseTool):
                 c.set_reference(pt)
             self._clear_rubber_bands()
             self._preview_rb = None
+            self._update_prompt("Next point:")
 
     def _update_preview(self, cursor_pt: QgsPointXY):
         if not self._start_pt:

@@ -30,6 +30,10 @@ class StretchTool(BaseTool):
         self._drag_start = None
         self._crossing_rb: QgsRubberBand | None = None
 
+    def activate(self):
+        super().activate()
+        self._request_input("xy", "Drag crossing window to select vertices:")
+
     def canvasPressEvent(self, event):
         from qgis.PyQt.QtCore import Qt as _Qt
         if event.button() == _Qt.MouseButton.LeftButton:
@@ -85,6 +89,7 @@ class StretchTool(BaseTool):
         if self._caught:
             self._base_pt = None
             self._transition(ToolState.ACTING)
+            self._update_prompt("Click destination point:")
             # rubber-band for preview built on first hover
 
     def _update_crossing_preview(self, start: QgsPointXY, end: QgsPointXY):

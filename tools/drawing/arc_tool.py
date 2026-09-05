@@ -56,16 +56,29 @@ class ArcTool(BaseTool):
         super().activate()
         self._pts.clear()
         self._transition(ToolState.ACTING)
+        self._request_input("xy", "Arc start point:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
             if sem.point:
                 self._pts.append(sem.point)
+                n = len(self._pts)
+                if self._mode == "3pt":
+                    if n == 1:
+                        self._update_prompt("Arc end point:")
+                    elif n == 2:
+                        self._update_prompt("Point on arc:")
+                elif self._mode == "center_angle":
+                    if n == 1:
+                        self._update_prompt("Arc start point (on arc):")
+                    elif n == 2:
+                        self._update_prompt("Arc end point (on arc):")
                 self._try_commit()
 
         elif sem.type == EventType.KEY_CHAR and sem.char == 'C':
             self._mode = "center_angle"
             self._pts.clear()
+            self._request_input("xy", "Arc centre:")
 
         elif sem.type == EventType.CONFIRM:
             self._reset()

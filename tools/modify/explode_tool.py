@@ -14,8 +14,7 @@ Repeat for more features.  Enter / RMB / Esc → exit.
 import contextlib
 
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
-from qgis.PyQt.QtWidgets import QLabel
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
@@ -28,15 +27,11 @@ _C_HOVER = _style.RB_HOVER
 
 _HIT_PX = 10
 
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
-
 class ExplodeTool(QgsMapTool):
     """EXPLODE — break multipart features or polylines into individual parts."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -49,11 +44,6 @@ class ExplodeTool(QgsMapTool):
         self._hover_band.setWidth(_style.RB_WIDTH)
         self._hover_band.setLineStyle(_style.RB_LINE_STYLE)
         self._hover_band.setVisible(False)
-
-        self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
-        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._hint.hide()
 
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
@@ -73,18 +63,6 @@ class ExplodeTool(QgsMapTool):
         if go and callable(go):
             from qgis.PyQt.QtCore import QTimer
             QTimer.singleShot(0, go)
-
-    def _show_hint(self, screen_pos):
-        self._hint.setText("Click feature to explode")
-        self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
-        if pos.x() + self._hint.width() > self._canvas.width():
-            pos.setX(screen_pos.x() - self._hint.width() - 4)
-        if pos.y() + self._hint.height() > self._canvas.height():
-            pos.setY(screen_pos.y() - self._hint.height() - 4)
-        self._hint.move(pos)
-        self._hint.show()
-        self._hint.raise_()
 
     def _vector_layers(self):
         return [
@@ -194,10 +172,13 @@ class ExplodeTool(QgsMapTool):
             "EXPLODE  ──  click a feature to break it apart"
             "  (multipart → parts | polyline → segments)", "#aaddff"
         )
+        self._last_input_mode   = "value"
+        self._last_input_prompt = "Click a feature to explode:"
+        self.inputModeChanged.emit("value", "Click a feature to explode:")
 
     def deactivate(self):
-        self._rm(self._hover_band)
-        self._hint.hide()
+        self._hover_band.setVisible(False)
+        self.inputModeChanged.emit("", "")
         super().deactivate()
 
     def canvasMoveEvent(self, event):
@@ -211,7 +192,6 @@ class ExplodeTool(QgsMapTool):
             self._hover_band.setVisible(True)
         else:
             self._hover_band.setVisible(False)
-        self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:

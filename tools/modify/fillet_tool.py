@@ -84,6 +84,7 @@ class FilletTool(BaseTool):
         super().activate()
         self._first_pick = None
         self._transition(ToolState.ACTING)
+        self._request_input("value", f"Radius ({self._radius:.3f}) or click first edge:")
 
     def _on_event(self, sem: SemanticEvent):
         if sem.type == EventType.VALUE_ENTERED:
@@ -94,11 +95,14 @@ class FilletTool(BaseTool):
                 return
             if self._first_pick is None:
                 self._first_pick = self._pick_line(sem.point)
+                if self._first_pick:
+                    self._update_prompt("Click second edge:")
             else:
                 second = self._pick_line(sem.point)
                 if second:
                     self._apply_fillet(self._first_pick, second)
                 self._first_pick = None
+                self._update_prompt(f"Radius ({self._radius:.3f}) or click first edge:")
 
         elif sem.type == EventType.CONFIRM:
             self._first_pick = None
