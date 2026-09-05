@@ -242,6 +242,8 @@ class SelectTool(BaseTool):
                 eg  = self._endpoint_grip_at(raw)
                 if eg:
                     self._show_endpoint_menu(eg)
+                elif not self._ctx.selection_model.is_empty():
+                    self._show_feature_menu()
                 else:
                     raster = self._find_raster_at(raw)
                     if raster:
@@ -590,6 +592,61 @@ class SelectTool(BaseTool):
             launch = getattr(self._ctx, 'launch_tool', None)
             if launch:
                 launch("crop")
+
+    def _show_feature_menu(self):
+        menu         = QMenu(self.canvas())
+        act_similar  = menu.addAction("Select similar")
+        menu.addSeparator()
+        act_deselect = menu.addAction("Deselect all")
+        chosen = menu.exec_(QCursor.pos())
+        if chosen == act_similar:
+            self._select_similar()
+        elif chosen == act_deselect:
+            self._ctx.selection_model.clear()
+            self._clear_grips()
+            self._show_overlay()
+
+    def _select_similar(self):
+        sel = self._ctx.selection_model
+        # group cad_layer values by QGIS layer — only match same geometry type
+        layer_to_cad_layers: dict[str, set] = {}  # lid → cad_layer values
+        layers_select_all:   set[str]       = set()  # lids with no cad_layer field
+        for lid, fid in list(sel):
+            layer = QgsProject.instance().mapLayer(lid)
+            if layer is None:
+                continue
+            feat = layer.getFeature(fid)
+            if not feat.isValid():
+                continue
+            try:
+                val = feat.attribute('cad_layer')
+                if val is not None:
+                    layer_to_cad_layers.setdefault(lid, set()).add(str(val))
+                else:
+                    layers_select_all.add(lid)
+            except Exception:
+                # layer has no cad_layer field (e.g. _dimensions) — select all on that layer
+                layers_select_all.add(lid)
+        if not layer_to_cad_layers and not layers_select_all:
+            return
+        hits = []
+        for _lid, layer in self._all_geometry_layers():
+            if _lid in layers_select_all:
+                for feat in layer.getFeatures():
+                    hits.append((_lid, feat.id()))
+            else:
+                cad_layers = layer_to_cad_layers.get(_lid)
+                if not cad_layers:
+                    continue
+                quoted = ", ".join(f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in cad_layers)
+                req = QgsFeatureRequest().setFilterExpression(f'"cad_layer" IN ({quoted})')
+                for feat in layer.getFeatures(req):
+                    hits.append((_lid, feat.id()))
+        if hits:
+            sel.add_batch(hits)
+        cmd_dock = getattr(self._ctx, 'cmd_dock', None)
+        if cmd_dock:
+            cmd_dock.log(f"Selected {len(hits)} similar feature(s).", "#aaddff")
 
     # ── extend mode ───────────────────────────────────────────────────────
     def _start_extend(self, grip: 'Grip'):

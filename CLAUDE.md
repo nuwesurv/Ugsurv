@@ -61,9 +61,11 @@ Clear `_picked_fids` in every reset path: `deactivate()`, right-click reset bloc
 
 ## Layer Naming Convention
 
-All plugin-managed QGIS layers use an underscore prefix in their names (e.g. `_circles`, `_lines`, `_points`). This is defined as `LAYER_NAME` constants in each drawer module.
+Most plugin-managed QGIS layers use an underscore prefix in their names (e.g. `_circles`, `_lines`, `_points`). This is defined as `LAYER_NAME` constants in each drawer module.
 
-Any code that branches on layer name must use the underscore-prefixed form. Prefer importing the `LAYER_NAME` constant from the relevant drawer module rather than hardcoding the string.
+**Exception:** The dimensions layer is named `dimensions` (no underscore) — `_DIM_LAYER_NAME = "dimensions"` in `tools/annotation/dimension_tool.py`.
+
+Any code that branches on layer name must use the exact name. Prefer importing the `LAYER_NAME` constant from the relevant drawer module rather than hardcoding the string.
 
 ---
 

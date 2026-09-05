@@ -3,7 +3,7 @@
 DimensionTool (DIM) and AutoDimensionTool (ADIM).
 
 Architecture:
-  - Dedicated "_dimensions" line layer (in the project GeoPackage if saved,
+  - Dedicated "dimensions" line layer (in the project GeoPackage if saved,
     else a memory layer).
   - Each dimension feature is a plain LineString(p1, p2) — the measured segment.
   - The line itself is invisible (QgsNullSymbolRenderer).
@@ -32,7 +32,7 @@ from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType, SnapType
 from ...core import style as _style
 
-_DIM_LAYER_NAME = "_dimensions"
+_DIM_LAYER_NAME = "dimensions"
 _LAYER_EPSG     = 32636
 _LAYER_CRS_AUTH = f"EPSG:{_LAYER_EPSG}"
 

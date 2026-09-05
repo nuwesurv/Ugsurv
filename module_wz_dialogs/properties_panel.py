@@ -202,7 +202,7 @@ class PropertiesDock(QDockWidget):
             self._build_point_rows(feat, geom)
         elif lyr_name == "_hatches" and not geom.isEmpty():
             self._build_hatch_rows(feat)
-        elif lyr_name == "_dimensions" and not geom.isEmpty():
+        elif lyr_name == "dimensions" and not geom.isEmpty():
             self._build_dimension_rows(feat)
         elif not geom.isEmpty():
             self._form.addRow("Type:", self._ro(QgsWkbTypes.displayString(geom.wkbType())))
@@ -867,7 +867,7 @@ class PropertiesDock(QDockWidget):
                     apply_point_color_renderer(self._layer)
                 elif lyr_name == "_hatches":
                     apply_hatch_renderer(self._layer)
-                elif lyr_name == "_dimensions":
+                elif lyr_name == "dimensions":
                     apply_dimension_style(self._layer)
                 self._layer.triggerRepaint()
                 self._deferred_refresh()
