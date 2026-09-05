@@ -19,8 +19,8 @@ _PLUGIN_ICONS_DIR = os.path.join(
 )
 
 try:
-    from .layer_utils import (
-        circle_attrs,
+    from ..tools.layer_utils import circle_attrs
+    from ..core.renderer_utils import (
         apply_circle_color_renderer,
         apply_hatch_renderer,
         apply_polyline_color_renderer,
@@ -63,6 +63,7 @@ class PropertiesDock(QDockWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFocusPolicy(Qt.NoFocus)
 
         self._content = QWidget()
         _outer_vbox = QVBoxLayout(self._content)
@@ -211,7 +212,8 @@ class PropertiesDock(QDockWidget):
     # ------------------------------------------------------------------
 
     def _build_polyline_rows(self, feat, geom):
-        pts       = geom.asPolyline()
+        from qgis.core import QgsPointXY as _Pt
+        pts       = [_Pt(v.x(), v.y()) for v in geom.vertices()]
         is_closed = self._is_closed(pts)
         area_sqm  = QgsGeometry.fromPolygonXY([list(pts)]).area() if is_closed else 0.0
         area_ac   = area_sqm * 0.000247105
@@ -456,7 +458,7 @@ class PropertiesDock(QDockWidget):
                     self._layer.startEditing()
                 self._layer.changeAttributeValue(self._fid, _didx, stored)
                 if stored is not None:
-                    _svg_idx = self._layer.fields().indexOf("Symbol")
+                    _svg_idx = self._layer.fields().lookupField("symbol")
                     if _svg_idx >= 0:
                         if stored.lower() == "basic":
                             self._layer.changeAttributeValue(self._fid, _svg_idx, "basic")
@@ -475,44 +477,28 @@ class PropertiesDock(QDockWidget):
         desc_edit.editingFinished.connect(on_desc_edited)
         self._form.addRow("Description:", desc_edit)
         self._form.addRow(self._sep())
-        self._form.addRow("Color:", self._make_color_button())
-
-        sym_idx = self._layer.fields().indexOf("symbol")
-        sym_combo = QComboBox()
-        for name in ["circle", "square", "triangle", "star", "cross", "x", "diamond"]:
-            sym_combo.addItem(name)
-        current_sym = self._attr(feat, sym_idx)
-        sym_combo.setCurrentText(current_sym if current_sym else "circle")
-
-        def on_sym_changed(text, _idx=sym_idx):
-            if _idx >= 0 and self._fid is not None:
-                if not self._layer.isEditable():
-                    self._layer.startEditing()
-                self._layer.changeAttributeValue(self._fid, _idx, text)
-                self._layer.triggerRepaint()
-
-        sym_combo.currentTextChanged.connect(on_sym_changed)
-        self._form.addRow("Symbol:", sym_combo)
 
         size_idx = self._layer.fields().indexOf("symbol_size")
         current_size = self._attr(feat, size_idx)
-        size_edit = self._edit(f"{float(current_size):.2f}" if current_size is not None else "2.00", "px")
 
-        def on_size_edited(_idx=size_idx):
-            try:
-                s = float(size_edit.text())
-            except ValueError:
-                return
+        size_spin = QDoubleSpinBox()
+        size_spin.setRange(0.1, 500.0)
+        size_spin.setSingleStep(0.5)
+        size_spin.setDecimals(2)
+        size_spin.setSuffix(" px")
+        size_spin.setValue(float(current_size) if current_size is not None else 2.0)
+
+        def on_size_changed(v, _idx=size_idx):
             if _idx >= 0 and self._fid is not None:
                 if not self._layer.isEditable():
                     self._layer.startEditing()
-                self._layer.changeAttributeValue(self._fid, _idx, round(s, 3))
+                self._layer.changeAttributeValue(self._fid, _idx, round(v, 3))
                 self._layer.triggerRepaint()
 
-        size_edit.editingFinished.connect(on_size_edited)
-        self._form.addRow("Size:", size_edit)
+        size_spin.valueChanged.connect(on_size_changed)
+        self._form.addRow("Size:", size_spin)
 
-        svg_idx     = self._layer.fields().indexOf("Symbol")
+        svg_idx     = self._layer.fields().lookupField("symbol")
         current_svg = self._attr(feat, svg_idx) or ""
 
         self._form.addRow(self._sep())
@@ -914,7 +900,7 @@ class PropertiesDock(QDockWidget):
         if geom.isEmpty():
             return
 
-        pts              = list(geom.asPolyline())
+        pts              = [QgsPointXY(v.x(), v.y()) for v in geom.vertices()]
         currently_closed = self._is_closed(pts)
 
         if want_closed == currently_closed:

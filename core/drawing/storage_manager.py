@@ -32,13 +32,15 @@ _LAYER_EPSG = 32636   # WGS 84 / UTM Zone 36N — all geometry stored here
 from qgis.PyQt.QtCore import QVariant
 
 try:
-    from ...module_wz_dialogs.layer_utils import (
+    from ..renderer_utils import (
         apply_polyline_color_renderer,
         apply_point_color_renderer,
+        apply_point_label_style,
     )
 except Exception:
     def apply_polyline_color_renderer(layer): pass
     def apply_point_color_renderer(layer): pass
+    def apply_point_label_style(layer): pass
 
 
 def _geom_has_circular_string(geom: QgsGeometry) -> bool:
@@ -306,6 +308,7 @@ class StorageManager(QObject):
         self._ensure_extra_point_fields()
         if self._layer_alive(lyr):
             apply_point_color_renderer(lyr)
+            apply_point_label_style(lyr)
 
     def _ensure_extra_point_fields(self):
         """Add any missing columns to the points layer (safe no-op if all exist)."""
@@ -462,6 +465,7 @@ class StorageManager(QObject):
             apply_polyline_color_renderer(self._lines_layer)
         if self._layer_alive(self._points_layer):
             apply_point_color_renderer(self._points_layer)
+            apply_point_label_style(self._points_layer)
 
 
     def _migrate_points_to_point(self, path: str, old_lyr: QgsVectorLayer) -> QgsVectorLayer | None:

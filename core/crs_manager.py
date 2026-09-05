@@ -18,7 +18,7 @@ and a warning is shown.
 
 import contextlib
 
-from qgis.PyQt.QtCore import QObject, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QObject, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QFont
 from qgis.PyQt.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
@@ -42,8 +42,8 @@ ALLOWED_EPSG: frozenset[int] = frozenset({
 _SHORT: dict[int, str] = {
     32635: "WGS84 35N",  32636: "WGS84 36N",
     32735: "WGS84 35S",  32736: "WGS84 36S",
-    21035: "Arc60 35N",  21036: "Arc60 36N",
-    21095: "Arc60 35S",  21096: "Arc60 36S",
+    21095: "Arc60 35N",  21096: "Arc60 36N",
+    21035: "Arc60 35S",  21036: "Arc60 36S",
 }
 
 
@@ -271,6 +271,14 @@ class CrsManager(QObject):
         self.crsLabelChanged.emit(self.short_label)
 
     def _on_crs_changed(self):
+        if self._reverting:
+            return
+        # Defer: crsChanged can fire before QgsProject.crs() is updated,
+        # causing the badge to read the previous CRS. One event-loop tick is
+        # enough for the project state to settle.
+        QTimer.singleShot(0, self._apply_crs_change)
+
+    def _apply_crs_change(self):
         if self._reverting:
             return
         epsg = self._project_epsg()

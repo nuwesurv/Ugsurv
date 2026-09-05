@@ -300,6 +300,14 @@ class Ugsurv:
 
         sel.selectionChanged.connect(_on_props_sel_changed)
         self._props_sel_slot = _on_props_sel_changed
+
+        def _on_geom_changed_by_props(layer, fid):
+            tool = canvas.mapTool()
+            if tool and hasattr(tool, '_rebuild_grips'):
+                tool._rebuild_grips()
+
+        props_dock.geometry_changed.connect(_on_geom_changed_by_props)
+        self._props_geom_slot = _on_geom_changed_by_props
         self._sel = sel
 
         layers_dock = CadLayersDock(cad_lyr_mgr, sel, storage, mw)

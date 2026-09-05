@@ -1,45 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-Renderer helpers used by PropertiesDock.
+Renderer helpers shared across the plugin.
 
 apply_point_color_renderer  — builds a rule-based renderer for the _points
-    layer:  null/empty Symbol → basic white circle;
-            non-empty Symbol  → SVG marker using the path stored in Symbol.
+    layer: null/empty Symbol → basic white circle;
+           non-empty Symbol  → SVG marker using the path stored in Symbol.
 
-The other apply_* functions are stubs kept so the import block in
-properties_panel.py stays intact while those renderers are added later.
+The other apply_* functions are stubs kept so callers compile while those
+renderers are added later.
 """
 
-import math
 import os
 
 from qgis.core import (
+    QgsExpression,
     QgsLineSymbol,
     QgsMarkerSymbol,
+    QgsPalLayerSettings,
     QgsProperty,
     QgsRuleBasedRenderer,
     QgsSingleSymbolRenderer,
     QgsSymbolLayer,
     QgsSvgMarkerSymbolLayer,
+    QgsTextBufferSettings,
+    QgsTextFormat,
+    QgsUnitTypes,
+    QgsVectorLayerSimpleLabeling,
 )
+from qgis.PyQt.QtGui import QColor, QFont
 
-
-# ── re-export so properties_panel.py can import circle_attrs from here ────────
-
-def circle_attrs(cx: float, cy: float, radius: float) -> dict:
-    circumference = 2 * math.pi * radius
-    area_sqm      = math.pi * radius ** 2
-    return {
-        "center_x":      round(cx, 6),
-        "center_y":      round(cy, 6),
-        "radius":        round(radius, 6),
-        "circumference": round(circumference, 6),
-        "area_sqm":      round(area_sqm, 6),
-        "area_acres":    round(area_sqm * 0.000247105, 8),
-    }
-
-
-# ── point layer renderer ──────────────────────────────────────────────────────
 
 def apply_point_color_renderer(layer) -> None:
     """Rebuild the points layer renderer.
@@ -50,25 +39,26 @@ def apply_point_color_renderer(layer) -> None:
     """
     root = QgsRuleBasedRenderer.Rule(None)
 
-    # Collect unique SVG paths currently stored in the layer
     svg_paths = set()
+    sym_fld_idx = layer.fields().lookupField("symbol")
     for feat in layer.getFeatures():
-        val = feat["Symbol"]
-        if val and val != "basic" and isinstance(val, str):
+        val = feat.attribute(sym_fld_idx) if sym_fld_idx >= 0 else None
+        if val and isinstance(val, str) and val.lower().endswith(".svg"):
             svg_paths.add(val)
 
-    # One explicit rule per unique SVG path
     for path in sorted(svg_paths):
-        escaped = path.replace("'", "''")
-        svg_sl  = QgsSvgMarkerSymbolLayer(path, 8.0)
+        svg_sl = QgsSvgMarkerSymbolLayer(path, 8.0)
+        svg_sl.setDataDefinedProperty(
+            QgsSymbolLayer.PropertySize,
+            QgsProperty.fromExpression("coalesce(\"symbol_size\", 8.0)"),
+        )
         svg_sym = QgsMarkerSymbol()
         svg_sym.changeSymbolLayer(0, svg_sl)
         rule = QgsRuleBasedRenderer.Rule(svg_sym)
         rule.setLabel(os.path.splitext(os.path.basename(path))[0])
-        rule.setFilterExpression(f'"Symbol" = \'{escaped}\'')
+        rule.setFilterExpression(f'"symbol" = {QgsExpression.quotedString(path)}')
         root.appendChild(rule)
 
-    # Else rule — shape/color/size driven by feature attributes
     basic_sym = QgsMarkerSymbol.createSimple({
         "name":               "circle",
         "color":              "255,255,255,255",
@@ -81,7 +71,7 @@ def apply_point_color_renderer(layer) -> None:
     sl = basic_sym.symbolLayer(0)
     sl.setDataDefinedProperty(
         QgsSymbolLayer.PropertyName,
-        QgsProperty.fromExpression("coalesce(\"symbol\", 'circle')"),
+        QgsProperty.fromExpression("coalesce(nullif(\"symbol\", 'basic'), 'circle')"),
     )
     sl.setDataDefinedProperty(
         QgsSymbolLayer.PropertyFillColor,
@@ -100,10 +90,32 @@ def apply_point_color_renderer(layer) -> None:
     layer.setRenderer(QgsRuleBasedRenderer(root))
 
 
-# ── stubs for other layer types (implemented elsewhere / not yet needed) ──────
+def apply_point_label_style(layer) -> None:
+    """Label points with the Description field: Open Sans 8pt Bold Italic, 0.8 mm white buffer."""
+    fmt = QgsTextFormat()
+    font = QFont("Open Sans", 8)
+    font.setBold(True)
+    font.setItalic(True)
+    fmt.setFont(font)
+    fmt.setSize(8)
+    fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
+    fmt.setColor(QColor(50, 50, 50, 255))
 
-def apply_circle_color_renderer(layer) -> None:
-    pass
+    buf = QgsTextBufferSettings()
+    buf.setEnabled(True)
+    buf.setSize(0.8)
+    buf.setSizeUnit(QgsUnitTypes.RenderMillimeters)
+    buf.setColor(QColor(250, 250, 250, 255))
+    buf.setFillBufferInterior(False)
+    fmt.setBuffer(buf)
+
+    pal = QgsPalLayerSettings()
+    pal.fieldName = "Description"
+    pal.isExpression = False
+    pal.setFormat(fmt)
+
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+    layer.setLabelsEnabled(True)
 
 
 def apply_polyline_color_renderer(layer) -> None:
@@ -117,6 +129,10 @@ def apply_polyline_color_renderer(layer) -> None:
         "capstyle":        "square",
     })
     layer.setRenderer(QgsSingleSymbolRenderer(sym))
+
+
+def apply_circle_color_renderer(layer) -> None:
+    pass
 
 
 def apply_hatch_renderer(layer) -> None:

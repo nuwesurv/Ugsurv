@@ -52,6 +52,7 @@ class Grip:
     pt:          QgsPointXY
     marker:      object = None   # QgsVertexMarker
     is_endpoint: bool   = False  # True for first/last vertex of a single-part line
+    mirror_idx:  int    = -1     # index of coincident closing vertex (closed polylines)
 
 
 class GripEditTool(BaseTool):
@@ -112,7 +113,19 @@ class GripEditTool(BaseTool):
             is_multi = geom.isMultipart()
             verts    = list(geom.vertices())
             n        = len(verts)
+
+            # Detect closed polyline: first and last vertex coincident (≤1 mm).
+            # For closed lines we show only one grip at the shared endpoint and
+            # store the closing vertex index in mirror_idx so both are updated.
+            closing_skip = -1   # vertex index to omit (the redundant closing vertex)
+            if is_line and not is_multi and n >= 3:
+                if math.hypot(verts[0].x() - verts[-1].x(),
+                              verts[0].y() - verts[-1].y()) < 1e-3:
+                    closing_skip = n - 1
+
             for i, v in enumerate(verts):
+                if i == closing_skip:
+                    continue   # skip stacked duplicate; grip[0] carries mirror_idx
                 pt    = QgsPointXY(v.x(), v.y())
                 is_ep = is_line and not is_multi and n >= 2 and (i == 0 or i == n - 1)
                 marker = QgsVertexMarker(self.canvas())
@@ -120,7 +133,10 @@ class GripEditTool(BaseTool):
                 marker.setColor(_style.GRIP_COLOR)
                 marker.setIconSize(10)
                 marker.setIconType(QgsVertexMarker.ICON_BOX)
-                self._grips.append(Grip(lid, fid, i, pt, marker, is_endpoint=is_ep))
+                grip = Grip(lid, fid, i, pt, marker, is_endpoint=is_ep)
+                if i == 0 and closing_skip >= 0:
+                    grip.mirror_idx = closing_skip
+                self._grips.append(grip)
 
     def _clear_grips(self):
         for g in self._grips:
@@ -596,6 +612,8 @@ class GripEditTool(BaseTool):
             return
         geom  = QgsGeometry.fromWkt(wkt)
         moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
+        if grip.mirror_idx >= 0:
+            moved = _replace_vertex(moved, grip.mirror_idx, new_pt)
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
                 moved.type(), _style.RB_PREVIEW, _style.RB_WIDTH
@@ -611,6 +629,8 @@ class GripEditTool(BaseTool):
             return
         geom  = QgsGeometry.fromWkt(wkt)
         moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
+        if grip.mirror_idx >= 0:
+            moved = _replace_vertex(moved, grip.mirror_idx, new_pt)
         if not layer.isEditable():
             layer.startEditing()
         layer.changeGeometry(grip.fid, moved)
