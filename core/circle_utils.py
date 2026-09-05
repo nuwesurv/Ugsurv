@@ -14,7 +14,7 @@ import math
 
 from qgis.core import (
     QgsGeometry, QgsPointXY, QgsPoint,
-    QgsCircularString, QgsWkbTypes,
+    QgsCircularString, QgsCompoundCurve, QgsWkbTypes,
 )
 
 
@@ -56,7 +56,11 @@ def circle_params(geom: QgsGeometry) -> tuple[QgsPointXY, float]:
 
 
 def build_circle_geom(center: QgsPointXY, radius: float) -> QgsGeometry:
-    """Build a QgsCircularString circle geometry from center + radius."""
+    """Build a circle geometry (CompoundCurve wrapping CircularString) from center + radius.
+
+    The circles layer uses CompoundCurve as its WKB type, so returning a bare
+    CircularString causes the data provider to reject the geometry at commit time.
+    """
     cx, cy, r = center.x(), center.y(), radius
     cs = QgsCircularString()
     cs.setPoints([
@@ -66,7 +70,9 @@ def build_circle_geom(center: QgsPointXY, radius: float) -> QgsGeometry:
         QgsPoint(cx,     cy + r),
         QgsPoint(cx + r, cy),
     ])
-    return QgsGeometry(cs)
+    cc = QgsCompoundCurve()
+    cc.addCurve(cs)
+    return QgsGeometry(cc)
 
 
 def _circle_attr_dict(cx: float, cy: float, radius: float) -> dict:

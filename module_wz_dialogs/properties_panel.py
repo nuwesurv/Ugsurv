@@ -10,7 +10,7 @@ from qgis.PyQt.QtWidgets import (
     QScrollArea, QSpinBox, QDoubleSpinBox, QWidget, QVBoxLayout,
 )
 from qgis.core import (
-    QgsApplication, QgsCircularString, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
+    QgsApplication, QgsCircularString, QgsCompoundCurve, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
 )
 
 _PLUGIN_ICONS_DIR = os.path.join(
@@ -166,7 +166,9 @@ class PropertiesDock(QDockWidget):
             QgsPoint(cx,          cy - radius),
             QgsPoint(cx + radius, cy),
         ])
-        return QgsGeometry(cs)
+        cc = QgsCompoundCurve()
+        cc.addCurve(cs)
+        return QgsGeometry(cc)
 
     # ------------------------------------------------------------------
     # Main refresh
