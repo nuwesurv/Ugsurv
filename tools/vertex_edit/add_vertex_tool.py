@@ -77,7 +77,7 @@ class AddVertexTool(BaseTool):
         new_pts = pts[:self._insert_idx] + [cursor_pt] + pts[self._insert_idx:]
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.PREVIEW_DRAW, 1
+                QgsWkbTypes.LineGeometry, _style.PREVIEW_DRAW, _style.RB_WIDTH
             )
         g = QgsGeometry.fromPolylineXY(new_pts)
         self._preview_rb.setToGeometry(g)

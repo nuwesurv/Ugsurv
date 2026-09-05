@@ -419,7 +419,7 @@ class GripEditTool(BaseTool):
 
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1
+                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, _style.RB_WIDTH
             )
         self._preview_rb.reset(QgsWkbTypes.LineGeometry)
         for i, p in enumerate(preview):
@@ -517,7 +517,7 @@ class GripEditTool(BaseTool):
 
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, 1
+                QgsWkbTypes.LineGeometry, _style.RB_PREVIEW, _style.RB_WIDTH
             )
         self._preview_rb.reset(QgsWkbTypes.LineGeometry)
         self._preview_rb.addPoint(anchor, False)
@@ -591,7 +591,7 @@ class GripEditTool(BaseTool):
         moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
-                moved.type(), _style.RB_PREVIEW, 1
+                moved.type(), _style.RB_PREVIEW, _style.RB_WIDTH
             )
         self._preview_rb.setToGeometry(moved)
 

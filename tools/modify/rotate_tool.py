@@ -297,7 +297,20 @@ class RotateTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("ROTATE  ──  select features to rotate", "#aaddff")
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in sel:
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._add_to_selection(layer, fid, feat.geometry())
+        if self._sel_features:
+            self._log("ROTATE", "#aaddff")
+            self._enter_base()
+        else:
+            self._log("ROTATE  ──  select features to rotate", "#aaddff")
 
     def deactivate(self):
         self._clear_selection()

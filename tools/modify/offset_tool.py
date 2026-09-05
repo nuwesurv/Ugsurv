@@ -351,8 +351,23 @@ class OffsetTool(QgsMapTool):
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("OFFSET  ──  click a line, then move cursor or type distance",
-                  "#aaddff")
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in sel:
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                if QgsWkbTypes.geometryType(layer.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
+                    continue
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._select_feature(layer, feat)
+                    break
+        if self._state != _ST_SELECT:
+            self._log("OFFSET", "#aaddff")
+        else:
+            self._log("OFFSET  ──  click a line, then move cursor or type distance",
+                      "#aaddff")
 
     def deactivate(self):
         self._rm(self._preview_band)

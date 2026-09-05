@@ -2,55 +2,62 @@
 """
 AutoCAD-style TRIM tool.
 
-Two-phase workflow:
-  Phase 1 – Select cutting edges
-      Click lines (highlighted cyan).  Enter/RMB → advance.
-      (Enter/RMB with nothing selected → treat ALL lines as cutting edges.)
+Workflow
+────────
+Phase 1  (_ST_SELECT)
+    Click line features to designate them as cutting edges (cyan highlight).
+    Shift+click removes a cutting edge.
+    Enter / RMB with no edge selected  → every line on the map becomes a cutting edge.
+    Enter / RMB with edges selected    → those edges are confirmed.
 
-  Phase 2 – Trim
-      Hover: orange dashed preview shows segment under cursor.
-      Click: marks segment red.  Click again to deselect.
-      Enter/RMB → trim ALL marked segments at once, exit.
-      Esc → cancel.
+Phase 2  (_ST_TRIM)
+    Hover near any line.  The preview rubber band shows the segment under the
+    cursor between the nearest pair of cutting-edge intersections.
+    Left-click → mark that segment for removal (red highlight).
+    Shift+left-click → unmark a previously marked segment.
+    Enter / RMB → trim all marked segments at once, then exit.
+    Esc → exit without trimming.
 """
 
 import contextlib
 
-from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.PyQt.QtCore import Qt, QPoint
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
+from qgis.PyQt.QtCore import Qt, QPoint, pyqtSignal
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
     QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
     QgsRectangle, QgsVectorLayer, QgsWkbTypes,
 )
 
-from ...core.events import EventType
+from ...core.events import EventType, SnapType
 from ...core import style as _style
 
-_C_EDGE     = _style.RB_EDGE
-_C_PREVIEW  = _style.RB_PREVIEW
-_C_SELECTED = _style.RB_DESTROY
-_C_HOVER    = _style.RB_HOVER
+_SNAP_ICONS = {
+    SnapType.VERTEX:        (_style.SNAP_ICON['endpoint'],     _style._CC_COLOR),
+    SnapType.POINT:         (_style.SNAP_ICON['point'],        _style._CC_COLOR),
+    SnapType.MIDPOINT:      (_style.SNAP_ICON['midpoint'],     _style._CC_COLOR),
+    SnapType.CENTER:        (_style.SNAP_ICON['center'],       _style._CC_COLOR),
+    SnapType.INTERSECTION:  (_style.SNAP_ICON['intersection'], _style._CC_COLOR),
+    SnapType.PERPENDICULAR: (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.EXTENSION:     (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.NEAREST:       (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.SELF:          (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.GRID:          (QgsVertexMarker.ICON_CROSS,       _style.SNAP_GRID_COLOR),
+}
 
-_ST_SELECT = 0
-_ST_TRIM   = 1
+# ── state constants ────────────────────────────────────────────────────────────
+_ST_SELECT = 0   # selecting cutting edges
+_ST_TRIM   = 1   # marking segments for removal
 
 _HIT_PX = 10
 
-_HINT_STYLE = (
-    "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
-    "border:1px solid rgba(255,255,255,80);border-radius:4px;"
-    "padding:3px 8px;font-size:9pt;}"
-)
-
-_HINT = {
-    _ST_SELECT: "Click cutting edges",
-    _ST_TRIM:   "Click segment to mark for trim",
-}
-
 
 class TrimTool(QgsMapTool):
-    """AutoCAD-style TRIM tool — multi-select segments then confirm all at once."""
+
+    inputModeChanged = pyqtSignal(str, str)
+    promptChanged    = pyqtSignal(str)
+
+    # ── construction ───────────────────────────────────────────────────────────
 
     def __init__(self, canvas, ctx, translator):
         super().__init__(canvas)
@@ -58,37 +65,55 @@ class TrimTool(QgsMapTool):
         self._ctx        = ctx
         self._translator = translator
 
-        self._state           = _ST_SELECT
-        self._cutting_edges   = []
-        self._cutting_bands   = []
-        self._modified_layers = set()
+        self._state = _ST_SELECT
 
-        self._preview_band = self._make_band(_C_PREVIEW, width=_style.RB_WIDTH, dashed=True)
-        self._preview_band.setVisible(False)
-        self._hover_band   = self._make_band(_C_HOVER,   width=_style.RB_WIDTH, dashed=True)
+        # Phase 1 — cutting edges
+        self._cutting_edges = []   # [(QgsVectorLayer, fid), ...]
+        self._cutting_bands = []   # parallel QgsRubberBand list
+
+        # Rubber bands
+        self._hover_band   = self._make_band(_style.RB_HOVER,    dashed=False)
+        self._preview_band = self._make_band(_style.RB_PREVIEW,  dashed=True)
         self._hover_band.setVisible(False)
+        self._preview_band.setVisible(False)
 
-        self._pending_trims  = []
-        self._selected_bands = []
+        # Phase 2 — segments marked for removal
+        self._pending_trims  = []   # [(layer, fid, orig_geom, boundaries, trim_idx), ...]
+        self._selected_bands = []   # parallel QgsRubberBand list
 
+        self._modified_layers = set()
+        self._snap_marker = None
+
+        # Cursor-side hint label
         self._hint = QLabel(canvas)
-        self._hint.setStyleSheet(_HINT_STYLE)
+        self._hint.setStyleSheet(
+            "QLabel{background:rgba(20,20,20,210);color:#f0f0f0;"
+            "border:1px solid rgba(255,255,255,80);border-radius:4px;"
+            "padding:3px 8px;font-size:9pt;}"
+        )
         self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.hide()
+
+    # ── logging & hint ─────────────────────────────────────────────────────────
 
     def _log(self, msg, color="#cccccc"):
         dock = getattr(self._ctx, 'cmd_dock', None)
         if dock:
             dock.log(msg, color)
 
+    _HINTS = {
+        _ST_SELECT: "Click cutting edges  (Enter = all lines)",
+        _ST_TRIM:   "Click segment to mark for trim",
+    }
+
     def _show_hint(self, screen_pos):
-        text = _HINT.get(self._state, "")
+        text = self._HINTS.get(self._state, "")
         if not text:
             self._hint.hide()
             return
         self._hint.setText(text)
         self._hint.adjustSize()
-        pos = screen_pos + QPoint(10, 14)
+        pos = screen_pos + QPoint(12, 16)
         if pos.x() + self._hint.width() > self._canvas.width():
             pos.setX(screen_pos.x() - self._hint.width() - 4)
         if pos.y() + self._hint.height() > self._canvas.height():
@@ -97,10 +122,12 @@ class TrimTool(QgsMapTool):
         self._hint.show()
         self._hint.raise_()
 
-    def _make_band(self, color, width=_style.RB_WIDTH, dashed=False):
+    # ── rubber-band helpers ────────────────────────────────────────────────────
+
+    def _make_band(self, color, dashed=False):
         band = QgsRubberBand(self._canvas, QgsWkbTypes.GeometryType.LineGeometry)
         band.setColor(color)
-        band.setWidth(width)
+        band.setWidth(_style.RB_WIDTH)
         band.setLineStyle(_style.RB_LINE_STYLE)
         return band
 
@@ -109,11 +136,40 @@ class TrimTool(QgsMapTool):
             with contextlib.suppress(Exception):
                 self._canvas.scene().removeItem(item)
 
-    def _go_home(self):
-        go = getattr(self._ctx, 'go_home', None)
-        if go and callable(go):
-            from qgis.PyQt.QtCore import QTimer
-            QTimer.singleShot(0, go)
+    # ── snap marker ────────────────────────────────────────────────────────────
+
+    def _snapped(self, raw_pt):
+        engine = getattr(self._ctx, 'snap_engine', None)
+        if engine:
+            result = engine.resolve(raw_pt, self._canvas)
+            if result:
+                self._show_snap_marker(result.point, result.snap_type)
+                return result.point
+        self._hide_snap_marker()
+        return raw_pt
+
+    def _show_snap_marker(self, pt, snap_type):
+        icon, color = _SNAP_ICONS.get(snap_type, (QgsVertexMarker.ICON_BOX, _style._CC_COLOR))
+        if self._snap_marker is None:
+            self._snap_marker = QgsVertexMarker(self._canvas)
+            self._snap_marker.setIconSize(_style.SNAP_ICON_SIZE)
+            self._snap_marker.setPenWidth(_style.SNAP_PEN_WIDTH)
+        self._snap_marker.setIconType(icon)
+        self._snap_marker.setColor(color)
+        self._snap_marker.setCenter(pt)
+        self._snap_marker.show()
+
+    def _hide_snap_marker(self):
+        if self._snap_marker:
+            self._snap_marker.hide()
+
+    def _clear_snap_marker(self):
+        if self._snap_marker is not None:
+            with contextlib.suppress(Exception):
+                self._canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
+
+    # ── geometry helpers ───────────────────────────────────────────────────────
 
     def _hit_tol(self):
         return _HIT_PX * self._canvas.mapUnitsPerPixel()
@@ -127,23 +183,81 @@ class TrimTool(QgsMapTool):
         ]
 
     def _find_line_near(self, map_pt):
-        tol        = self._hit_tol()
-        rect       = QgsRectangle(map_pt.x()-tol, map_pt.y()-tol,
-                                  map_pt.x()+tol, map_pt.y()+tol)
-        click_geom = QgsGeometry.fromPointXY(map_pt)
+        """Return (layer, feat) for the closest line within hit tolerance, or (None, None)."""
+        tol  = self._hit_tol()
+        rect = QgsRectangle(map_pt.x()-tol, map_pt.y()-tol,
+                            map_pt.x()+tol, map_pt.y()+tol)
+        pt_geom = QgsGeometry.fromPointXY(map_pt)
         best_layer, best_feat, best_d = None, None, float('inf')
         for lyr in self._line_layers():
             for feat in lyr.getFeatures(rect):
                 if feat.geometry().isEmpty():
                     continue
-                d = feat.geometry().distance(click_geom)
+                d = feat.geometry().distance(pt_geom)
                 if d < best_d:
-                    best_d     = d
-                    best_layer = lyr
-                    best_feat  = feat
-        if best_d <= tol:
-            return best_layer, best_feat
-        return None, None
+                    best_d, best_layer, best_feat = d, lyr, feat
+        return (best_layer, best_feat) if best_d <= tol else (None, None)
+
+    # ── Phase 1: cutting edge management ──────────────────────────────────────
+
+    def _add_cutting_edge(self, layer, feat):
+        key  = (id(layer), feat.id())
+        keys = [(id(l), f) for l, f in self._cutting_edges]
+        if key in keys:
+            self._log("  Already a cutting edge")
+            return
+        self._cutting_edges.append((layer, feat.id()))
+        band = self._make_band(_style.RB_EDGE)
+        band.setToGeometry(feat.geometry(), layer)
+        self._cutting_bands.append(band)
+        self._log(f"  Cutting edge: '{layer.name()}' fid {feat.id()}"
+                  f"  ({len(self._cutting_edges)} selected)")
+
+    def _remove_cutting_edge(self, layer, feat):
+        key  = (id(layer), feat.id())
+        keys = [(id(l), f) for l, f in self._cutting_edges]
+        if key not in keys:
+            return
+        idx = keys.index(key)
+        self._cutting_edges.pop(idx)
+        self._rm(self._cutting_bands.pop(idx))
+        self._log(f"  Removed cutting edge  ({len(self._cutting_edges)} remaining)")
+
+    def _clear_cutting_edges(self):
+        for band in self._cutting_bands:
+            self._rm(band)
+        self._cutting_bands = []
+        self._cutting_edges = []
+
+    def _advance_to_trim(self):
+        """Confirm cutting edges and enter Phase 2."""
+        if not self._cutting_edges:
+            for lyr in self._line_layers():
+                for feat in lyr.getFeatures():
+                    if feat.geometry().isEmpty():
+                        continue
+                    self._cutting_edges.append((lyr, feat.id()))
+                    band = self._make_band(_style.RB_EDGE)
+                    band.setToGeometry(feat.geometry(), lyr)
+                    self._cutting_bands.append(band)
+            self._log(f"  All lines as cutting edges  ({len(self._cutting_edges)} features)")
+        else:
+            self._log(f"  {len(self._cutting_edges)} cutting edge(s) confirmed")
+
+        self._state = _ST_TRIM
+        self._log("  Click segments to mark for removal", "#88ccff")
+
+    # ── Phase 2: trim logic ────────────────────────────────────────────────────
+
+    def _cutting_geoms_for(self, exclude_layer=None, exclude_fid=None):
+        geoms = []
+        for lyr, fid in self._cutting_edges:
+            if lyr is exclude_layer and fid == exclude_fid:
+                continue
+            f = lyr.getFeature(fid)
+            if f.isValid() and not f.geometry().isEmpty():
+                geoms.append(f.geometry())
+        return geoms
 
     def _intersection_dists(self, line_geom, cutting_geoms):
         dists = set()
@@ -192,9 +306,7 @@ class TrimTool(QgsMapTool):
         if not e.isEmpty():
             p = e.asPoint()
             pts.append(QgsPointXY(p.x(), p.y()))
-        if len(pts) >= 2:
-            return QgsGeometry.fromPolylineXY(pts)
-        return None
+        return QgsGeometry.fromPolylineXY(pts) if len(pts) >= 2 else None
 
     def _trim_interval(self, line_geom, cutting_geoms, click_pt):
         dists = self._intersection_dists(line_geom, cutting_geoms)
@@ -210,44 +322,13 @@ class TrimTool(QgsMapTool):
                 break
         return trim_idx, boundaries
 
-    def _cutting_geoms_for(self, exclude_layer=None, exclude_fid=None):
-        geoms = []
-        for lyr, fid in self._cutting_edges:
-            if lyr is exclude_layer and fid == exclude_fid:
-                continue
-            f = lyr.getFeature(fid)
-            if f.isValid() and not f.geometry().isEmpty():
-                geoms.append(f.geometry())
-        return geoms
-
     def _pending_key(self, layer, fid, trim_idx):
         return (id(layer), fid, trim_idx)
 
-    def _update_cutting_edge(self, layer, feat, shift=False):
-        key  = (id(layer), feat.id())
-        keys = [(id(lyr), fid) for lyr, fid in self._cutting_edges]
-        if shift:
-            if key in keys:
-                idx = keys.index(key)
-                self._cutting_edges.pop(idx)
-                self._rm(self._cutting_bands.pop(idx))
-                self._log(f"  Deselected: '{layer.name()}' fid {feat.id()}"
-                          f"  ({len(self._cutting_edges)} selected)")
-        else:
-            if key not in keys:
-                self._cutting_edges.append((layer, feat.id()))
-                band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
-                band.setToGeometry(feat.geometry(), layer)
-                self._cutting_bands.append(band)
-                self._log(f"  Cutting edge: '{layer.name()}' fid {feat.id()}"
-                          f"  ({len(self._cutting_edges)} selected)")
-            else:
-                self._log(f"  Already selected")
-
-    def _update_mark(self, layer, feat, click_pt, shift=False):
+    def _mark_segment(self, layer, feat, click_pt, shift=False):
         line_geom = feat.geometry()
         if line_geom.isEmpty() or line_geom.isMultipart():
-            self._log("  Multipart geometry — trim not supported (use single-part lines)")
+            self._log("  Multipart geometry — trim not supported")
             return
 
         cutting = self._cutting_geoms_for(exclude_layer=layer, exclude_fid=feat.id())
@@ -257,37 +338,44 @@ class TrimTool(QgsMapTool):
 
         trim_idx, boundaries = self._trim_interval(line_geom, cutting, click_pt)
         if trim_idx is None:
-            self._log("  No intersection with cutting edges found on this line")
+            self._log("  No intersection with cutting edges found")
             return
 
         key = self._pending_key(layer, feat.id(), trim_idx)
-        existing_keys = [
+        existing = [
             self._pending_key(lyr, fid, ti)
             for lyr, fid, _, _, ti in self._pending_trims
         ]
 
         if shift:
-            if key in existing_keys:
-                idx = existing_keys.index(key)
+            if key in existing:
+                idx = existing.index(key)
                 self._pending_trims.pop(idx)
                 self._rm(self._selected_bands.pop(idx))
-                self._log(f"  Deselected segment  ({len(self._pending_trims)} marked)")
+                self._log(f"  Unmarked segment  ({len(self._pending_trims)} marked)")
         else:
-            if key in existing_keys:
-                self._log(f"  Segment already marked")
+            if key in existing:
+                self._log("  Segment already marked")
             else:
                 d_a, d_b = boundaries[trim_idx], boundaries[trim_idx + 1]
                 sub = self._sub_line(line_geom, d_a, d_b)
                 if sub is None:
                     return
                 self._pending_trims.append((layer, feat.id(), line_geom, boundaries, trim_idx))
-                band = self._make_band(_C_SELECTED, width=_style.RB_WIDTH_THICK)
+                band = self._make_band(_style.RB_DESTROY)
+                band.setWidth(_style.RB_WIDTH_THICK)
                 band.setToGeometry(sub, layer)
                 self._selected_bands.append(band)
                 n = len(self._pending_trims)
-                self._log(f"  Marked  {d_b - d_a:.3f} u  on '{layer.name()}'  ({n} segment(s) selected)")
+                self._log(f"  Marked  {d_b - d_a:.3f} m  on '{layer.name()}'  ({n} segment(s))")
 
         self._preview_band.setVisible(False)
+
+    def _clear_pending(self):
+        for band in self._selected_bands:
+            self._rm(band)
+        self._selected_bands = []
+        self._pending_trims  = []
 
     def _confirm_all_trims(self):
         if not self._pending_trims:
@@ -295,28 +383,27 @@ class TrimTool(QgsMapTool):
 
         groups = {}
         for entry in self._pending_trims:
-            layer, fid = entry[0], entry[1]
-            key = (id(layer), fid)
+            key = (id(entry[0]), entry[1])
             groups.setdefault(key, []).append(entry)
 
-        total_segments = 0
-        for (layer_id, fid), entries in groups.items():
+        total = 0
+        for (_, fid), entries in groups.items():
             layer     = entries[0][0]
             orig_geom = entries[0][2]
             feat      = layer.getFeature(fid)
             if not feat.isValid():
                 continue
 
-            all_bounds_set = set()
-            remove_set     = set()
+            all_bounds = set()
+            remove_set = set()
             for _, _, _, boundaries, trim_idx in entries:
                 for b in boundaries:
-                    all_bounds_set.add(round(b, 8))
+                    all_bounds.add(round(b, 8))
                 d_a = round(boundaries[trim_idx],     8)
                 d_b = round(boundaries[trim_idx + 1], 8)
                 remove_set.add((d_a, d_b))
 
-            all_bounds = sorted(all_bounds_set)
+            all_bounds = sorted(all_bounds)
             remaining  = []
             for i in range(len(all_bounds) - 1):
                 interval = (round(all_bounds[i], 8), round(all_bounds[i + 1], 8))
@@ -341,33 +428,21 @@ class TrimTool(QgsMapTool):
                 layer.deleteFeature(fid)
 
             layer.triggerRepaint()
-            total_segments += len(entries)
+            total += len(entries)
 
-        for band in self._selected_bands:
-            self._rm(band)
-        self._selected_bands = []
-        self._pending_trims  = []
-        self._log(f"  Trimmed {total_segments} segment(s)", "#88ff88")
+        self._log(f"  Trimmed {total} segment(s)", "#88ff88")
 
-    def _clear_pending(self):
-        for band in self._selected_bands:
-            self._rm(band)
-        self._selected_bands = []
-        self._pending_trims  = []
+    # ── preview ────────────────────────────────────────────────────────────────
 
     def _update_preview(self, map_pt):
         layer, feat = self._find_line_near(map_pt)
 
-        if feat is None:
+        if feat is None or feat.geometry().isMultipart():
             self._hover_band.setVisible(False)
             self._preview_band.setVisible(False)
             return
 
         line_geom = feat.geometry()
-        if line_geom.isMultipart():
-            self._hover_band.setVisible(False)
-            self._preview_band.setVisible(False)
-            return
 
         if self._state == _ST_SELECT:
             self._hover_band.setToGeometry(line_geom, layer)
@@ -376,7 +451,7 @@ class TrimTool(QgsMapTool):
             return
 
         self._hover_band.setVisible(False)
-        cutting  = self._cutting_geoms_for(exclude_layer=layer, exclude_fid=feat.id())
+        cutting = self._cutting_geoms_for(exclude_layer=layer, exclude_fid=feat.id())
         trim_idx, boundaries = self._trim_interval(line_geom, cutting, map_pt)
         if trim_idx is None:
             self._preview_band.setVisible(False)
@@ -388,86 +463,109 @@ class TrimTool(QgsMapTool):
         else:
             self._preview_band.setVisible(False)
 
-    def _advance_to_trim(self):
-        if not self._cutting_edges:
-            for lyr in self._line_layers():
-                for feat in lyr.getFeatures():
-                    if feat.geometry().isEmpty():
-                        continue
-                    self._cutting_edges.append((lyr, feat.id()))
-                    band = self._make_band(_C_EDGE, width=_style.RB_WIDTH)
-                    band.setToGeometry(feat.geometry(), lyr)
-                    self._cutting_bands.append(band)
-            self._log(f"  All lines as cutting edges ({len(self._cutting_edges)} features)")
-        else:
-            self._log(f"  {len(self._cutting_edges)} cutting edge(s) confirmed")
-
-        self._state = _ST_TRIM
-        self._log("  Click segments to mark for removal", "#88ccff")
-
-    def _finish(self):
-        self._confirm_all_trims()
-        self._go_home()
+    # ── typed-input dispatch ───────────────────────────────────────────────────
 
     def _dispatch(self, sem):
-        pass  # trim uses Enter key via keyPressEvent only
+        pass   # trim has no typed-distance input
+
+    # ── lifecycle ──────────────────────────────────────────────────────────────
+
+    def _go_home(self):
+        go = getattr(self._ctx, 'go_home', None)
+        if go and callable(go):
+            from qgis.PyQt.QtCore import QTimer
+            QTimer.singleShot(0, go)
+
+    def _finish(self):
+        """Commit all pending trims, clear visuals, return to home tool."""
+        self._confirm_all_trims()
+        self._clear_pending()
+        self._clear_cutting_edges()
+        self._preview_band.setVisible(False)
+        self._hover_band.setVisible(False)
+        self._hint.hide()
+        self._go_home()
 
     def activate(self):
         super().activate()
         self._canvas.setFocus()
-        self._log("TRIM  ──  click cutting edges", "#aaddff")
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in sel:
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                if QgsWkbTypes.geometryType(layer.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
+                    continue
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._cutting_edges.append((layer, feat.id()))
+                    band = self._make_band(_style.RB_EDGE)
+                    band.setToGeometry(feat.geometry(), layer)
+                    self._cutting_bands.append(band)
+        if self._cutting_edges:
+            self._log("TRIM", "#aaddff")
+            self._advance_to_trim()
+        else:
+            self._log("TRIM  ──  click cutting edges  (Enter = skip, use all)", "#aaddff")
 
     def deactivate(self):
-        for band in self._cutting_bands:
-            self._rm(band)
-        self._cutting_bands = []
-        self._cutting_edges = []
+        self._clear_cutting_edges()
         self._clear_pending()
+        self._clear_snap_marker()
         self._rm(self._preview_band)
         self._rm(self._hover_band)
         self._state = _ST_SELECT
         self._modified_layers.clear()
         self._hint.hide()
+        self.inputModeChanged.emit("", "")
         super().deactivate()
 
+    # ── Qt event handlers ──────────────────────────────────────────────────────
+
     def canvasMoveEvent(self, event):
-        self._update_preview(self.toMapCoordinates(event.pos()))
+        self._update_preview(self._snapped(self.toMapCoordinates(event.pos())))
         self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
-        map_pt = self.toMapCoordinates(event.pos())
+        map_pt = self._snapped(self.toMapCoordinates(event.pos()))
+        btn    = event.button()
 
-        if event.button() == Qt.MouseButton.RightButton:
+        if btn == Qt.MouseButton.RightButton:
             if self._state == _ST_SELECT:
                 self._advance_to_trim()
             else:
                 self._finish()
             return
 
-        if event.button() != Qt.MouseButton.LeftButton:
+        if btn != Qt.MouseButton.LeftButton:
             return
 
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if self._state == _ST_SELECT:
             layer, feat = self._find_line_near(map_pt)
-            if feat is not None:
-                self._update_cutting_edge(layer, feat, shift=shift)
-            else:
+            if feat is None:
                 self._log("  No line found near click")
+                return
+            if shift:
+                self._remove_cutting_edge(layer, feat)
+            else:
+                self._add_cutting_edge(layer, feat)
+
         elif self._state == _ST_TRIM:
             layer, feat = self._find_line_near(map_pt)
-            if feat is not None:
-                self._update_mark(layer, feat, map_pt, shift=shift)
-            else:
+            if feat is None:
                 self._log("  No line found near click")
+                return
+            self._mark_segment(layer, feat, map_pt, shift=shift)
 
         self._canvas.setFocus()
 
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key.Key_Escape:
-            self._go_home()
+            self._finish()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if self._state == _ST_SELECT:
                 self._advance_to_trim()

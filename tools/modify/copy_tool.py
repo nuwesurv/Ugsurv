@@ -16,7 +16,7 @@ Esc at any phase → cancel / exit.
 import contextlib
 import os
 
-from qgis.gui import QgsMapTool, QgsRubberBand
+from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtWidgets import QLabel
 from qgis.core import (
@@ -24,9 +24,22 @@ from qgis.core import (
     QgsRectangle, QgsVectorLayer, QgsWkbTypes, QgsRasterLayer,
 )
 
-from ...core.events import EventType
+from ...core.events import EventType, SnapType
 from ...core import style as _style
 from ...core.circle_utils import is_circle, circle_params, set_circle_attrs_on_feature
+
+_SNAP_ICONS = {
+    SnapType.VERTEX:        (_style.SNAP_ICON['endpoint'],     _style._CC_COLOR),
+    SnapType.POINT:         (_style.SNAP_ICON['point'],        _style._CC_COLOR),
+    SnapType.MIDPOINT:      (_style.SNAP_ICON['midpoint'],     _style._CC_COLOR),
+    SnapType.CENTER:        (_style.SNAP_ICON['center'],       _style._CC_COLOR),
+    SnapType.INTERSECTION:  (_style.SNAP_ICON['intersection'], _style._CC_COLOR),
+    SnapType.PERPENDICULAR: (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.EXTENSION:     (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.NEAREST:       (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.SELF:          (_style.SNAP_ICON['nearest'],      _style._CC_COLOR),
+    SnapType.GRID:          (QgsVertexMarker.ICON_CROSS,       _style.SNAP_GRID_COLOR),
+}
 
 _C_HIGHLIGHT = _style.RB_SOURCE
 _C_HL_FILL   = _style.RB_SOURCE_FILL
@@ -70,6 +83,7 @@ class CopyTool(QgsMapTool):
         self._raster_prevs = []   # parallel preview bands
         self._base_pt: QgsPointXY | None = None
         self._last_input_ref: QgsPointXY | None = None
+        self._snap_marker = None
 
         self._hint = QLabel(canvas)
         self._hint.setStyleSheet(_HINT_STYLE)
@@ -159,6 +173,38 @@ class CopyTool(QgsMapTool):
         if go and callable(go):
             from qgis.PyQt.QtCore import QTimer
             QTimer.singleShot(0, go)
+
+    def _snapped(self, raw_pt):
+        engine = getattr(self._ctx, 'snap_engine', None)
+        if engine:
+            result = engine.resolve(raw_pt, self._canvas)
+            if result:
+                self._show_snap_marker(result.point, result.snap_type)
+                return result.point
+        self._hide_snap_marker()
+        return raw_pt
+
+    def _show_snap_marker(self, pt, snap_type):
+        icon, color = _SNAP_ICONS.get(snap_type, (QgsVertexMarker.ICON_BOX, _style._CC_COLOR))
+        if self._snap_marker is None:
+            self._snap_marker = QgsVertexMarker(self._canvas)
+            self._snap_marker.setIconSize(_style.SNAP_ICON_SIZE)
+            self._snap_marker.setPenWidth(_style.SNAP_PEN_WIDTH)
+        self._snap_marker.setIconType(icon)
+        self._snap_marker.setColor(color)
+        self._snap_marker.setCenter(pt)
+        self._snap_marker.show()
+
+    def _hide_snap_marker(self):
+        if self._snap_marker:
+            self._snap_marker.hide()
+
+    def _clear_snap_marker(self):
+        if self._snap_marker is not None:
+            import contextlib
+            with contextlib.suppress(Exception):
+                self._canvas.scene().removeItem(self._snap_marker)
+            self._snap_marker = None
 
     # ── vector selection ──────────────────────────────────────────────────
 
@@ -387,6 +433,7 @@ class CopyTool(QgsMapTool):
 
     def deactivate(self):
         self._clear_selection()
+        self._clear_snap_marker()
         self._hint.hide()
         self._state          = _ST_SELECT
         self._base_pt        = None
@@ -394,12 +441,12 @@ class CopyTool(QgsMapTool):
         super().deactivate()
 
     def canvasMoveEvent(self, event):
-        map_pt = self.toMapCoordinates(event.pos())
+        map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         self._update_preview(map_pt)
         self._show_hint(event.pos())
 
     def canvasPressEvent(self, event):
-        map_pt = self.toMapCoordinates(event.pos())
+        map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         shift  = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if event.button() == Qt.MouseButton.RightButton:
@@ -409,6 +456,7 @@ class CopyTool(QgsMapTool):
                 else:
                     self._go_home()
             elif self._state == _ST_PLACE:
+                self._clear_selection()
                 self._go_home()
             else:
                 self._reset()
@@ -458,10 +506,9 @@ class CopyTool(QgsMapTool):
         key = event.key()
         if key == Qt.Key.Key_Escape:
             if self._state != _ST_SELECT:
-                self._reset()
                 self._log("  Copy cancelled", "#ffaaaa")
-            else:
-                self._go_home()
+            self._reset()
+            self._go_home()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if self._state == _ST_SELECT:
                 if self._has_selection():
@@ -469,4 +516,5 @@ class CopyTool(QgsMapTool):
                 else:
                     self._go_home()
             elif self._state == _ST_PLACE:
+                self._clear_selection()
                 self._go_home()
