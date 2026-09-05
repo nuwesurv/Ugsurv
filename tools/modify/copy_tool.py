@@ -345,6 +345,9 @@ class CopyTool(QgsMapTool):
         else:
             dx = dest_pt.x() - self._base_pt.x()
             dy = dest_pt.y() - self._base_pt.y()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         modified = set()
         for layer, fid, geom in self._sel_features:
             src_feat = layer.getFeature(fid)
@@ -359,9 +362,13 @@ class CopyTool(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             layer.addFeature(new_feat)
+            if hist:
+                hist.record_step(layer.id())
             modified.add(layer)
         for lyr in modified:
             lyr.triggerRepaint()
+        if hist:
+            hist.end_group()
         n_r = sum(1 for lyr in self._sel_rasters
                   if self._apply_raster_copy(lyr, dx, dy))
         parts = []

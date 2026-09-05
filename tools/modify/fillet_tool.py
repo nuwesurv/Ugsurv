@@ -141,7 +141,14 @@ class FilletTool(BaseTool):
         af = QgsFeature(lyr1.fields())
         af.setGeometry(arc_geom)
         af["cad_layer"] = self._ctx.active_cad_layer
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         lyr1.addFeature(af)
+        if hist:
+            hist.record_step(lyr1.id())
+        if hist:
+            hist.end_group()
 
     def _on_cancel_hook(self):
         self._first_pick = None

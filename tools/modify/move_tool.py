@@ -366,6 +366,9 @@ class MoveTool(QgsMapTool):
         else:
             dx = dest_pt.x() - self._base_pt.x()
             dy = dest_pt.y() - self._base_pt.y()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         modified = set()
         for layer, fid, geom in self._sel_features:
             new_geom = QgsGeometry(geom)
@@ -373,10 +376,16 @@ class MoveTool(QgsMapTool):
             if not layer.isEditable():
                 layer.startEditing()
             layer.changeGeometry(fid, new_geom)
+            if hist:
+                hist.record_step(layer.id())
             if is_circle(geom):
                 new_center, new_radius = circle_params(new_geom)
                 update_circle_attrs(layer, fid, new_center, new_radius)
+                if hist:
+                    hist.record_step(layer.id())  # changeAttributeValues step
             modified.add(layer)
+        if hist:
+            hist.end_group()
         for lyr in modified:
             lyr.triggerRepaint()
         n_r = sum(1 for lyr in list(self._sel_rasters)

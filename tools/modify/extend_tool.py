@@ -211,7 +211,14 @@ class ExtendTool(QgsMapTool):
         new_geom = QgsGeometry.fromPolylineXY(pts)
         if not layer.isEditable():
             layer.startEditing()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         layer.changeGeometry(fid, new_geom)
+        if hist:
+            hist.record_step(layer.id())
+        if hist:
+            hist.end_group()
         layer.triggerRepaint()
         self._modified_layers.add(layer)
         self._log(f"  Extended {dist:.3f} m on '{layer.name()}'", "#88ff88")

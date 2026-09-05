@@ -145,15 +145,20 @@ class ArrayTool(_ModifyBase):
     # ── execution ─────────────────────────────────────────────────────────
 
     def _execute_array(self):
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         if self._array_type == "rect":
-            self._exec_rect()
+            self._exec_rect(hist)
         elif self._array_type == "polar":
-            self._exec_polar()
+            self._exec_polar(hist)
+        if hist:
+            hist.end_group()
         self._ctx.selection_model.clear()
         self._clear_rubber_bands()
         self._go_home()
 
-    def _exec_rect(self):
+    def _exec_rect(self, hist=None):
         for layer, feat in selected_features(self._ctx):
             if not layer.isEditable():
                 layer.startEditing()
@@ -179,8 +184,10 @@ class ArrayTool(_ModifyBase):
                     if circ:
                         set_circle_attrs_on_feature(nf, new_center, orig_radius)
                     layer.addFeature(nf)
+                    if hist:
+                        hist.record_step(layer.id())
 
-    def _exec_polar(self):
+    def _exec_polar(self, hist=None):
         if self._center is None:
             return
         cx, cy = self._center.x(), self._center.y()
@@ -211,6 +218,8 @@ class ArrayTool(_ModifyBase):
                 if circ:
                     set_circle_attrs_on_feature(nf, new_center, orig_radius)
                 layer.addFeature(nf)
+                if hist:
+                    hist.record_step(layer.id())
 
     def _update_preview(self, cursor_pt: QgsPointXY):
         pass

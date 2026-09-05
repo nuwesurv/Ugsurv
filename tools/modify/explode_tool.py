@@ -107,6 +107,8 @@ class ExplodeTool(QgsMapTool):
         if not lyr.isEditable():
             lyr.startEditing()
 
+        hist = getattr(self._ctx, 'action_history', None)
+
         if geom.isMultipart():
             if gt == QgsWkbTypes.GeometryType.PointGeometry:
                 parts = [QgsGeometry.fromPointXY(QgsPointXY(p.x(), p.y()))
@@ -123,13 +125,20 @@ class ExplodeTool(QgsMapTool):
                 self._log("  Only one part found — nothing to explode")
                 return
 
+            if hist:
+                hist.begin_group()
             lyr.changeGeometry(feat.id(), parts[0])
+            if hist:
+                hist.record_step(lyr.id())
             for p in parts[1:]:
                 nf = QgsFeature(lyr.fields())
                 nf.setAttributes(feat.attributes())
                 nf.setGeometry(p)
                 lyr.addFeature(nf)
-
+                if hist:
+                    hist.record_step(lyr.id())
+            if hist:
+                hist.end_group()
             lyr.triggerRepaint()
             self._log(
                 f"  Exploded multipart '{lyr.name()}' fid {feat.id()}"
@@ -149,13 +158,20 @@ class ExplodeTool(QgsMapTool):
                 QgsGeometry.fromPolylineXY([pts[i], pts[i + 1]])
                 for i in range(len(pts) - 1)
             ]
+            if hist:
+                hist.begin_group()
             lyr.changeGeometry(feat.id(), segments[0])
+            if hist:
+                hist.record_step(lyr.id())
             for seg in segments[1:]:
                 nf = QgsFeature(lyr.fields())
                 nf.setAttributes(feat.attributes())
                 nf.setGeometry(seg)
                 lyr.addFeature(nf)
-
+                if hist:
+                    hist.record_step(lyr.id())
+            if hist:
+                hist.end_group()
             lyr.triggerRepaint()
             self._log(
                 f"  Exploded polyline '{lyr.name()}' fid {feat.id()}"

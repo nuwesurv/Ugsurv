@@ -69,6 +69,7 @@ class Ugsurv:
         self._revert_tool           = None
         self._tfix_tool             = None
         self._crs_mgr               = None
+        self._action_history        = None
 
     # ── Qt i18n helper ────────────────────────────────────────────────────
     def tr(self, message: str) -> str:
@@ -203,6 +204,14 @@ class Ugsurv:
         self._storage       = storage
         snap_engine._storage = storage
 
+        from .core.action_history import ActionHistory
+        action_history = ActionHistory()
+        ctx.action_history = action_history
+        storage.set_action_history(action_history)
+        self._action_history = action_history
+        QgsProject.instance().cleared.connect(action_history.clear)
+        QgsProject.instance().readProject.connect(action_history.clear)
+
         entity_factory = EntityFactory(storage)
         ctx.entity_factory = entity_factory
 
@@ -273,6 +282,7 @@ class Ugsurv:
         # QGIS because QgsApplication.notify() can process events before
         # application event filters see them.
         from .core.input.global_key_filter import GlobalKeyFilter
+        # undo/redo callbacks are assigned after _do_undo/_do_redo are defined (below)
         _key_filter = GlobalKeyFilter(
             tool_mgr, buf,
             cmd_widget_getter=lambda: self._cmd_dock,
@@ -565,6 +575,39 @@ class Ugsurv:
             canvas, ortho, polar, snap_settings, tool_mgr, ortho_act
         )
 
+        # Undo / Redo — command line aliases + Ctrl+Z / Ctrl+Y via GlobalKeyFilter
+        # Ctrl+Z and Ctrl+Y are handled in GlobalKeyFilter (claimed in ShortcutOverride
+        # so QGIS's own Edit→Undo/Redo ApplicationShortcut never fires alongside ours).
+        _hist     = action_history
+        _tool_mgr = tool_mgr
+        _cmd      = cmd_dock
+
+        def _do_undo():
+            active = _tool_mgr.active_tool
+            home   = getattr(_tool_mgr, 'home_tool', None)
+            if active is not None and active is not home:
+                # Mid-command: forward to the tool's own undo-step handler
+                if hasattr(active, '_on_undo_step'):
+                    active._on_undo_step()
+                return
+            if _hist.undo():
+                _cmd.log("  Undone.", "#88ccff")
+            else:
+                _cmd.log("  Nothing to undo.", "#888888")
+
+        def _do_redo():
+            if _hist.redo():
+                _cmd.log("  Redone.", "#88ccff")
+            else:
+                _cmd.log("  Nothing to redo.", "#888888")
+
+        cmd_dock.register_ui_command("UNDO", "U", callback=_do_undo)
+        cmd_dock.register_ui_command("REDO", "RE", callback=_do_redo)
+
+        # Wire callbacks into GlobalKeyFilter so Ctrl+Z/Y are fully owned by us
+        _key_filter._undo_callback = _do_undo
+        _key_filter._redo_callback = _do_redo
+
         # 7. Gating hint ─────────────────────────────────────────────────
         def _on_gating(enabled: bool):
             if not enabled:
@@ -743,6 +786,13 @@ class Ugsurv:
             if self._crs_mgr:
                 self._crs_mgr.unload()
         self._crs_mgr = None
+
+        with contextlib.suppress(Exception):
+            if self._action_history:
+                QgsProject.instance().cleared.disconnect(self._action_history.clear)
+                QgsProject.instance().readProject.disconnect(self._action_history.clear)
+                self._action_history.clear()
+        self._action_history = None
 
         with contextlib.suppress(Exception):
             if self._storage:

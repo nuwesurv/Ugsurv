@@ -78,6 +78,9 @@ class MirrorTool(_ModifyBase):
     def _execute_mirror(self, erase: bool):
         if self._mirror_p1 is None or self._mirror_p2 is None:
             return
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         for layer, feat in selected_features(self._ctx):
             orig_geom = feat.geometry()
             new_geom  = _mirror_geometry(orig_geom, self._mirror_p1, self._mirror_p2)
@@ -85,9 +88,13 @@ class MirrorTool(_ModifyBase):
                 layer.startEditing()
             if erase:
                 layer.changeGeometry(feat.id(), new_geom)
+                if hist:
+                    hist.record_step(layer.id())
                 if is_circle(orig_geom):
                     new_center, new_radius = circle_params(new_geom)
                     update_circle_attrs(layer, feat.id(), new_center, new_radius)
+                    if hist:
+                        hist.record_step(layer.id())
             else:
                 new_feat = QgsFeature(layer.fields())
                 new_feat.setGeometry(new_geom)
@@ -96,6 +103,10 @@ class MirrorTool(_ModifyBase):
                     new_center, new_radius = circle_params(new_geom)
                     set_circle_attrs_on_feature(new_feat, new_center, new_radius)
                 layer.addFeature(new_feat)
+                if hist:
+                    hist.record_step(layer.id())
+        if hist:
+            hist.end_group()
         self._ctx.selection_model.clear()
         self._clear_rubber_bands()
         self._mirror_p1 = self._mirror_p2 = None

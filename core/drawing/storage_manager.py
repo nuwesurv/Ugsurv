@@ -76,8 +76,9 @@ class StorageManager(QObject):
         self._lines_layer   = None
         self._circles_layer = None
         self._cad_lyr_layer = None   # non-spatial QgsVectorLayer
-        self._toolbar_ref   = None   # set by plugin_main
-        self._crs_manager   = None   # set by plugin after CrsManager is created
+        self._toolbar_ref    = None   # set by plugin_main
+        self._crs_manager    = None   # set by plugin after CrsManager is created
+        self._action_history = None   # set by plugin after ActionHistory is created
 
         # Wire QGIS project signals
         QgsProject.instance().projectSaved.connect(self._on_project_saved)
@@ -147,6 +148,10 @@ class StorageManager(QObject):
         """Wire the CrsManager so that add_line/add_point can transform geometry."""
         self._crs_manager = mgr
 
+    def set_action_history(self, history):
+        """Wire the ActionHistory so every add_* records a single-step group."""
+        self._action_history = history
+
     # ── CRS-aware feature writers ─────────────────────────────────────────
     def add_line(self, geom: QgsGeometry, cad_layer: str) -> bool:
         """
@@ -168,7 +173,12 @@ class StorageManager(QObject):
         feat = QgsFeature(layer.fields())
         feat.setGeometry(geom)
         feat["cad_layer"] = cad_layer
-        return layer.addFeature(feat)
+        ok = layer.addFeature(feat)
+        if ok and self._action_history is not None:
+            self._action_history.begin_group()
+            self._action_history.record_step(layer.id())
+            self._action_history.end_group()
+        return ok
 
     def add_circle(self, geom: QgsGeometry, cad_layer: str) -> bool:
         """Add a circle geometry (CompoundCurve/CircularString) to the circles layer."""
@@ -185,7 +195,12 @@ class StorageManager(QObject):
         feat = QgsFeature(layer.fields())
         feat.setGeometry(geom)
         feat["cad_layer"] = cad_layer
-        return layer.addFeature(feat)
+        ok = layer.addFeature(feat)
+        if ok and self._action_history is not None:
+            self._action_history.begin_group()
+            self._action_history.record_step(layer.id())
+            self._action_history.end_group()
+        return ok
 
     def add_point(self, geom: QgsGeometry, cad_layer: str,
                   description=None, symbol: str = "basic",
@@ -218,7 +233,12 @@ class StorageManager(QObject):
             feat["symbol"] = symbol
         if symbol_size is not None and flds.indexOf("symbol_size") >= 0:
             feat["symbol_size"] = float(symbol_size)
-        return layer.addFeature(feat)
+        ok = layer.addFeature(feat)
+        if ok and self._action_history is not None:
+            self._action_history.begin_group()
+            self._action_history.record_step(layer.id())
+            self._action_history.end_group()
+        return ok
 
     def unload(self):
         with _suppress():

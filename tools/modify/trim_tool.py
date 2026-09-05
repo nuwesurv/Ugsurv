@@ -357,6 +357,9 @@ class TrimTool(QgsMapTool):
             key = (id(entry[0]), entry[1])
             groups.setdefault(key, []).append(entry)
 
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         total = 0
         for (_, fid), entries in groups.items():
             layer     = entries[0][0]
@@ -390,17 +393,25 @@ class TrimTool(QgsMapTool):
 
             if remaining:
                 layer.changeGeometry(fid, remaining[0])
+                if hist:
+                    hist.record_step(layer.id())
                 for extra in remaining[1:]:
                     new_feat = QgsFeature(layer.fields())
                     new_feat.setGeometry(extra)
                     new_feat.setAttributes(feat.attributes())
                     layer.addFeature(new_feat)
+                    if hist:
+                        hist.record_step(layer.id())
             else:
                 layer.deleteFeature(fid)
+                if hist:
+                    hist.record_step(layer.id())
 
             layer.triggerRepaint()
             total += len(entries)
 
+        if hist:
+            hist.end_group()
         self._log(f"  Trimmed {total} segment(s)", "#88ff88")
 
     # ── preview ────────────────────────────────────────────────────────────────

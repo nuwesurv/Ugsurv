@@ -464,7 +464,13 @@ class GripEditTool(BaseTool):
         new_geom = QgsGeometry.fromPolylineXY(pts)
         if not layer.isEditable():
             layer.startEditing()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         layer.changeGeometry(grip.fid, new_geom)
+        if hist:
+            hist.record_step(layer.id())
+            hist.end_group()
         self._cancel_extend()
         self._rebuild_grips()
 
@@ -572,7 +578,13 @@ class GripEditTool(BaseTool):
         new_geom = QgsGeometry.fromPolylineXY(pts)
         if not layer.isEditable():
             layer.startEditing()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         layer.changeGeometry(grip.fid, new_geom)
+        if hist:
+            hist.record_step(layer.id())
+            hist.end_group()
         self._cancel_add_pts()
         self._rebuild_grips()
 
@@ -636,12 +648,20 @@ class GripEditTool(BaseTool):
         if not layer.isEditable():
             layer.startEditing()
         layer.changeGeometry(grip.fid, moved)
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.record_step(layer.id())
 
         if QgsProject.instance().topologicalEditing():
             self._fix_topology(grip, new_pt)
 
     def _commit_grip_and_finish(self, new_pt: QgsPointXY):
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         self._commit_grip_move(self._hot_grip, new_pt)
+        if hist:
+            hist.end_group()
         self._hot_grip      = None
         self._hot_mode      = False
         self._drag_start_px = None
@@ -659,6 +679,7 @@ class GripEditTool(BaseTool):
             old_pt.x()-tol, old_pt.y()-tol,
             old_pt.x()+tol, old_pt.y()+tol,
         )
+        hist = getattr(self._ctx, 'action_history', None)
         sm = self._ctx.storage_manager
         for attr in ("points_layer", "lines_layer"):
             lyr = getattr(sm, attr, None)
@@ -675,6 +696,8 @@ class GripEditTool(BaseTool):
                         if not lyr.isEditable():
                             lyr.startEditing()
                         lyr.changeGeometry(feat.id(), new_geom)
+                        if hist:
+                            hist.record_step(lyr.id())
 
     def _px_to_mu(self, px: int) -> float:
         try:

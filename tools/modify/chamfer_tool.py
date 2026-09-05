@@ -226,10 +226,13 @@ class ChamferTool(BaseTool):
         return self._sub_line(geom, keep_from, keep_to), QgsPointXY(p.x(), p.y())
 
     def _update_polyline_attrs(self, lyr, fid, geom):
-        for fname, val in polyline_attrs(geom).items():
-            idx = lyr.fields().indexOf(fname)
-            if idx >= 0:
-                lyr.changeAttributeValue(fid, idx, val)
+        change = {
+            lyr.fields().indexOf(fname): val
+            for fname, val in polyline_attrs(geom).items()
+            if lyr.fields().indexOf(fname) >= 0
+        }
+        if change:
+            lyr.changeAttributeValues(fid, change)
 
     # ── chamfer apply ─────────────────────────────────────────────────────
 
@@ -327,8 +330,17 @@ class ChamferTool(BaseTool):
         new_geom = QgsGeometry.fromPolylineXY(new_pts)
         if not lyr.isEditable():
             lyr.startEditing()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         lyr.changeGeometry(feat.id(), new_geom)
+        if hist:
+            hist.record_step(lyr.id())
         self._update_polyline_attrs(lyr, feat.id(), new_geom)
+        if hist:
+            hist.record_step(lyr.id())
+        if hist:
+            hist.end_group()
         lyr.triggerRepaint()
         self._log(
             f"  Chamfered corner {corner_idx} on '{lyr.name()}'  "
@@ -371,10 +383,21 @@ class ChamferTool(BaseTool):
         if not lyr2.isEditable():
             lyr2.startEditing()
 
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         lyr1.changeGeometry(feat1.id(), kept1)
+        if hist:
+            hist.record_step(lyr1.id())
         lyr2.changeGeometry(feat2.id(), kept2)
+        if hist:
+            hist.record_step(lyr2.id())
         self._update_polyline_attrs(lyr1, feat1.id(), kept1)
+        if hist:
+            hist.record_step(lyr1.id())
         self._update_polyline_attrs(lyr2, feat2.id(), kept2)
+        if hist:
+            hist.record_step(lyr2.id())
 
         if self._dist1 > 1e-10 or self._dist2 > 1e-10:
             chamfer_geom = QgsGeometry.fromPolylineXY([e1, e2])
@@ -386,7 +409,11 @@ class ChamferTool(BaseTool):
                 if idx >= 0:
                     nf.setAttribute(idx, val)
             lyr1.addFeature(nf)
+            if hist:
+                hist.record_step(lyr1.id())
 
+        if hist:
+            hist.end_group()
         lyr1.triggerRepaint()
         lyr2.triggerRepaint()
         self._log(

@@ -47,12 +47,15 @@ class GlobalKeyFilter(QObject):
     """
 
     def __init__(self, tool_manager, input_buffer,
-                 cmd_widget_getter=None, dyn_getter=None):
+                 cmd_widget_getter=None, dyn_getter=None,
+                 undo_callback=None, redo_callback=None):
         super().__init__()
-        self._tool_mgr  = tool_manager
-        self._buffer    = input_buffer
-        self._get_cmd   = cmd_widget_getter  # () -> CommandLineWidget
-        self._get_dyn   = dyn_getter         # () -> DynamicInputWidget
+        self._tool_mgr       = tool_manager
+        self._buffer         = input_buffer
+        self._get_cmd        = cmd_widget_getter  # () -> CommandLineWidget
+        self._get_dyn        = dyn_getter         # () -> DynamicInputWidget
+        self._undo_callback  = undo_callback      # () -> None  (plugin-level undo)
+        self._redo_callback  = redo_callback      # () -> None  (plugin-level redo)
         print("[UgSurv] GlobalKeyFilter created — canvas-level key capture")
 
     # ── Qt entry point ─────────────────────────────────────────────────────
@@ -85,8 +88,24 @@ class GlobalKeyFilter(QObject):
         if QApplication.activeModalWidget() is not None:
             return False
 
-        # Let Ctrl / Alt combos through — QGIS / OS shortcuts must work
         mods = event.modifiers()
+        key  = event.key()
+
+        # Ctrl+Z → plugin undo (or mid-command undo-step forwarded to active tool)
+        # Ctrl+Y → plugin redo
+        # These are claimed in _claim_shortcut() so QGIS's own Edit→Undo/Redo
+        # shortcuts never fire — we are the sole handler.
+        if (mods & Qt.ControlModifier) and not (mods & Qt.AltModifier):
+            if key == Qt.Key_Z:
+                if self._undo_callback:
+                    self._undo_callback()
+                return True
+            if key == Qt.Key_Y:
+                if self._redo_callback:
+                    self._redo_callback()
+                return True
+
+        # Let all other Ctrl / Alt combos through — QGIS / OS shortcuts must work
         if mods & (Qt.ControlModifier | Qt.AltModifier):
             return False
 
@@ -106,17 +125,31 @@ class GlobalKeyFilter(QObject):
 
         We claim in both idle and drawing modes so that QGIS shortcuts like
         'S' (snap toggle) never fire while the plugin canvas is active.
+
+        We also claim Ctrl+Z and Ctrl+Y so that QGIS's own Edit→Undo/Redo
+        ApplicationShortcut cannot fire alongside (or instead of) our plugin
+        undo/redo — which would desync our history tracking.
         """
         if QApplication.activeModalWidget() is not None:
-            return False
-        mods = event.modifiers()
-        if mods & (Qt.ControlModifier | Qt.AltModifier):
             return False
         if self._tool_mgr.active_tool is None:
             return False
 
-        key = event.key()
-        ch  = event.text()
+        mods = event.modifiers()
+        key  = event.key()
+
+        # Claim Ctrl+Z (undo) and Ctrl+Y (redo) specifically so QGIS's own
+        # Edit→Undo/Redo shortcuts don't fire independently of our callbacks.
+        if (mods & Qt.ControlModifier) and not (mods & Qt.AltModifier):
+            if key in (Qt.Key_Z, Qt.Key_Y):
+                event.accept()
+                return False
+
+        # All other Ctrl / Alt combos pass through (save, copy, OS shortcuts…)
+        if mods & (Qt.ControlModifier | Qt.AltModifier):
+            return False
+
+        ch = event.text()
         if (key in (Qt.Key_Backspace, Qt.Key_Return, Qt.Key_Enter,
                     Qt.Key_Space, Qt.Key_Escape, Qt.Key_Tab)
                 or (ch and ch.isprintable() and ch != '\t')):

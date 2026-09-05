@@ -19,6 +19,7 @@ class ToolContext:
         self.cmd_dock = None                       # CommandLineWidget, set by plugin_main
         self.selected_raster = None                # QgsRasterLayer picked via SelectTool
         self.launch_tool     = None                # callable(tool_key) → activates a tool by key
+        self.action_history  = None                # ActionHistory, set by plugin_main
 
     # convenience ----------------------------------------------------------
     @property

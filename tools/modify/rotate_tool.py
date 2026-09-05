@@ -282,16 +282,25 @@ class RotateTool(QgsMapTool):
         if not self._base_pt:
             return
         cx, cy = self._base_pt.x(), self._base_pt.y()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         modified = set()
         for layer, fid, geom in self._sel_features:
             new_geom = _rotate_geom(geom, cx, cy, angle_deg)
             if not layer.isEditable():
                 layer.startEditing()
             layer.changeGeometry(fid, new_geom)
+            if hist:
+                hist.record_step(layer.id())
             if is_circle(geom):
                 new_center, new_radius = circle_params(new_geom)
                 update_circle_attrs(layer, fid, new_center, new_radius)
+                if hist:
+                    hist.record_step(layer.id())
             modified.add(layer)
+        if hist:
+            hist.end_group()
         for lyr in modified:
             lyr.triggerRepaint()
         n = len(self._sel_features)

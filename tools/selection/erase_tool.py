@@ -25,6 +25,9 @@ class EraseTool(BaseTool):
         sel = self._ctx.selection_model
         if sel.is_empty():
             return
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         _GTYPE = {0: "point", 1: "line", 2: "polygon"}
         layer_counts = {}  # lid -> {name, count, gtype}
         for lid, fid in list(sel):
@@ -39,7 +42,11 @@ class EraseTool(BaseTool):
                 layer_counts[lid] = {"name": layer.name(), "count": 0, "gtype": gtype}
             layer_counts[lid]["count"] += 1
             layer.deleteFeature(fid)
+            if hist:
+                hist.record_step(layer.id())
 
+        if hist:
+            hist.end_group()
         sel.clear()
         cmd_dock = getattr(self._ctx, 'cmd_dock', None)
         if cmd_dock and layer_counts:

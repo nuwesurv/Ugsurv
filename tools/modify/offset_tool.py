@@ -347,7 +347,14 @@ class OffsetTool(QgsMapTool):
                     nf.setAttribute(idx, val)
         if not lyr.isEditable():
             lyr.startEditing()
+        hist = getattr(self._ctx, 'action_history', None)
+        if hist:
+            hist.begin_group()
         lyr.addFeature(nf)
+        if hist:
+            hist.record_step(lyr.id())
+        if hist:
+            hist.end_group()
         lyr.triggerRepaint()
         self._log(f"  Offset {dist:.4f}  →  '{lyr.name()}'", "#88ff88")
 
