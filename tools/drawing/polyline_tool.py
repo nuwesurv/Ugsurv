@@ -21,8 +21,8 @@ _ARC_PX      = 48    # angle-arc radius in screen pixels
 _REF_PX      = 60    # horizontal reference line length in screen pixels
 _LBL_PAD_PX  = 16    # extra gap past arc for angle-label
 
-_DIST_CLR  = _style.RB_BLUE
-_ANGLE_CLR = _style.RB_BLUE
+_DIST_CLR  = _style.RB_DIST_LABEL
+_ANGLE_CLR = _style.RB_ANGLE_ARC
 
 
 class PolylineTool(BaseTool):

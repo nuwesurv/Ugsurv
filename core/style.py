@@ -79,7 +79,8 @@ RB_EDGE         = RB_BLUE            # confirmed reference / cutting edges
 RB_DESTROY      = RB_RED             # segment that will be removed (trim, break)
 RB_EXTEND       = RB_BLUE            # extension boundary
 RB_OFFSET_GUIDE = RB_BLUE            # perpendicular measurement guide
-RB_ANGLE_ARC    = RB_BLUE            # angle arc / reference line (polyline)
+RB_ANGLE_ARC    = QColor(  0, 210,  80)  # bright green — angle arc / reference line (polyline)
+RB_DIST_LABEL   = QColor(255, 180,   0)  # amber — distance label (polyline)
 RB_MIRROR_AXIS  = RB_RED             # mirror axis line
 RB_MIRROR       = RB_BLUE            # mirrored geometry ghost
 
