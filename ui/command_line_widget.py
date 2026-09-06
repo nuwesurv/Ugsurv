@@ -143,6 +143,11 @@ class CommandLineWidget(QDockWidget):
         for alias in aliases:
             self._ui_commands[alias.upper()] = callback
 
+    def unregister_ui_command(self, *aliases: str):
+        """Remove aliases from the command dict so they vanish from suggestions."""
+        for alias in aliases:
+            self._ui_commands.pop(alias.upper(), None)
+
     def connect_buffer(self, buf):
         """Wire an InputBuffer so the command line mirrors and responds to it."""
         buf.textChanged.connect(self._on_buffer_text_changed)

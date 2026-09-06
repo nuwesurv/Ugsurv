@@ -45,6 +45,10 @@ class AddVertexTool(BaseTool):
             self._commit_insert(self._new_pt)
 
     def _on_hover(self, sem: SemanticEvent):
+        if sem.point:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn is not None:
+                dyn.set_live_pair(sem.point.x(), sem.point.y())
         if self._pending_layer and sem.point:
             self._new_pt = sem.point
             self._update_preview(sem.point)

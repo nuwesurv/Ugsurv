@@ -338,6 +338,11 @@ class DimensionTool(BaseTool):
 
     def _on_hover(self, sem: SemanticEvent):
         pt = sem.point
+        if pt:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn is not None:
+                dyn.set_live_pair(pt.x(), pt.y())
+
         if len(self._pts) == 0:
             if sem.snap_type == SnapType.NEAREST and pt:
                 _, feat = _find_feature_near(self._ctx, pt)

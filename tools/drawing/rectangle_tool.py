@@ -52,6 +52,10 @@ class RectangleTool(BaseTool):
             self._preview_rb = None
 
     def _on_hover(self, sem: SemanticEvent):
+        if sem.point:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn is not None:
+                dyn.set_live_pair(sem.point.x(), sem.point.y())
         if self._corner1 and sem.point:
             self._update_preview(self._corner1, sem.point)
 

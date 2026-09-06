@@ -231,7 +231,7 @@ class DynamicInputWidget(QWidget):
     def set_live_polar(self, dist: float, angle_deg: float):
         """Update live cursor values used as fallbacks when a polar field is empty."""
         self._live = [dist, angle_deg]
-        self._refresh_live_placeholders()
+        self._refresh_fields()
 
     def set_live_value(self, v: float):
         """Update live cursor value used as fallback when the value field is empty."""
@@ -239,12 +239,12 @@ class DynamicInputWidget(QWidget):
             self._live[0] = v
         else:
             self._live = [v]
-        self._refresh_live_placeholders()
+        self._refresh_fields()
 
     def set_live_pair(self, a: float, b: float):
         """Set live fallback values for two-field modes (rowcol, dxdy, count_ang, d1d2)."""
         self._live = [a, b]
-        self._refresh_live_placeholders()
+        self._refresh_fields()
 
     def update_position(self, canvas_pt=None):
         """Called on every canvas xyCoordinates event — follow the cursor."""

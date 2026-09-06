@@ -84,6 +84,9 @@ class CircleTool(BaseTool):
                 radius = self._pts[0].distance(sem.point)
                 self._draw_preview(self._pts[0], radius)
                 self._update_prompt(f"Specify radius <{radius:.3f}m>:")
+                dyn = getattr(self._ctx, 'dyn_widget', None)
+                if dyn is not None:
+                    dyn.set_live_value(radius)
             elif self._mode == "2pt" and len(self._pts) == 1:
                 ctr = QgsPointXY(
                     (self._pts[0].x() + sem.point.x()) / 2,
@@ -91,6 +94,13 @@ class CircleTool(BaseTool):
                 )
                 r = self._pts[0].distance(sem.point) / 2
                 self._draw_preview(ctr, r)
+                dyn = getattr(self._ctx, 'dyn_widget', None)
+                if dyn is not None:
+                    dyn.set_live_value(r)
+        elif sem.point:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn is not None:
+                dyn.set_live_pair(sem.point.x(), sem.point.y())
 
     def _handle_point(self, pt: QgsPointXY):
         self._pts.append(pt)

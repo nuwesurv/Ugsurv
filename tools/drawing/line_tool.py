@@ -48,6 +48,14 @@ class LineTool(BaseTool):
     def _on_hover(self, sem: SemanticEvent):
         if self._start_pt and sem.point:
             self._update_preview(sem.point)
+            dx = sem.point.x() - self._start_pt.x()
+            dy = sem.point.y() - self._start_pt.y()
+            dist = math.hypot(dx, dy)
+            if dist > 1e-10:
+                bearing = (90.0 - math.degrees(math.atan2(dy, dx))) % 360.0
+                dyn = getattr(self._ctx, 'dyn_widget', None)
+                if dyn is not None:
+                    dyn.set_live_polar(dist, bearing)
         self._update_extension_guide(sem.snap_type, sem.point)
 
     def _on_undo_step(self):

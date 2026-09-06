@@ -30,7 +30,10 @@ class PointTool(BaseTool):
             self._go_home()
 
     def _on_hover(self, sem: SemanticEvent):
-        pass  # no preview — cursor is the indicator
+        if sem.point:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn is not None:
+                dyn.set_live_pair(sem.point.x(), sem.point.y())
 
     def _commit_point(self, pt: QgsPointXY):
         geom = QgsGeometry.fromPointXY(pt)

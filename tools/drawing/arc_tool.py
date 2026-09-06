@@ -84,6 +84,10 @@ class ArcTool(BaseTool):
             self._reset()
 
     def _on_hover(self, sem: SemanticEvent):
+        if sem.point:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn is not None:
+                dyn.set_live_pair(sem.point.x(), sem.point.y())
         if sem.point and len(self._pts) >= 1:
             self._update_preview(sem.point)
 

@@ -652,8 +652,19 @@ class Ugsurv:
 
     # ── extra utility panels ─────────────────────────────────────────────
     def _register_extra_tools(self, cmd_dock, iface, canvas, mw):
-        """Lazily create and register the 8 utility docks/tools as UI commands."""
+        """Register free utility tools immediately; gated tools only after sign-in."""
         from qgis.PyQt.QtCore import Qt
+        from .core.auth_manager import AuthManager
+
+        # Aliases that belong exclusively to gated tools.
+        _GATED_ALIASES = (
+            "PARCEL", "PP",   # Parcel Plotter
+            "SLV",    "ST",   # Solve Topology
+            "SPIKY",  "SG",   # Spiky Geometry
+            "OA",             # Overlap Area
+            "TS",     "TF",   # Topology Fixer
+        )
+        _gated_registered = [False]
 
         def _make_toggle(factory):
             state = [None]
@@ -661,8 +672,6 @@ class Ugsurv:
                 if state[0] is None:
                     state[0] = factory()
                     iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, state[0])
-                    # Tabify with the first extra dock so all panels share one
-                    # slot — prevents stacking from growing taller than the screen.
                     if self._extra_docks:
                         mw.tabifyDockWidget(self._extra_docks[0], state[0])
                     self._extra_docks.append(state[0])
@@ -670,34 +679,20 @@ class Ugsurv:
                 state[0].raise_()
             return _toggle
 
-        # 1. Append Geometry — copy selected features from one layer to another
+        # ── Free tools (always visible in suggestions) ────────────────────
+
         from .module_wz_dialogs.append_geometry import GeometryAppenderDock
         cmd_dock.register_ui_command("APPEND", "AG",
             callback=_make_toggle(lambda: GeometryAppenderDock(mw, iface, canvas)))
 
-        # 2. CRS Adjust — reproject selected features using a chosen CRS
         from .module_wz_dialogs.crs_adjust import CrsAdjustDock
         cmd_dock.register_ui_command("CRSADJ", "CRS",
             callback=_make_toggle(lambda: CrsAdjustDock(mw)))
 
-        # 3. Feature Navigator — step through filtered features one by one
         from .module_wz_dialogs.feature_navigator import FeatureNavigatorDock
         cmd_dock.register_ui_command("NAV", "FN",
             callback=_make_toggle(lambda: FeatureNavigatorDock(canvas, mw)))
 
-        # 4. Overlap Points — find and merge near-coincident vertices
-        from .module_wz_dialogs.overlap_points import OverlapPointsDock
-        cmd_dock.register_ui_command("OVERLAP", "OVP",
-            callback=_make_toggle(lambda: OverlapPointsDock(canvas, mw)))
-
-        # 5. Parcel Plotter — plot polygons from CSV/Excel coordinate tables
-        def _open_parcel_plotter():
-            from .module_wz_dialogs.parcel_plotter import ParcelPlotterDialog
-            dlg = ParcelPlotterDialog(mw)
-            dlg.exec()
-        cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
-
-        # 6. Revert Geometry — click features to restore their original_geometry WKT
         def _activate_revert():
             if self._revert_tool is None:
                 from .module_wz_dialogs.revert_geometry import RevertMapTool
@@ -705,66 +700,11 @@ class Ugsurv:
             canvas.setMapTool(self._revert_tool)
         cmd_dock.register_ui_command("RV", "REV", callback=_activate_revert)
 
-        # 7. Solve Topology — cut parcels against rivers, roads, waterbodies
-        from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
-        cmd_dock.register_ui_command("SLV", "ST",
-            callback=_make_toggle(lambda: SolveTopologyDock(mw)))
-
-        # 8. Spiky Geometry — find sharp-angled vertices across polygon layers
-        from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
-        cmd_dock.register_ui_command("SPIKY", "SG",
-            callback=_make_toggle(lambda: SpikyGeomsDock(canvas, mw)))
-
-        # 12. Overlap Area — append overlap % column from Layer2 into Dataset1
-        from .module_wz_dialogs.overlap_area import OverlapAreaDock
-        cmd_dock.register_ui_command("OVERLAP", "OA",
-            callback=_make_toggle(lambda: OverlapAreaDock(mw)))
-
-        # 9. Layout Importer — align a PDF/image raster to two GCP points
-        def _open_layout_importer():
-            from .module_wz_dialogs.layout_importer import ImportPrintDialog
-            dlg = ImportPrintDialog(cmd_dock=cmd_dock, parent=mw)
-            dlg.exec()
-        cmd_dock.register_ui_command("IMPORT", "LI", callback=_open_layout_importer)
-
-        # 10. Properties Dock — show/raise the startup properties dock
         _pd = self._props_dock
-        def _toggle_props_dock():
-            _pd.show()
-            _pd.raise_()
-        cmd_dock.register_ui_command("PROPSDOCK", "PD", callback=_toggle_props_dock)
+        cmd_dock.register_ui_command("PROPSDOCK", "PD",
+            callback=lambda: (_pd.show(), _pd.raise_()))
 
-        # 11. Topology Fixer — interactive map tool: click to fix parcel topology
-        _tfix_ref = [None]
-        def _activate_tfix():
-            if _tfix_ref[0] is None:
-                from .module_wz_dialogs.topology_solver import TopologySolver
-                _tfix_ref[0] = TopologySolver(canvas, iface, cmd_dock)
-                self._tfix_tool = _tfix_ref[0]
-            canvas.setMapTool(_tfix_ref[0])
-        cmd_dock.register_ui_command("TS", "TF", callback=_activate_tfix)
-
-        # 13. Canvas Georeferencer — pick GCPs on the canvas, type E,N via dynamic input
-        _georef_ref = [None]
-        def _activate_georef():
-            if _georef_ref[0] is None:
-                from .tools.georef.georeference_tool import GeoreferenceTool
-                _georef_ref[0] = GeoreferenceTool(canvas, self._tool_context, self._translator)
-                _georef_ref[0]._tool_key = 'georef'
-            self._tool_manager.activate_tool(_georef_ref[0])
-        cmd_dock.register_ui_command("GEOREF", "GR", callback=_activate_georef)
-
-        # 14. Align — re-georeference an existing on-canvas raster via GCPs
-        _align_ref = [None]
-        def _activate_align():
-            if _align_ref[0] is None:
-                from .tools.georef.align_tool import AlignTool
-                _align_ref[0] = AlignTool(canvas, self._tool_context, self._translator)
-                _align_ref[0]._tool_key = 'align'
-            self._tool_manager.activate_tool(_align_ref[0])
-        cmd_dock.register_ui_command("ALIGN", "AL", callback=_activate_align)
-
-        # 15. Basemap — add Google Satellite or Hybrid XYZ tile layer
+        # Basemap — add Google Satellite or Hybrid XYZ tile layer
         def _add_basemap():
             from urllib.parse import quote
             from qgis.PyQt.QtWidgets import (
@@ -805,10 +745,6 @@ class Ugsurv:
             chosen_name, chosen_url = next(
                 (n, u) for rb, (n, u) in zip(radios, _BASEMAPS) if rb.isChecked()
             )
-            # quote(safe='/') encodes : = & { } but leaves / intact —
-            # the standard format QGIS's WMS/XYZ provider expects.
-            # QGIS decodes the url param before making tile requests and before
-            # displaying it in layer properties.
             encoded = quote(chosen_url, safe='/:')
             uri = f"type=xyz&url={encoded}&zmin=0&zmax=19"
             lyr = QgsRasterLayer(uri, chosen_name, 'wms')
@@ -820,9 +756,136 @@ class Ugsurv:
 
         cmd_dock.register_ui_command("BASEMAP", "BMP", callback=_add_basemap)
 
+        def _open_feedback():
+            from .module_wz_dialogs.feedback_dialog import FeedbackDialog
+            FeedbackDialog(mw).exec()
+        cmd_dock.register_ui_command("FEEDBACK", "FB", callback=_open_feedback)
+
+        from .module_wz_dialogs.overlap_points import OverlapPointsDock
+        cmd_dock.register_ui_command("OVERLAP", "OVP",
+            callback=_make_toggle(lambda: OverlapPointsDock(canvas, mw)))
+
+        def _open_layout_importer():
+            from .module_wz_dialogs.layout_importer import ImportPrintDialog
+            ImportPrintDialog(cmd_dock=cmd_dock, parent=mw).exec()
+        cmd_dock.register_ui_command("IMPORT", "LI", callback=_open_layout_importer)
+
+        _georef_ref = [None]
+        def _activate_georef():
+            if _georef_ref[0] is None:
+                from .tools.georef.georeference_tool import GeoreferenceTool
+                _georef_ref[0] = GeoreferenceTool(canvas, self._tool_context, self._translator)
+                _georef_ref[0]._tool_key = 'georef'
+            self._tool_manager.activate_tool(_georef_ref[0])
+        cmd_dock.register_ui_command("GEOREF", "GR", callback=_activate_georef)
+
+        _align_ref = [None]
+        def _activate_align():
+            if _align_ref[0] is None:
+                from .tools.georef.align_tool import AlignTool
+                _align_ref[0] = AlignTool(canvas, self._tool_context, self._translator)
+                _align_ref[0]._tool_key = 'align'
+            self._tool_manager.activate_tool(_align_ref[0])
+        cmd_dock.register_ui_command("ALIGN", "AL", callback=_activate_align)
+
+        # ── Gated tool callbacks (defined now, registered only after sign-in) ──
+
+        def _open_parcel_plotter():
+            from .module_wz_dialogs.parcel_plotter import ParcelPlotterDialog
+            ParcelPlotterDialog(mw).exec()
+
+        from .module_wz_dialogs.solve_topology_issues import SolveTopologyDock
+        _cb_slv = _make_toggle(lambda: SolveTopologyDock(mw))
+
+        from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
+        _cb_spiky = _make_toggle(lambda: SpikyGeomsDock(canvas, mw))
+
+        from .module_wz_dialogs.overlap_area import OverlapAreaDock
+        _cb_oa = _make_toggle(lambda: OverlapAreaDock(mw))
+
+        def _open_layout_importer():
+            from .module_wz_dialogs.layout_importer import ImportPrintDialog
+            ImportPrintDialog(cmd_dock=cmd_dock, parent=mw).exec()
+
+        _tfix_ref = [None]
+        def _activate_tfix():
+            if _tfix_ref[0] is None:
+                from .module_wz_dialogs.topology_solver import TopologySolver
+                _tfix_ref[0] = TopologySolver(canvas, iface, cmd_dock)
+                self._tfix_tool = _tfix_ref[0]
+            canvas.setMapTool(_tfix_ref[0])
+
+        _georef_ref = [None]
+        def _activate_georef():
+            if _georef_ref[0] is None:
+                from .tools.georef.georeference_tool import GeoreferenceTool
+                _georef_ref[0] = GeoreferenceTool(canvas, self._tool_context, self._translator)
+                _georef_ref[0]._tool_key = 'georef'
+            self._tool_manager.activate_tool(_georef_ref[0])
+
+        _align_ref = [None]
+        def _activate_align():
+            if _align_ref[0] is None:
+                from .tools.georef.align_tool import AlignTool
+                _align_ref[0] = AlignTool(canvas, self._tool_context, self._translator)
+                _align_ref[0]._tool_key = 'align'
+            self._tool_manager.activate_tool(_align_ref[0])
+
+        def _do_register_gated():
+            if _gated_registered[0]:
+                return
+            _gated_registered[0] = True
+            cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
+            cmd_dock.register_ui_command("SLV",    "ST", callback=_cb_slv)
+            cmd_dock.register_ui_command("SPIKY",  "SG", callback=_cb_spiky)
+            cmd_dock.register_ui_command("OA",         callback=_cb_oa)
+            cmd_dock.register_ui_command("TS",     "TF", callback=_activate_tfix)
+
+        # ── WHOAMI — only entry point to sign-in ──────────────────────────
+
+        def _whoami():
+            mgr = AuthManager.get()
+            if mgr.is_authenticated():
+                cmd_dock.log(f"Signed in as: {mgr.username()}", "#44cc88")
+            else:
+                from .module_wz_dialogs.auth_dialog import AuthDialog
+                from qgis.PyQt.QtWidgets import QDialog
+                dlg = AuthDialog(mgr, mw)
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    mgr.record_session()
+                    _do_register_gated()
+                    cmd_dock.log(
+                        f"Welcome, {mgr.username()}! "
+                        "Advanced tools are now available.", "#44cc88"
+                    )
+        cmd_dock.register_ui_command("WHOAMI", "WI", callback=_whoami)
+
+        # ── SIGNOUT — hides gated tools from suggestions ──────────────────
+
+        def _signout():
+            mgr = AuthManager.get()
+            if mgr.is_authenticated():
+                name = mgr.username()
+                mgr.clear_username()
+                _gated_registered[0] = False
+                cmd_dock.unregister_ui_command(*_GATED_ALIASES)
+                cmd_dock.log(f"Signed out ({name}). Advanced tools hidden.", "#ffaa00")
+            else:
+                cmd_dock.log("Not signed in.", "#aaaaaa")
+        cmd_dock.register_ui_command("SIGNOUT", "SO", callback=_signout)
+
+        # Re-register gated tools immediately if already signed in from a prior session
+        if AuthManager.get().is_authenticated():
+            _do_register_gated()
+            AuthManager.get().record_session()
+
 
     # ── teardown ──────────────────────────────────────────────────────────
     def _teardown(self):
+        with contextlib.suppress(Exception):
+            from .core.auth_manager import AuthManager
+            AuthManager.reset()
+
         with contextlib.suppress(Exception):
             if self._tool_manager:
                 self._tool_manager.deactivate()
