@@ -45,6 +45,19 @@ class ToolManager(QObject):
         if self._home is not None and self._active is not self._home:
             self.activate_tool(self._home)
 
+    def force_home(self):
+        """Re-activate the home tool unconditionally — forces cursor reset even if
+        QGIS's native pan/zoom replaced the canvas cursor without going through
+        ToolManager."""
+        if self._home is None:
+            return
+        if self._active is self._home:
+            # Already tracked as home but canvas cursor may have been replaced;
+            # re-set the maptool so QGIS calls activate() and restores the cursor.
+            self._canvas.setMapTool(self._home)
+        else:
+            self.activate_tool(self._home)
+
     @property
     def home_tool(self):
         return self._home

@@ -113,8 +113,8 @@ BASE_PT_COLOR = QColor(255, 165,   0)   # orange crosshair (transform base point
 _cad_cursor: "QCursor | None" = None
 
 
-def snap_toolbar_icon() -> QIcon:
-    """Blue crosshair-with-box icon for the snap settings toolbar button."""
+def maptool_toolbar_icon() -> QIcon:
+    """Blue crosshair-with-box icon for the plugin activation toolbar button."""
     size, c, gap, box = 18, 8, 2, 2
     px = QPixmap(size, size)
     px.fill(Qt.transparent)
@@ -126,6 +126,36 @@ def snap_toolbar_icon() -> QIcon:
     p.drawLine(c, c + gap + box, c, size - 1)
     p.setPen(QPen(_CC_COLOR, 1))
     p.drawRect(c - box, c - box, box * 2, box * 2)
+    p.end()
+    return QIcon(px)
+
+
+def snap_toolbar_icon() -> QIcon:
+    """Magnet icon for the snap settings toolbar button."""
+    size = 18
+    px = QPixmap(size, size)
+    px.fill(Qt.transparent)
+    p = QPainter(px)
+    p.setRenderHint(QPainter.Antialiasing)
+
+    # Horseshoe body: orange arc + two legs
+    body_col = QColor(210, 95, 0)
+    p.setPen(QPen(body_col, 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.setBrush(Qt.NoBrush)
+    # Semicircle across the top: right tangent at (14,5), left tangent at (3,5)
+    p.drawArc(3, 1, 11, 8, 0, 180 * 16)
+    # Left leg down
+    p.drawLine(3, 5, 3, 13)
+    # Right leg down
+    p.drawLine(14, 5, 14, 13)
+
+    # Poles at bottom of legs — no outline, solid fill
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(50, 100, 220))   # blue pole (N, left)
+    p.drawRect(1, 13, 4, 4)
+    p.setBrush(QColor(210, 45, 45))    # red pole (S, right)
+    p.drawRect(12, 13, 4, 4)
+
     p.end()
     return QIcon(px)
 

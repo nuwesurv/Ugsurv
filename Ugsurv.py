@@ -56,6 +56,7 @@ class Ugsurv:
         self._storage            = None
         self._tool_context       = None
         self._sel_overlay        = None
+        self._maptool_action     = None
         self._snap_action        = None
         self._ortho_action       = None
         self._shortcuts              = []
@@ -79,7 +80,7 @@ class Ugsurv:
     def add_action(self, icon_path, text, callback,
                    enabled_flag=True, add_to_menu=True,
                    add_to_toolbar=True, status_tip=None, parent=None):
-        icon   = QIcon(icon_path)
+        icon   = icon_path if isinstance(icon_path, QIcon) else QIcon(icon_path)
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
         action.setEnabled(enabled_flag)
@@ -330,8 +331,21 @@ class Ugsurv:
         snap_dialog = SnapSettingsDialog(snap_settings, snap_engine, mw)
         self._snap_dock = snap_dialog  # reuse attr so teardown loop still works
 
-        # Add snap button to QGIS's Plugins toolbar, right next to the UgSurv icon
+        # Maptool (select) button — first extra button after the plugin icon
         from .core import style as _cstyle
+        maptool_act = QAction(_cstyle.maptool_toolbar_icon(), "Select", mw)
+        maptool_act.setToolTip("Select  (Esc)")
+        maptool_act.setCheckable(True)
+        maptool_act.triggered.connect(tool_mgr.force_home)
+        iface.addToolBarIcon(maptool_act)
+        self._maptool_action = maptool_act
+        tool_mgr.toolChanged.connect(
+            lambda tool: maptool_act.setChecked(
+                getattr(tool, '_tool_key', None) == 'select'
+            )
+        )
+
+        # Snap button — Plugins toolbar
         snap_act = QAction(_cstyle.snap_toolbar_icon(), "Snap Settings", mw)
         snap_act.setToolTip("Snap Settings  (SNAP / OS)")
         snap_act.triggered.connect(snap_dialog.open_or_raise)
@@ -854,10 +868,6 @@ class Ugsurv:
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     mgr.record_session()
                     _do_register_gated()
-                    cmd_dock.log(
-                        f"Welcome, {mgr.username()}! "
-                        "Advanced tools are now available.", "#44cc88"
-                    )
         cmd_dock.register_ui_command("WHOAMI", "WI", callback=_whoami)
 
         # ── SIGNOUT — hides gated tools from suggestions ──────────────────
@@ -869,7 +879,7 @@ class Ugsurv:
                 mgr.clear_username()
                 _gated_registered[0] = False
                 cmd_dock.unregister_ui_command(*_GATED_ALIASES)
-                cmd_dock.log(f"Signed out ({name}). Advanced tools hidden.", "#ffaa00")
+                cmd_dock.log(f"Signed out ({name}).", "#ffaa00")
             else:
                 cmd_dock.log("Not signed in.", "#aaaaaa")
         cmd_dock.register_ui_command("SIGNOUT", "SO", callback=_signout)
@@ -954,6 +964,12 @@ class Ugsurv:
         self._reload_layers_slot    = None
         self._props_sel_slot        = None
         self._sel                   = None
+
+        if self._maptool_action:
+            with contextlib.suppress(Exception):
+                self.iface.removeToolBarIcon(self._maptool_action)
+                self._maptool_action.deleteLater()
+            self._maptool_action = None
 
         if self._snap_action:
             with contextlib.suppress(Exception):
