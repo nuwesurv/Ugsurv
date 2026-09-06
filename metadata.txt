@@ -5,12 +5,30 @@
 [general]
 name=Ugsurv
 qgisMinimumVersion=3.0
-description=General purpose plugin for Uganda survey workflows.
+description=CAD-style survey drafting and editing toolkit for Uganda land and boundary survey workflows.
 version=0.4
 author=Nuwe Surv
 email=nuwesurv@gmail.com
 
-about=Uganda survey workflow plugin. QGIS game, Spiky corner geometry detection, Dimensioning, Aligning prints, Auto plotting and topology correction.
+about=Ugsurv is a comprehensive CAD-style drafting and survey-editing plugin built for Uganda land surveyors working in QGIS. All geometry is stored in a GeoPackage in EPSG:32636 (WGS 84 / UTM Zone 36N) with full CRS enforcement and on-the-fly reprojection.
+
+Drawing tools: point, line, polyline, circle, arc, rectangle, polygon — all with dynamic keyboard input and snap-to-geometry.
+
+Modify tools: move, copy, rotate, scale, mirror, offset, array, trim, extend, fillet, chamfer, explode, and crop — matching the core CAD edit workflow.
+
+Vertex tools: grip-edit, add vertex, remove vertex, join segments, and break at point.
+
+Annotation: linear, angular, and aligned dimensioning; text labels; georeferencing and print-alignment tools.
+
+Selection: window/crossing/fence selection, erase selection, select-similar, and stretch.
+
+Layer management: draw-order grouping via named cad_layers with colour, linetype, visibility, lock, and sort-order controls — without creating extra QGIS layers.
+
+Topology: spiky-corner detection, topology correction (SOLVETOPO), and geometry revert (restores original_geometry WKT on selected features).
+
+Auto-plot: automated sheet layout and plotting for survey plans.
+
+Designed for cadastral, boundary, and topographic survey drafting entirely within QGIS.
 
 tracker=https://github.com/nuwesurv/Ugsurv/issues
 repository=https://github.com/nuwesurv/Ugsurv
@@ -23,7 +41,7 @@ hasProcessingProvider=no
 # changelog=
 
 # Tags are comma separated with spaces allowed
-tags=python
+tags=survey, cadastral, CAD, drafting, Uganda, boundary, topology, dimensions, editing, drawing
 
 homepage=https://github.com/nuwesurv/Ugsurv
 category=Plugins
