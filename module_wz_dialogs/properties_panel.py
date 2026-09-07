@@ -27,6 +27,7 @@ try:
         apply_point_color_renderer,
         apply_dimension_style,
     )
+    from ..core import sizing_mode as _sm
 except ImportError:
     def circle_attrs(*a, **k): return {}
     def apply_circle_color_renderer(*a, **k): pass
@@ -34,6 +35,11 @@ except ImportError:
     def apply_polyline_color_renderer(*a, **k): pass
     def apply_point_color_renderer(*a, **k): pass
     def apply_dimension_style(*a, **k): pass
+    class _sm:  # noqa: N801
+        @staticmethod
+        def thickness_props(): return {"suffix": " mm", "min": 0.01, "max": 10.0, "step": 0.05, "decimals": 2, "default": 0.35}
+        @staticmethod
+        def size_props(): return {"suffix": " mm", "min": 0.1, "max": 500.0, "step": 0.5, "decimals": 2, "default": 2.5}
 
 
 class PropertiesDock(QDockWidget):
@@ -282,13 +288,15 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("Line Type:", lt_combo)
 
         current_lw = self._attr(feat, lw_idx)
-        lw_edit = self._edit(f"{float(current_lw):.2f}" if current_lw is not None else "0.40", "mm")
+        _tp = _sm.thickness_props()
+        lw_spin = QDoubleSpinBox()
+        lw_spin.setRange(_tp["min"], _tp["max"])
+        lw_spin.setSingleStep(_tp["step"])
+        lw_spin.setDecimals(_tp["decimals"])
+        lw_spin.setSuffix(_tp["suffix"])
+        lw_spin.setValue(float(current_lw) if current_lw is not None else _tp["default"])
 
-        def on_lw_edited(_idx=lw_idx):
-            try:
-                w = float(lw_edit.text())
-            except ValueError:
-                return
+        def on_lw_changed(w, _idx=lw_idx):
             if _idx >= 0 and self._fid is not None:
                 if not self._layer.isEditable():
                     self._layer.startEditing()
@@ -296,8 +304,8 @@ class PropertiesDock(QDockWidget):
                 apply_polyline_color_renderer(self._layer)
                 self._layer.triggerRepaint()
 
-        lw_edit.editingFinished.connect(on_lw_edited)
-        self._form.addRow("Thickness:", lw_edit)
+        lw_spin.valueChanged.connect(on_lw_changed)
+        self._form.addRow("Thickness:", lw_spin)
 
     def _build_circle_rows(self, feat, geom):  # noqa: C901
         radius_idx = self._layer.fields().indexOf("radius")
@@ -404,13 +412,15 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("Line Type:", lt_combo)
 
         current_lw = self._attr(feat, lw_idx)
-        lw_edit = self._edit(f"{float(current_lw):.2f}" if current_lw is not None else "0.40", "mm")
+        _tp = _sm.thickness_props()
+        lw_spin = QDoubleSpinBox()
+        lw_spin.setRange(_tp["min"], _tp["max"])
+        lw_spin.setSingleStep(_tp["step"])
+        lw_spin.setDecimals(_tp["decimals"])
+        lw_spin.setSuffix(_tp["suffix"])
+        lw_spin.setValue(float(current_lw) if current_lw is not None else _tp["default"])
 
-        def on_lw_edited(_idx=lw_idx):
-            try:
-                w = float(lw_edit.text())
-            except ValueError:
-                return
+        def on_lw_changed(w, _idx=lw_idx):
             if _idx >= 0 and self._fid is not None:
                 if not self._layer.isEditable():
                     self._layer.startEditing()
@@ -418,8 +428,8 @@ class PropertiesDock(QDockWidget):
                 apply_circle_color_renderer(self._layer)
                 self._layer.triggerRepaint()
 
-        lw_edit.editingFinished.connect(on_lw_edited)
-        self._form.addRow("Thickness:", lw_edit)
+        lw_spin.valueChanged.connect(on_lw_changed)
+        self._form.addRow("Thickness:", lw_spin)
 
     def _build_point_rows(self, feat, geom):  # noqa: C901
         pt = geom.asPoint()
@@ -500,12 +510,13 @@ class PropertiesDock(QDockWidget):
         size_idx = self._layer.fields().indexOf("symbol_size")
         current_size = self._attr(feat, size_idx)
 
+        _sp = _sm.size_props()
         size_spin = QDoubleSpinBox()
-        size_spin.setRange(0.1, 500.0)
-        size_spin.setSingleStep(0.5)
-        size_spin.setDecimals(2)
-        size_spin.setSuffix(" px")
-        size_spin.setValue(float(current_size) if current_size is not None else 2.0)
+        size_spin.setRange(_sp["min"], _sp["max"])
+        size_spin.setSingleStep(_sp["step"])
+        size_spin.setDecimals(_sp["decimals"])
+        size_spin.setSuffix(_sp["suffix"])
+        size_spin.setValue(float(current_size) if current_size is not None else _sp["default"])
 
         def on_size_changed(v, _idx=size_idx):
             if _idx >= 0 and self._fid is not None:
@@ -1009,11 +1020,12 @@ class PropertiesDock(QDockWidget):
         self._form.addRow(self._sep())
 
         val, is_common = multi_val("symbol_size")
+        _sp = _sm.size_props()
         size_spin = QDoubleSpinBox()
-        size_spin.setRange(0.0, 500.0)
-        size_spin.setSingleStep(0.5)
-        size_spin.setDecimals(2)
-        size_spin.setSuffix(" px")
+        size_spin.setRange(0.0, _sp["max"])
+        size_spin.setSingleStep(_sp["step"])
+        size_spin.setDecimals(_sp["decimals"])
+        size_spin.setSuffix(_sp["suffix"])
         size_spin.setSpecialValueText("(mixed)")
         if is_common and val:
             try:
@@ -1130,22 +1142,28 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("Line Type:", lt_combo)
 
         val, is_common = multi_val("line_thickness")
-        lw_edit = self._edit(
-            f"{float(val):.2f}" if is_common and val else "", "mm"
-        )
-        if not is_common:
-            lw_edit.setPlaceholderText("(mixed)")
-
-        def on_lw():
+        _tp = _sm.thickness_props()
+        lw_spin = QDoubleSpinBox()
+        lw_spin.setRange(0.0, _tp["max"])
+        lw_spin.setSingleStep(_tp["step"])
+        lw_spin.setDecimals(_tp["decimals"])
+        lw_spin.setSuffix(_tp["suffix"])
+        lw_spin.setSpecialValueText("(mixed)")
+        if is_common and val:
             try:
-                w = float(lw_edit.text())
-            except ValueError:
-                return
-            apply_all("line_thickness", round(w, 3))
-            _rebuild_line_renderer()
+                lw_spin.setValue(float(val))
+            except (ValueError, TypeError):
+                lw_spin.setValue(0.0)
+        else:
+            lw_spin.setValue(0.0)
 
-        lw_edit.editingFinished.connect(on_lw)
-        self._form.addRow("Thickness:", lw_edit)
+        def on_lw(w):
+            if w > 0:
+                apply_all("line_thickness", round(w, 3))
+                _rebuild_line_renderer()
+
+        lw_spin.valueChanged.connect(on_lw)
+        self._form.addRow("Thickness:", lw_spin)
 
     def _build_multi_circle_rows(self, items, multi_val, apply_all, repaint_all):  # noqa: C901
         self._form.addRow("Color:", self._make_multi_color_button(items))
@@ -1177,22 +1195,28 @@ class PropertiesDock(QDockWidget):
         self._form.addRow("Line Type:", lt_combo)
 
         val, is_common = multi_val("line_thickness")
-        lw_edit = self._edit(
-            f"{float(val):.2f}" if is_common and val else "", "mm"
-        )
-        if not is_common:
-            lw_edit.setPlaceholderText("(mixed)")
-
-        def on_lw():
+        _tp = _sm.thickness_props()
+        lw_spin = QDoubleSpinBox()
+        lw_spin.setRange(0.0, _tp["max"])
+        lw_spin.setSingleStep(_tp["step"])
+        lw_spin.setDecimals(_tp["decimals"])
+        lw_spin.setSuffix(_tp["suffix"])
+        lw_spin.setSpecialValueText("(mixed)")
+        if is_common and val:
             try:
-                w = float(lw_edit.text())
-            except ValueError:
-                return
-            apply_all("line_thickness", round(w, 3))
-            _rebuild_circle_renderer()
+                lw_spin.setValue(float(val))
+            except (ValueError, TypeError):
+                lw_spin.setValue(0.0)
+        else:
+            lw_spin.setValue(0.0)
 
-        lw_edit.editingFinished.connect(on_lw)
-        self._form.addRow("Thickness:", lw_edit)
+        def on_lw(w):
+            if w > 0:
+                apply_all("line_thickness", round(w, 3))
+                _rebuild_circle_renderer()
+
+        lw_spin.valueChanged.connect(on_lw)
+        self._form.addRow("Thickness:", lw_spin)
 
     def _build_multi_hatch_rows(self, items, multi_val, apply_all, repaint_all):  # noqa: C901
         val, is_common = multi_val("fill_pattern")

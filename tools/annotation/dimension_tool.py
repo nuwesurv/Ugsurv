@@ -31,6 +31,7 @@ from qgis.core import (
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType, SnapType
 from ...core import style as _style
+from ...core import sizing_mode as _sm
 
 _DIM_LAYER_NAME = "dimensions"
 _LAYER_EPSG     = 32636
@@ -133,8 +134,8 @@ def _apply_dim_style(layer: QgsVectorLayer):
 
     buf = QgsTextBufferSettings()
     buf.setEnabled(True)
-    buf.setSize(0.6)
-    buf.setSizeUnit(QgsUnitTypes.RenderMillimeters)
+    buf.setSize(_sm.default_dim_label_buffer())
+    buf.setSizeUnit(_sm.text_buffer_unit())
     buf.setColor(QColor(255, 255, 255))
 
     fmt  = QgsTextFormat()
@@ -142,8 +143,8 @@ def _apply_dim_style(layer: QgsVectorLayer):
     font.setBold(True)
     font.setItalic(True)
     fmt.setFont(font)
-    fmt.setSize(9)
-    fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
+    fmt.setSize(_sm.default_dim_label_size())
+    fmt.setSizeUnit(_sm.text_size_unit())
     fmt.setColor(QColor(0, 0, 0))
     fmt.setBuffer(buf)
     pal.setFormat(fmt)

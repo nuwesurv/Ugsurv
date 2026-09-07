@@ -8,12 +8,26 @@ from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsPointXY, QgsGeometry, QgsWkbTypes, QgsProject,
     QgsFeatureRequest, QgsRectangle,
+    QgsPoint, QgsLineString, QgsCompoundCurve,
 )
 from qgis.gui import QgsVertexMarker
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
-from .grip_edit_tool import _replace_vertex
+
+
+def _rebuild_geom(pts: list, layer) -> QgsGeometry:
+    """Reconstruct geometry matching the layer's WKB type from a list of QgsPointXY."""
+    if layer.wkbType() == QgsWkbTypes.CompoundCurve:
+        qp = [QgsPoint(p.x(), p.y()) for p in pts]
+        ls = QgsLineString(qp)
+        cc = QgsCompoundCurve()
+        cc.addCurve(ls)
+        return QgsGeometry(cc)
+    g = QgsGeometry.fromPolylineXY(pts)
+    if QgsWkbTypes.isMultiType(layer.wkbType()):
+        g.convertToMultiType()
+    return g
 
 
 class RemoveVertexTool(BaseTool):
@@ -72,16 +86,28 @@ class RemoveVertexTool(BaseTool):
     def _commit_remove(self):
         feat = self._sel_layer.getFeature(self._sel_fid)
         pts  = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
-        if len(pts) <= 2:
-            return  # can't remove below 2 vertices
-        del pts[self._sel_idx]
-        wtype = int(QgsWkbTypes.geometryType(feat.geometry().wkbType()))
-        if wtype == 1:  # Line
-            g = QgsGeometry.fromPolylineXY(pts)
-            g.convertToMultiType()
+
+        _EPS = 1e-6
+        is_closed = (len(pts) > 1 and
+                     math.hypot(pts[0].x() - pts[-1].x(),
+                                pts[0].y() - pts[-1].y()) < _EPS)
+
+        if is_closed:
+            unique = pts[:-1]           # work with unique vertices, drop closing repeat
+            idx    = self._sel_idx
+            if idx >= len(unique):      # user clicked the closing phantom — treat as vertex 0
+                idx = 0
+            if len(unique) <= 3:        # removing would leave a degenerate 2-pt closed shape
+                return
+            del unique[idx]
+            new_pts = unique + [unique[0]]   # re-close: last point mirrors new first
         else:
-            g = QgsGeometry.fromPolygonXY([pts])
-            g.convertToMultiType()
+            if len(pts) <= 2:
+                return
+            new_pts = pts[:]
+            del new_pts[self._sel_idx]
+
+        g = _rebuild_geom(new_pts, self._sel_layer)
         if not self._sel_layer.isEditable():
             self._sel_layer.startEditing()
         self._sel_layer.changeGeometry(self._sel_fid, g)

@@ -24,13 +24,12 @@ from qgis.core import (
     QgsDistanceArea,
     QgsFeature,
     QgsField,
-    QgsFillSymbol,
     QgsGeometry,
+    QgsNullSymbolRenderer,
     QgsPalLayerSettings,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
-    QgsSingleSymbolRenderer,
     QgsTextBufferSettings,
     QgsTextFormat,
     QgsUnitTypes,
@@ -42,8 +41,91 @@ from qgis.core import (
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
+from ...core import sizing_mode as _sm
 
 _TEXT_LAYER_NAME = "text"
+
+# ── Rectangle constraint ──────────────────────────────────────────────────────
+# Keeps strong references to per-layer closures so Qt doesn't GC them.
+_RECT_CORRECTORS: "dict[str, object]" = {}
+# Pre-edit corner cache: {layer_id: {fid: [pt0, pt1, pt2, pt3]}}
+# Populated on editingStarted so _enforce knows which corner is the fixed opposite.
+_PRE_EDIT_CORNERS: "dict[str, dict]" = {}
+
+
+def _connect_rect_constraint(lyr: "QgsVectorLayer"):
+    """Connect a geometryChanged handler that forces text-box polygons to stay
+    axis-aligned rectangles using the opposite-corner algorithm.
+
+    On editingStarted the pre-edit corners are cached per fid.  When
+    geometryChanged fires, the handler:
+      1. Finds which corner moved the most vs the cached pre-edit corners.
+      2. Fixes the opposite corner (index +2 mod 4) to its pre-edit position.
+      3. Commits QgsGeometry.fromRect(QgsRectangle(moved_pt, fixed_opposite)).
+
+    Falls back to the bounding-box approach when no cache entry is available
+    (e.g. first edit after plugin load without an editingStarted signal).
+
+    Safe to call multiple times — only wires once per layer."""
+    if lyr.id() in _RECT_CORRECTORS:
+        return
+
+    _guard = [False]   # mutable flag shared with closure
+
+    def _on_editing_started():
+        corners = {}
+        for feat in lyr.getFeatures():
+            ring = feat.geometry().asPolygon()
+            if ring and len(ring[0]) >= 5:
+                corners[feat.id()] = list(ring[0][:4])
+        _PRE_EDIT_CORNERS[lyr.id()] = corners
+
+    def _enforce(fid: int, geom: "QgsGeometry"):
+        if _guard[0]:
+            return
+        ring = geom.asPolygon()
+        if not ring:
+            return
+        pts = ring[0]
+        xs = {round(p.x(), 4) for p in pts}
+        ys = {round(p.y(), 4) for p in pts}
+        # Already a valid axis-aligned rectangle (4 unique corners + closing pt)
+        if len(pts) == 5 and len(xs) == 2 and len(ys) == 2:
+            # Update the cache with the newly committed corners so future
+            # edits start from the correct pre-edit state.
+            layer_cache = _PRE_EDIT_CORNERS.get(lyr.id())
+            if layer_cache is not None:
+                layer_cache[fid] = list(pts[:4])
+            return
+        new_corners = list(pts[:4])
+        pre_corners = _PRE_EDIT_CORNERS.get(lyr.id(), {}).get(fid)
+        if pre_corners and len(pre_corners) == 4 and len(new_corners) == 4:
+            # Identify grabbed vertex as the one with the largest displacement.
+            def _d2(i):
+                dx = new_corners[i].x() - pre_corners[i].x()
+                dy = new_corners[i].y() - pre_corners[i].y()
+                return dx * dx + dy * dy
+            grabbed_idx  = max(range(4), key=_d2)
+            fixed_opp    = pre_corners[(grabbed_idx + 2) % 4]
+            moved_pt     = new_corners[grabbed_idx]
+            rect = QgsRectangle(moved_pt.x(), moved_pt.y(),
+                                fixed_opp.x(), fixed_opp.y())
+        else:
+            rect = geom.boundingBox()
+        if rect.isNull() or rect.isEmpty():
+            return
+        _guard[0] = True
+        lyr.changeGeometry(fid, QgsGeometry.fromRect(rect))
+        _guard[0] = False
+
+    def _cleanup():
+        _RECT_CORRECTORS.pop(lyr.id(), None)
+        _PRE_EDIT_CORNERS.pop(lyr.id(), None)
+
+    _RECT_CORRECTORS[lyr.id()] = (_enforce, _on_editing_started)
+    lyr.geometryChanged.connect(_enforce)
+    lyr.editingStarted.connect(_on_editing_started)
+    lyr.willBeDeleted.connect(_cleanup)
 _LAYER_EPSG      = 32636
 _LAYER_CRS_AUTH  = f"EPSG:{_LAYER_EPSG}"
 
@@ -69,33 +151,43 @@ _STEP_PICKING  = "picking"
 # ── Layer management (shared with text_tool.py) ───────────────────────────────
 
 def _get_or_create_text_layer(ctx) -> "QgsVectorLayer | None":
-    """Return the text layer, creating it on first use."""
+    """Return the text (Polygon) layer, migrating a legacy Point layer if needed.
+
+    The layer is intentionally left out of edit mode so QGIS's built-in node
+    tool cannot modify individual vertices.  Each commit method calls
+    startEditing / commitChanges itself.
+    """
     found = QgsProject.instance().mapLayersByName(_TEXT_LAYER_NAME)
     if found:
         lyr = found[0]
-        _ensure_fields(lyr)
-        if not lyr.isEditable():
-            lyr.startEditing()
-        return lyr
+        if lyr.geometryType() == QgsWkbTypes.PolygonGeometry:
+            if lyr.isEditable():
+                lyr.commitChanges()
+            _ensure_fields(lyr)
+            _connect_rect_constraint(lyr)
+            return lyr
+        # Legacy Point layer — remove so we can recreate as Polygon
+        if found[0].isEditable():
+            found[0].rollBack()
+        QgsProject.instance().removeMapLayer(lyr.id())
 
     gpkg = getattr(ctx.storage_manager, "gpkg_path", None)
     if gpkg and os.path.exists(gpkg):
         uri = f"{gpkg}|layername={_TEXT_LAYER_NAME}"
         lyr = QgsVectorLayer(uri, _TEXT_LAYER_NAME, "ogr")
-        if lyr.isValid():
+        if lyr.isValid() and lyr.geometryType() == QgsWkbTypes.PolygonGeometry:
             _register_layer(lyr)
             _ensure_fields(lyr)
             _apply_text_style(lyr)
-            if not lyr.isEditable():
-                lyr.startEditing()
+            _connect_rect_constraint(lyr)
             return lyr
+        # Table missing or wrong type — overwrite with Polygon table
         _add_text_table_to_gpkg(gpkg)
         lyr = QgsVectorLayer(f"{gpkg}|layername={_TEXT_LAYER_NAME}", _TEXT_LAYER_NAME, "ogr")
         if lyr.isValid():
             _register_layer(lyr)
             _apply_text_style(lyr)
-            if not lyr.isEditable():
-                lyr.startEditing()
+            _connect_rect_constraint(lyr)
             return lyr
 
     mem = QgsVectorLayer(f"Polygon?crs={_LAYER_CRS_AUTH}", _TEXT_LAYER_NAME, "memory")
@@ -106,7 +198,7 @@ def _get_or_create_text_layer(ctx) -> "QgsVectorLayer | None":
     mem.updateFields()
     _register_layer(mem)
     _apply_text_style(mem)
-    mem.startEditing()
+    _connect_rect_constraint(mem)
     return mem
 
 
@@ -146,34 +238,29 @@ def _register_layer(layer: QgsVectorLayer):
 
 
 def _apply_text_style(layer: QgsVectorLayer):
-    """Transparent-fill polygon box + Open Sans Bold label centred on the rectangle."""
-    symbol = QgsFillSymbol.createSimple({
-        'color': '255,255,255,0',
-        'outline_color': '80,80,80,180',
-        'outline_width': '0.26',
-        'outline_style': 'solid',
-    })
-    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-
-    buf = QgsTextBufferSettings()
-    buf.setEnabled(True)
-    buf.setSize(0.5)
-    buf.setSizeUnit(QgsUnitTypes.RenderMillimeters)
-    buf.setColor(QColor(255, 255, 255))
+    """Invisible polygon (text box) with Open Sans Bold label at centroid."""
+    layer.setRenderer(QgsNullSymbolRenderer())
 
     fmt = QgsTextFormat()
     font = QFont("Open Sans")
     font.setBold(True)
     fmt.setFont(font)
-    fmt.setSize(10)
-    fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
+    fmt.setSize(_sm.default_area_label_size())
+    fmt.setSizeUnit(_sm.text_size_unit())
     fmt.setColor(QColor(30, 30, 30))
+
+    buf = QgsTextBufferSettings()
+    buf.setEnabled(True)
+    buf.setSize(1.0)
+    buf.setSizeUnit(QgsUnitTypes.RenderMillimeters)
+    buf.setColor(QColor(255, 255, 255, 230))
     fmt.setBuffer(buf)
 
     pal = QgsPalLayerSettings()
-    pal.isExpression = False
-    pal.fieldName    = "label_text"
-    pal.placement    = QgsPalLayerSettings.AroundPoint
+    pal.isExpression     = False
+    pal.fieldName        = "label_text"
+    pal.placement        = QgsPalLayerSettings.Horizontal
+    pal.fitInPolygonOnly = False
     pal.setFormat(fmt)
 
     layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
@@ -389,7 +476,7 @@ class AreaLabelTool(BaseTool):
 
     def _write_label(self, geom: QgsGeometry,
                      src_crs: QgsCoordinateReferenceSystem, label: str) -> bool:
-        centroid  = geom.centroid()
+        centroid = geom.centroid()
         if centroid.isNull() or centroid.isEmpty():
             return False
         layer_crs = QgsCoordinateReferenceSystem(_LAYER_CRS_AUTH)
@@ -397,25 +484,24 @@ class AreaLabelTool(BaseTool):
             centroid.transform(
                 QgsCoordinateTransform(src_crs, layer_crs, QgsProject.instance())
             )
-        canvas = getattr(self._ctx, 'canvas', None)
+        canvas = getattr(self._ctx, "canvas", None)
         mup    = canvas.mapUnitsPerPixel() if canvas else 1.0
         pt     = centroid.asPoint()
-        hw, hh = 50 * mup, 12 * mup
-        box_geom = QgsGeometry.fromRect(
+        hw, hh = 60 * mup, 15 * mup
+        box    = QgsGeometry.fromRect(
             QgsRectangle(pt.x() - hw, pt.y() - hh, pt.x() + hw, pt.y() + hh)
         )
         if not self._text_layer.isEditable():
             if not self._text_layer.startEditing():
                 return False
         f = QgsFeature(self._text_layer.fields())
-        f.setGeometry(box_geom)
+        f.setGeometry(box)
         f.setAttribute("label_text", label)
         f.setAttribute("cad_layer", "area")
         ok = self._text_layer.addFeature(f)
         if not ok:
             return False
         self._text_layer.commitChanges()
-        self._text_layer.startEditing()
         canvas = getattr(self._ctx, "canvas", None)
         if canvas:
             canvas.refresh()

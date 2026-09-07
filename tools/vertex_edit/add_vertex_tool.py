@@ -9,11 +9,26 @@ from qgis.PyQt.QtCore import Qt
 from qgis.core import (
     QgsPointXY, QgsGeometry, QgsWkbTypes,
     QgsProject, QgsFeatureRequest, QgsRectangle,
+    QgsPoint, QgsLineString, QgsCompoundCurve,
 )
 
 from ...core.base_tool import BaseTool, ToolState
 from ...core.events import SemanticEvent, EventType
 from ...core import style as _style
+
+
+def _rebuild_geom(pts: list, layer) -> QgsGeometry:
+    """Reconstruct geometry matching the layer's WKB type from a list of QgsPointXY."""
+    if layer.wkbType() == QgsWkbTypes.CompoundCurve:
+        qp = [QgsPoint(p.x(), p.y()) for p in pts]
+        ls = QgsLineString(qp)
+        cc = QgsCompoundCurve()
+        cc.addCurve(ls)
+        return QgsGeometry(cc)
+    g = QgsGeometry.fromPolylineXY(pts)
+    if QgsWkbTypes.isMultiType(layer.wkbType()):
+        g.convertToMultiType()
+    return g
 
 
 class AddVertexTool(BaseTool):
@@ -94,13 +109,7 @@ class AddVertexTool(BaseTool):
         feat = self._pending_layer.getFeature(self._pending_fid)
         pts  = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
         new_pts = pts[:self._insert_idx] + [pt] + pts[self._insert_idx:]
-        wtype = int(QgsWkbTypes.geometryType(feat.geometry().wkbType()))
-        if wtype == 1:  # Line
-            g = QgsGeometry.fromPolylineXY(new_pts)
-            g.convertToMultiType()
-        else:
-            g = QgsGeometry.fromPolygonXY([new_pts])
-            g.convertToMultiType()
+        g = _rebuild_geom(new_pts, self._pending_layer)
         if not self._pending_layer.isEditable():
             self._pending_layer.startEditing()
         self._pending_layer.changeGeometry(self._pending_fid, g)

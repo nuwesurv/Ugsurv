@@ -411,7 +411,7 @@ class AlignTool(BaseTool):
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
         _symbol_path = os.path.join(
-            _plugin_dir, "map_icons", "point_icons", "benchmark1.svg"
+            _plugin_dir, "map_icons", "point_icons", "benchmark.svg"
         )
 
         saved = 0
@@ -435,7 +435,7 @@ class AlignTool(BaseTool):
                 layer.triggerRepaint()
             self._log(
                 f"{saved} GCP point(s) added  "
-                f"(Description='GCP', Symbol='benchmark1.svg', Size=4px).",
+                f"(Description='GCP', Symbol='benchmark.svg', Size=4px).",
                 "#aaffaa",
             )
         else:

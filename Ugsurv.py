@@ -792,6 +792,48 @@ class Ugsurv:
             FeedbackDialog(mw).exec()
         cmd_dock.register_ui_command("FEEDBACK", "FB", callback=_open_feedback)
 
+        def _toggle_units():
+            from .core import sizing_mode as _sm
+            from .core.renderer_utils import (
+                apply_point_color_renderer, apply_point_label_style,
+                apply_polyline_color_renderer, apply_circle_color_renderer,
+            )
+            new_mode = _sm.toggle()
+            label = "Map Units (metres)" if new_mode == _sm.MAPUNITS else "Points / MM (screen-fixed)"
+            cmd_dock.log(f"Sizing mode → {label}", "#aaddff")
+
+            # Re-apply renderers to all currently loaded plugin layers
+            _LAYER_RENDERERS = {
+                "lines":   apply_polyline_color_renderer,
+                "circles": apply_circle_color_renderer,
+            }
+            from qgis.core import QgsProject as _QP
+            for lname, fn in _LAYER_RENDERERS.items():
+                found = _QP.instance().mapLayersByName(lname)
+                if found:
+                    fn(found[0])
+                    found[0].triggerRepaint()
+
+            pts = _QP.instance().mapLayersByName("points")
+            if pts:
+                apply_point_color_renderer(pts[0])
+                apply_point_label_style(pts[0])
+                pts[0].triggerRepaint()
+
+            from .tools.annotation.dimension_tool import _apply_dim_style
+            dims = _QP.instance().mapLayersByName("dimensions")
+            if dims:
+                _apply_dim_style(dims[0])
+                dims[0].triggerRepaint()
+
+            from .tools.annotation.area_label import _apply_text_style
+            texts = _QP.instance().mapLayersByName("text")
+            if texts:
+                _apply_text_style(texts[0])
+                texts[0].triggerRepaint()
+
+        cmd_dock.register_ui_command("UNITS", "UN", callback=_toggle_units)
+
         from .module_wz_dialogs.overlap_points import OverlapPointsDock
         cmd_dock.register_ui_command("OVERLAP", "OVP",
             callback=_make_toggle(lambda: OverlapPointsDock(canvas, mw)))
@@ -1080,7 +1122,6 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.modify.extend_tool        import ExtendTool
     from .tools.modify.array_tool         import ArrayTool
     from .tools.selection.erase_tool      import EraseTool
-    from .tools.vertex_edit.grip_edit_tool     import GripEditTool
     from .tools.vertex_edit.break_tool         import BreakTool
     from .tools.vertex_edit.join_tool          import JoinTool
     from .tools.modify.chamfer_tool        import ChamferTool
@@ -1101,7 +1142,6 @@ def _make_tool(key: str, canvas, ctx, translator):
         "trim":          TrimTool,        "extend":        ExtendTool,
         "array":         ArrayTool,
         "erase":         EraseTool,       "crop":          CropTool,
-        "grip_edit":     GripEditTool,
         "break":         BreakTool,
         "join":          JoinTool,
         "chamfer":       ChamferTool,     "explode":       ExplodeTool,
@@ -1136,7 +1176,6 @@ def _register_commands(registry):
         ("array",         "ARRAY",   "AR"),
         ("erase",         "ERASE",   "E", "DEL"),
         ("crop",          "CROP",    "CR"),
-        ("grip_edit",     "GRIPS",   "V"),
         ("break",         "BREAK",   "BR"),
         ("join",          "JOIN",    "J"),
         ("chamfer",       "CHAMFER", "CH"),
