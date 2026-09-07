@@ -1,0 +1,3 @@
+greenish = #26B700
+bluish = #2976FF
+

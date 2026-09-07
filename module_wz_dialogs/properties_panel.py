@@ -787,17 +787,28 @@ class PropertiesDock(QDockWidget):
         grid.setContentsMargins(2, 2, 2, 2)
         grid.setSpacing(4)
 
-        # ── "Basic" tile — white circle, replicates the shipped QML style ──
+        # ── "Basic" tile — rendered from basic.svg for visual consistency ──
+        _basic_svg_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "map_icons", "basic.svg",
+        )
         basic_pix = QPixmap(ICON_PX, ICON_PX)
         basic_pix.fill(Qt.transparent)
-        bp = QPainter(basic_pix)
-        bp.setRenderHint(QPainter.Antialiasing)
-        bp.setPen(QPen(QColor(47, 47, 47), 1.5))
-        bp.setBrush(QBrush(QColor(255, 255, 255)))
-        r = ICON_PX // 3
-        cx, cy = ICON_PX // 2, ICON_PX // 2
-        bp.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
-        bp.end()
+        _bsvg = QSvgRenderer(_basic_svg_path)
+        if _bsvg.isValid():
+            bp = QPainter(basic_pix)
+            bp.setRenderHint(QPainter.Antialiasing)
+            _bsvg.render(bp, QRectF(0, 0, ICON_PX, ICON_PX))
+            bp.end()
+        else:
+            bp = QPainter(basic_pix)
+            bp.setRenderHint(QPainter.Antialiasing)
+            bp.setPen(QPen(QColor(47, 47, 47), 1.5))
+            bp.setBrush(QBrush(QColor(255, 255, 255)))
+            r = ICON_PX // 3
+            cx, cy = ICON_PX // 2, ICON_PX // 2
+            bp.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+            bp.end()
 
         basic_btn = QPushButton()
         basic_btn.setIcon(QIcon(basic_pix))
@@ -1407,17 +1418,28 @@ class PropertiesDock(QDockWidget):
                 lyr.triggerRepaint()
             self._deferred_refresh()
 
-        # "Basic" tile
+        # "Basic" tile — rendered from basic.svg for visual consistency
+        _basic_svg_path_m = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "map_icons", "basic.svg",
+        )
         basic_pix = QPixmap(ICON_PX, ICON_PX)
         basic_pix.fill(Qt.transparent)
-        bp = QPainter(basic_pix)
-        bp.setRenderHint(QPainter.Antialiasing)
-        bp.setPen(QPen(QColor(47, 47, 47), 1.5))
-        bp.setBrush(QBrush(QColor(255, 255, 255)))
-        r = ICON_PX // 3
-        cx2, cy2 = ICON_PX // 2, ICON_PX // 2
-        bp.drawEllipse(cx2 - r, cy2 - r, 2 * r, 2 * r)
-        bp.end()
+        _bsvg_m = QSvgRenderer(_basic_svg_path_m)
+        if _bsvg_m.isValid():
+            bp = QPainter(basic_pix)
+            bp.setRenderHint(QPainter.Antialiasing)
+            _bsvg_m.render(bp, QRectF(0, 0, ICON_PX, ICON_PX))
+            bp.end()
+        else:
+            bp = QPainter(basic_pix)
+            bp.setRenderHint(QPainter.Antialiasing)
+            bp.setPen(QPen(QColor(47, 47, 47), 1.5))
+            bp.setBrush(QBrush(QColor(255, 255, 255)))
+            r = ICON_PX // 3
+            cx2, cy2 = ICON_PX // 2, ICON_PX // 2
+            bp.drawEllipse(cx2 - r, cy2 - r, 2 * r, 2 * r)
+            bp.end()
 
         basic_btn = QPushButton()
         basic_btn.setIcon(QIcon(basic_pix))

@@ -24,12 +24,13 @@ from qgis.core import (
     QgsDistanceArea,
     QgsFeature,
     QgsField,
+    QgsFillSymbol,
     QgsGeometry,
-    QgsNullSymbolRenderer,
     QgsPalLayerSettings,
     QgsPointXY,
     QgsProject,
     QgsRectangle,
+    QgsSingleSymbolRenderer,
     QgsTextBufferSettings,
     QgsTextFormat,
     QgsUnitTypes,
@@ -56,7 +57,7 @@ _UNIT_MAP = {
     "f": ("ft²", 10.7639104), "ft2": ("ft²", 10.7639104), "ft²": ("ft²", 10.7639104),
 }
 
-_DEFAULT_UNIT     = ("m²", 1.0)   # Enter with empty field → m²
+_DEFAULT_UNIT     = ("ha", 1e-4)   # Enter with empty field → ha
 _DEFAULT_DECIMALS = 3
 
 # Step identifiers
@@ -97,7 +98,7 @@ def _get_or_create_text_layer(ctx) -> "QgsVectorLayer | None":
                 lyr.startEditing()
             return lyr
 
-    mem = QgsVectorLayer(f"Point?crs={_LAYER_CRS_AUTH}", _TEXT_LAYER_NAME, "memory")
+    mem = QgsVectorLayer(f"Polygon?crs={_LAYER_CRS_AUTH}", _TEXT_LAYER_NAME, "memory")
     mem.dataProvider().addAttributes([
         QgsField("label_text", QVariant.String),
         QgsField("cad_layer",  QVariant.String),
@@ -122,7 +123,7 @@ def _ensure_fields(layer: QgsVectorLayer):
 
 
 def _add_text_table_to_gpkg(gpkg: str):
-    tmp = QgsVectorLayer(f"Point?crs={_LAYER_CRS_AUTH}", _TEXT_LAYER_NAME, "memory")
+    tmp = QgsVectorLayer(f"Polygon?crs={_LAYER_CRS_AUTH}", _TEXT_LAYER_NAME, "memory")
     tmp.dataProvider().addAttributes([
         QgsField("label_text", QVariant.String),
         QgsField("cad_layer",  QVariant.String),
@@ -145,8 +146,14 @@ def _register_layer(layer: QgsVectorLayer):
 
 
 def _apply_text_style(layer: QgsVectorLayer):
-    """Invisible point + Open Sans Bold label centred on the point."""
-    layer.setRenderer(QgsNullSymbolRenderer())
+    """Transparent-fill polygon box + Open Sans Bold label centred on the rectangle."""
+    symbol = QgsFillSymbol.createSimple({
+        'color': '255,255,255,0',
+        'outline_color': '80,80,80,180',
+        'outline_width': '0.26',
+        'outline_style': 'solid',
+    })
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
     buf = QgsTextBufferSettings()
     buf.setEnabled(True)
@@ -166,8 +173,7 @@ def _apply_text_style(layer: QgsVectorLayer):
     pal = QgsPalLayerSettings()
     pal.isExpression = False
     pal.fieldName    = "label_text"
-    pal.placement    = QgsPalLayerSettings.OverPoint
-    pal.quadOffset   = QgsPalLayerSettings.QuadrantOver
+    pal.placement    = QgsPalLayerSettings.AroundPoint
     pal.setFormat(fmt)
 
     layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
@@ -281,7 +287,7 @@ class AreaLabelTool(BaseTool):
 
     def _ask_units(self):
         self._step = _STEP_UNITS
-        self._log("AREA — M=m²  H=ha  K=km²  A=ac  F=ft²  (Enter = m²)")
+        self._log("AREA — M=m²  H=ha  K=km²  A=ac  F=ft²  (Enter = ha)")
         self._request_input("unit", "Unit:")
 
     def _ask_decimals(self):
@@ -375,26 +381,45 @@ class AreaLabelTool(BaseTool):
             if label is None:
                 skipped += 1
                 continue
-            self._write_label(feat.geometry(), src.crs(), label)
-            added += 1
+            if self._write_label(feat.geometry(), src.crs(), label):
+                added += 1
+            else:
+                skipped += 1
         return added, skipped
 
     def _write_label(self, geom: QgsGeometry,
-                     src_crs: QgsCoordinateReferenceSystem, label: str):
+                     src_crs: QgsCoordinateReferenceSystem, label: str) -> bool:
         centroid  = geom.centroid()
+        if centroid.isNull() or centroid.isEmpty():
+            return False
         layer_crs = QgsCoordinateReferenceSystem(_LAYER_CRS_AUTH)
         if src_crs != layer_crs:
             centroid.transform(
                 QgsCoordinateTransform(src_crs, layer_crs, QgsProject.instance())
             )
+        canvas = getattr(self._ctx, 'canvas', None)
+        mup    = canvas.mapUnitsPerPixel() if canvas else 1.0
+        pt     = centroid.asPoint()
+        hw, hh = 50 * mup, 12 * mup
+        box_geom = QgsGeometry.fromRect(
+            QgsRectangle(pt.x() - hw, pt.y() - hh, pt.x() + hw, pt.y() + hh)
+        )
         if not self._text_layer.isEditable():
-            self._text_layer.startEditing()
+            if not self._text_layer.startEditing():
+                return False
         f = QgsFeature(self._text_layer.fields())
-        f.setGeometry(centroid)
-        f["label_text"] = label
-        f["cad_layer"]  = getattr(self._ctx, "active_cad_layer", "0")
-        self._text_layer.addFeature(f)
-        self._text_layer.triggerRepaint()
+        f.setGeometry(box_geom)
+        f.setAttribute("label_text", label)
+        f.setAttribute("cad_layer", "area")
+        ok = self._text_layer.addFeature(f)
+        if not ok:
+            return False
+        self._text_layer.commitChanges()
+        self._text_layer.startEditing()
+        canvas = getattr(self._ctx, "canvas", None)
+        if canvas:
+            canvas.refresh()
+        return True
 
     # ── undo step ─────────────────────────────────────────────────────────
 
