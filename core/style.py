@@ -95,8 +95,6 @@ SELECT_WIN_FILL      = QColor(  0,   0, 255,  60)
 SELECT_WIN_BORDER    = QColor(  0,   0, 255, 200)
 SELECT_CROSS_FILL    = QColor(255,   0,   0,  60)
 SELECT_CROSS_BORDER  = QColor(255,   0,   0, 200)
-STRETCH_CROSS_FILL   = QColor(255,   0,   0,  50)
-STRETCH_CROSS_BORDER = QColor(255,   0,   0, 200)
 
 
 # ══ Selection rubber-band overlay ════════════════════════════════════════════

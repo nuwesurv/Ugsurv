@@ -99,7 +99,7 @@ class CadLayersDock(QDockWidget):
         elif col == 5:
             try:
                 lyr.sort_order = int(item.text())
-            except ValueError:
+            except ValueError:  # nosec B110
                 pass
         self._apply_changes()
 

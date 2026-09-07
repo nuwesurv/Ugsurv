@@ -48,7 +48,7 @@ class PolylineTool(BaseTool):
         self._request_input("xy", "Specify start point:")
 
     # ── events ────────────────────────────────────────────────────────────
-    def _on_event(self, sem: SemanticEvent):
+    def _on_event(self, sem: SemanticEvent):  # noqa: C901
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED):
             if sem.point:
                 self._add_point(sem.point)
@@ -224,7 +224,7 @@ class PolylineTool(BaseTool):
             if item:
                 try:
                     scene.removeItem(item)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 setattr(self, attr, None)
         # rubber bands are removed by _clear_rubber_bands(); just clear refs

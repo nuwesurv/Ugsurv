@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging artifacts
+dist/
+build/
+*.zip
+*.tar.gz
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bandit / Flake8 reports
+qgisflagged/bandit_report.txt
+qgisflagged/flake8_report.txt
+
+# QGIS plugin builder temp
+pb_tool.cfg.bak

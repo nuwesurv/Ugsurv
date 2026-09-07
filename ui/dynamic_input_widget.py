@@ -65,6 +65,8 @@ _CONFIGS = {
     "polar":     [("Dist",    "0.000"), ("Brg",     "0.0°" )],
     "value":     [("Value",   "0.000")],
     "text":      [("",        "pt")],                            # free-text single field
+    "unit":      [("Unit",    "ha")],                            # unit selection (area label)
+    "integer":   [("",        "3" )],                            # integer entry (decimal places)
     "d1d2":      [("d1",      "2.000"), ("d2",      "2.000")],   # chamfer / fillet distances
     "rowcol":    [("Rows",    "3"),     ("Cols",    "3")],        # array row/col count
     "dxdy":      [("dX",      "1.000"), ("dY",      "1.000")],   # array x/y spacing
@@ -223,7 +225,7 @@ class DynamicInputWidget(QWidget):
                 break
             try:
                 self._live[i] = float(raw)
-            except ValueError:
+            except ValueError:  # nosec B110
                 pass
         if numbers:
             self._refresh_live_placeholders()
@@ -321,7 +323,7 @@ class DynamicInputWidget(QWidget):
         return False
 
     # ── internal ──────────────────────────────────────────────────────────
-    def _submit(self) -> bool:
+    def _submit(self) -> bool:  # noqa: C901
         mode = self._mode
 
         if mode in ("xy", "en"):
@@ -357,7 +359,7 @@ class DynamicInputWidget(QWidget):
             self._clear()
             return True
 
-        if mode == "text":
+        if mode in ("text", "unit", "integer"):
             text = self._texts[0].strip() if self._texts else ""
             if not text:
                 return False  # empty → let CONFIRM reach the tool

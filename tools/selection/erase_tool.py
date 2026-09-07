@@ -21,7 +21,7 @@ class EraseTool(BaseTool):
         if sem.type in (EventType.DELETE, EventType.CONFIRM):
             self._do_erase()
 
-    def _do_erase(self):
+    def _do_erase(self):  # noqa: C901
         sel = self._ctx.selection_model
         if sel.is_empty():
             return

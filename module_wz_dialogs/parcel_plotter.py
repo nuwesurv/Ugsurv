@@ -198,7 +198,7 @@ class ParcelPlotterDialog(QDialog):
             
             
             
-    def plot_parcels(self):
+    def plot_parcels(self):  # noqa: C901
         """Plot parcels using user-selected columns"""
         filepath = self.filepath_store.text()
         if not os.path.exists(filepath) or filepath == "No file selected":

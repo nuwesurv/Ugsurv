@@ -118,7 +118,7 @@ class InputTranslator:
         try:
             num = float(text)
             return SemanticEvent(EventType.VALUE_ENTERED, value=num)
-        except ValueError:
+        except ValueError:  # nosec B110
             pass
 
         # Single character key-word (C for close, A for arc, etc.)

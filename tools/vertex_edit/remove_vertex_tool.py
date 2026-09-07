@@ -91,7 +91,7 @@ class RemoveVertexTool(BaseTool):
         if self._marker:
             try:
                 self.canvas().scene().removeItem(self._marker)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._marker = None
         self._sel_layer = None

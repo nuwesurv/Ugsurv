@@ -121,7 +121,7 @@ class Ugsurv:
         self._setup()
 
     # ── full setup ────────────────────────────────────────────────────────
-    def _setup(self):
+    def _setup(self):  # noqa: C901
         iface    = self.iface
         canvas   = self.canvas
         mw       = iface.mainWindow()
@@ -300,13 +300,25 @@ class Ugsurv:
                 if sel.is_empty():
                     props_dock.clear_selection()
                     return
-                lid, fid = next(iter(sel))
-                layer = QgsProject.instance().mapLayer(lid)
-                if layer is not None:
-                    props_dock.update_feature(layer, fid)
+                items = list(sel)
+                if len(items) == 1:
+                    lid, fid = items[0]
+                    layer = QgsProject.instance().mapLayer(lid)
+                    if layer is not None:
+                        props_dock.update_feature(layer, fid)
+                    else:
+                        props_dock.clear_selection()
                 else:
-                    props_dock.clear_selection()
-            except RuntimeError:
+                    resolved = [
+                        (QgsProject.instance().mapLayer(lid), fid)
+                        for lid, fid in items
+                        if QgsProject.instance().mapLayer(lid) is not None
+                    ]
+                    if resolved:
+                        props_dock.update_features(resolved)
+                    else:
+                        props_dock.clear_selection()
+            except RuntimeError:  # nosec B110
                 pass
 
         sel.selectionChanged.connect(_on_props_sel_changed)
@@ -426,29 +438,34 @@ class Ugsurv:
         def _zoom_extents():
             from qgis.core import (QgsProject, QgsRectangle,
                                    QgsCoordinateTransform, QgsVectorLayer,
-                                   QgsWkbTypes)
+                                   QgsRasterLayer)
+            import os
             canvas_crs = canvas.mapSettings().destinationCrs()
             extent = QgsRectangle()
-            _GEOM = {QgsWkbTypes.GeometryType.PointGeometry,
-                     QgsWkbTypes.GeometryType.LineGeometry,
-                     QgsWkbTypes.GeometryType.PolygonGeometry}
+
+            def _combine(lyr_ext, lyr_crs):
+                if lyr_ext.isNull():
+                    return
+                xform = QgsCoordinateTransform(
+                    lyr_crs, canvas_crs, QgsProject.instance()
+                )
+                extent.combineExtentWith(xform.transformBoundingBox(lyr_ext))
+
             for layer in QgsProject.instance().mapLayers().values():
-                if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
-                    continue
-                if QgsWkbTypes.geometryType(layer.wkbType()) not in _GEOM:
+                if not layer.isValid():
                     continue
                 try:
-                    lyr_ext = layer.extent()
-                    if lyr_ext.isNull() or lyr_ext.isEmpty():
-                        continue
-                    xform = QgsCoordinateTransform(
-                        layer.crs(), canvas_crs, QgsProject.instance()
-                    )
-                    extent.combineExtentWith(
-                        xform.transformBoundingBox(lyr_ext)
-                    )
-                except Exception:
+                    if isinstance(layer, QgsVectorLayer):
+                        _combine(layer.extent(), layer.crs())
+                    elif isinstance(layer, QgsRasterLayer):
+                        src = layer.source() or ""
+                        # skip WMS/WMTS/XYZ tiles — keep only file-backed rasters
+                        if not os.path.exists(src.split("|")[0]):
+                            continue
+                        _combine(layer.extent(), layer.crs())
+                except Exception:  # nosec B112
                     continue
+
             if not extent.isNull() and not extent.isEmpty():
                 canvas.setExtent(extent)
                 canvas.refresh()
@@ -665,7 +682,7 @@ class Ugsurv:
         ctx.launch_tool = dispatcher.dispatch_tool_key
 
     # ── extra utility panels ─────────────────────────────────────────────
-    def _register_extra_tools(self, cmd_dock, iface, canvas, mw):
+    def _register_extra_tools(self, cmd_dock, iface, canvas, mw):  # noqa: C901
         """Register free utility tools immediately; gated tools only after sign-in."""
         from qgis.PyQt.QtCore import Qt
         from .core.auth_manager import AuthManager
@@ -779,11 +796,6 @@ class Ugsurv:
         cmd_dock.register_ui_command("OVERLAP", "OVP",
             callback=_make_toggle(lambda: OverlapPointsDock(canvas, mw)))
 
-        def _open_layout_importer():
-            from .module_wz_dialogs.layout_importer import ImportPrintDialog
-            ImportPrintDialog(cmd_dock=cmd_dock, parent=mw).exec()
-        cmd_dock.register_ui_command("IMPORT", "LI", callback=_open_layout_importer)
-
         _georef_ref = [None]
         def _activate_georef():
             if _georef_ref[0] is None:
@@ -816,10 +828,6 @@ class Ugsurv:
 
         from .module_wz_dialogs.overlap_area import OverlapAreaDock
         _cb_oa = _make_toggle(lambda: OverlapAreaDock(mw))
-
-        def _open_layout_importer():
-            from .module_wz_dialogs.layout_importer import ImportPrintDialog
-            ImportPrintDialog(cmd_dock=cmd_dock, parent=mw).exec()
 
         _tfix_ref = [None]
         def _activate_tfix():
@@ -891,7 +899,7 @@ class Ugsurv:
 
 
     # ── teardown ──────────────────────────────────────────────────────────
-    def _teardown(self):
+    def _teardown(self):  # noqa: C901
         with contextlib.suppress(Exception):
             from .core.auth_manager import AuthManager
             AuthManager.reset()
@@ -1012,6 +1020,9 @@ class Ugsurv:
             dock = getattr(self, dock_attr, None)
             if dock:
                 with contextlib.suppress(Exception):
+                    from qgis.PyQt.QtWidgets import QApplication
+                    QApplication.instance().removeEventFilter(dock)
+                with contextlib.suppress(Exception):
                     self.iface.removeDockWidget(dock)
                     dock.deleteLater()
                 setattr(self, dock_attr, None)
@@ -1056,7 +1067,6 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.drawing.line_tool         import LineTool
     from .tools.drawing.polyline_tool     import PolylineTool
     from .tools.drawing.circle_tool       import CircleTool
-    from .tools.drawing.arc_tool          import ArcTool
     from .tools.drawing.rectangle_tool    import RectangleTool
     from .tools.drawing.polygon_tool      import PolygonTool
     from .tools.modify.move_tool          import MoveTool
@@ -1068,10 +1078,8 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.modify.offset_tool        import OffsetTool
     from .tools.modify.trim_tool          import TrimTool
     from .tools.modify.extend_tool        import ExtendTool
-    from .tools.modify.fillet_tool        import FilletTool
     from .tools.modify.array_tool         import ArrayTool
     from .tools.selection.erase_tool      import EraseTool
-    from .tools.selection.stretch_tool    import StretchTool
     from .tools.vertex_edit.grip_edit_tool     import GripEditTool
     from .tools.vertex_edit.break_tool         import BreakTool
     from .tools.vertex_edit.join_tool          import JoinTool
@@ -1079,26 +1087,26 @@ def _make_tool(key: str, canvas, ctx, translator):
     from .tools.modify.explode_tool        import ExplodeTool
     from .tools.annotation.dimension_tool import DimensionTool, AutoDimensionTool
     from .tools.annotation.text_tool      import TextTool
+    from .tools.annotation.area_label     import AreaLabelTool
     from .tools.drawing.auto_point        import AutoPointTool
 
     _MAP = {
         "point":         PointTool,
         "line":          LineTool,        "polyline":      PolylineTool,
-        "circle":        CircleTool,      "arc":           ArcTool,
+        "circle":        CircleTool,
         "rectangle":     RectangleTool,   "polygon":       PolygonTool,
         "move":          MoveTool,        "copy":          CopyTool,
         "rotate":        RotateTool,      "scale":         ScaleTool,
         "mirror":        MirrorTool,      "offset":        OffsetTool,
         "trim":          TrimTool,        "extend":        ExtendTool,
-        "fillet":        FilletTool,      "array":         ArrayTool,
+        "array":         ArrayTool,
         "erase":         EraseTool,       "crop":          CropTool,
-        "stretch":       StretchTool,
         "grip_edit":     GripEditTool,
         "break":         BreakTool,
         "join":          JoinTool,
         "chamfer":       ChamferTool,     "explode":       ExplodeTool,
         "dimension":     DimensionTool,   "adimension":    AutoDimensionTool,
-        "text":          TextTool,
+        "text":          TextTool,        "arealabel":     AreaLabelTool,
         "autopoint":     AutoPointTool,
     }
     cls = _MAP.get(key)
@@ -1116,7 +1124,6 @@ def _register_commands(registry):
         ("line",          "LINE",    "L"),
         ("polyline",      "PLINE",   "PL"),
         ("circle",        "CIRCLE",  "C"),
-        ("arc",           "ARC",     "A"),
         ("rectangle",     "REC",     "RECTANGLE", "RECT"),
         ("polygon",       "POLYGON", "POL"),
         ("move",          "MOVE",    "M"),
@@ -1126,11 +1133,9 @@ def _register_commands(registry):
         ("mirror",        "MIRROR",  "MI"),
         ("offset",        "OFFSET",  "O"),
         ("trim",          "TRIM",    "TR"),
-        ("fillet",        "FILLET",  "F"),
         ("array",         "ARRAY",   "AR"),
         ("erase",         "ERASE",   "E", "DEL"),
         ("crop",          "CROP",    "CR"),
-        ("stretch",       "STRETCH", "S"),
         ("grip_edit",     "GRIPS",   "V"),
         ("break",         "BREAK",   "BR"),
         ("join",          "JOIN",    "J"),
@@ -1139,6 +1144,7 @@ def _register_commands(registry):
         ("dimension",     "DIM",     "DIMLINEAR"),
         ("adimension",    "ADIM"),
         ("text",          "TEXT",    "T", "MTEXT"),
+        ("arealabel",     "AREA",    "AA"),
         ("autopoint",     "APOINT",  "APT"),
     ]:
         registry.register(key, *aliases)

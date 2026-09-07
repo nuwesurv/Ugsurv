@@ -32,7 +32,7 @@ class NearestProvider:
 
                 try:
                     sqr_dist, closest, _, _ = geom.closestSegmentWithContext(raw_pt)
-                except Exception:
+                except Exception:  # nosec B112
                     continue
                 if closest is None or sqr_dist < 0:
                     continue

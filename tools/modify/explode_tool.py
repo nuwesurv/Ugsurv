@@ -88,13 +88,7 @@ class ExplodeTool(QgsMapTool):
                     best   = (lyr, feat)
         return best
 
-    def _apply_explode(self, map_pt):
-        result = self._find_feature_near(map_pt)
-        if result is None:
-            self._log("  No feature found near click")
-            return
-
-        lyr, feat = result
+    def _apply_explode_feature(self, lyr, feat):  # noqa: C901
         geom = feat.geometry()
         if geom.isEmpty():
             self._log("  Empty geometry — nothing to explode")
@@ -144,6 +138,7 @@ class ExplodeTool(QgsMapTool):
                 f"  Exploded multipart '{lyr.name()}' fid {feat.id()}"
                 f"  → {len(parts)} single-part features", "#88ff88"
             )
+            return True
 
         elif gt == QgsWkbTypes.GeometryType.LineGeometry:
             pts = geom.asPolyline()
@@ -177,10 +172,19 @@ class ExplodeTool(QgsMapTool):
                 f"  Exploded polyline '{lyr.name()}' fid {feat.id()}"
                 f"  → {len(segments)} segments", "#88ff88"
             )
+            return True
 
         else:
             type_name = QgsWkbTypes.displayString(geom.wkbType())
             self._log(f"  {type_name} — not explodable (only multipart or polyline features)")
+
+    def _apply_explode(self, map_pt):
+        result = self._find_feature_near(map_pt)
+        if result is None:
+            self._log("  No feature found near click")
+            return
+        if self._apply_explode_feature(*result):
+            self._go_home()
 
     def _dispatch(self, sem):
         pass
@@ -195,6 +199,17 @@ class ExplodeTool(QgsMapTool):
         self._last_input_mode   = "no_value"
         self._last_input_prompt = "Click a feature to explode:"
         self.inputModeChanged.emit("no_value", "Click a feature to explode:")
+
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in list(sel):
+                layer = QgsProject.instance().mapLayer(lid)
+                if layer:
+                    feat = layer.getFeature(fid)
+                    if feat.isValid():
+                        self._apply_explode_feature(layer, feat)
+            sel.clear()
+            self._go_home()
 
     def deactivate(self):
         self._hover_band.setVisible(False)

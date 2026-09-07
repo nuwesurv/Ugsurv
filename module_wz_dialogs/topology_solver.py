@@ -60,7 +60,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
             self.canvas.unsetMapTool(self)
             try:
                 self._cmd_dock._input.setFocus()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         self.rubber_band1.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
@@ -80,7 +80,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
     def canvasMoveEvent(self, event):
         pass
 
-    def canvasPressEvent(self, event):
+    def canvasPressEvent(self, event):  # noqa: C901
         try:
             if event.button() == Qt.MouseButton.RightButton:
                 self.solveTopology()
@@ -144,7 +144,7 @@ class TopologySolver(QgsMapToolIdentifyFeature):
         except Exception as e:
             self._log(f'Error: {e}')
 
-    def solveTopology(self):
+    def solveTopology(self):  # noqa: C901
         if len(self.selected_geoms) <= 1:
             self._log('Select at least two features!')
             return

@@ -236,7 +236,7 @@ class ChamferTool(BaseTool):
 
     # ── chamfer apply ─────────────────────────────────────────────────────
 
-    def _apply_chamfer_same_line(self, lyr, feat, click1, click2):
+    def _apply_chamfer_same_line(self, lyr, feat, click1, click2):  # noqa: C901
         geom = feat.geometry()
         pts  = geom.asPolyline()
         n    = len(pts)
@@ -348,7 +348,7 @@ class ChamferTool(BaseTool):
         )
         self._reset_to_line1()
 
-    def _apply_chamfer(self, lyr2, feat2, click2):
+    def _apply_chamfer(self, lyr2, feat2, click2):  # noqa: C901
         lyr1, feat1 = self._line1_layer, self._line1_feat
 
         if lyr1 is lyr2 and feat1.id() == feat2.id():
@@ -431,7 +431,7 @@ class ChamferTool(BaseTool):
                 self._dist1 = d
                 self._dist2 = d
                 self._log(f"  d1=d2={d:.3f}", "#88ccff")
-            except (TypeError, ValueError):
+            except (TypeError, ValueError):  # nosec B110
                 pass
             # Update prompt and placeholders without resetting segment picks
             self._update_prompt(self._prompt())

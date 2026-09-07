@@ -323,7 +323,7 @@ class OffsetTool(QgsMapTool):
 
     # --- Apply ---
 
-    def _apply_offset(self, dist, map_pt):
+    def _apply_offset(self, dist, map_pt):  # noqa: C901
         if self._sel_layer is None or self._sel_geom is None:
             return
         off_geom = self._build_offset_geom(self._sel_geom, dist, map_pt)

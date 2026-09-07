@@ -11,6 +11,8 @@ command window.
 """
 
 import re as _re
+import ast as _ast
+import operator as _oper
 
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
@@ -39,6 +41,55 @@ def _format_hint_html(text: str) -> str:
         last = m.end()
     parts.append(text[last:].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
     return ''.join(parts)
+
+
+# ── Safe arithmetic evaluator ─────────────────────────────────────────────────
+_MATH_CHARS = _re.compile(r'^[\d\s\.\+\-\*\/\%\^\(\)]+$')
+
+_MATH_OPS = {
+    _ast.Add: _oper.add,
+    _ast.Sub: _oper.sub,
+    _ast.Mult: _oper.mul,
+    _ast.Div: _oper.truediv,
+    _ast.Mod: _oper.mod,
+    _ast.Pow: _oper.pow,
+    _ast.FloorDiv: _oper.floordiv,
+    _ast.USub: _oper.neg,
+    _ast.UAdd: _oper.pos,
+}
+
+
+def _eval_node(node):
+    if isinstance(node, _ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, _ast.BinOp) and type(node.op) in _MATH_OPS:
+        return _MATH_OPS[type(node.op)](_eval_node(node.left), _eval_node(node.right))
+    if isinstance(node, _ast.UnaryOp) and type(node.op) in _MATH_OPS:
+        return _MATH_OPS[type(node.op)](_eval_node(node.operand))
+    raise ValueError("unsupported node")
+
+
+def _try_eval_math(text: str) -> str | None:
+    """Return formatted result if text is a safe arithmetic expression, else None.
+
+    Requires at least one binary operator so bare numbers don't trigger evaluation.
+    Division by zero and other math errors return None silently.
+    """
+    s = text.strip()
+    if not s or not _MATH_CHARS.match(s):
+        return None
+    # Require a binary operator: +, *, /, %, ^ or a - that follows a digit
+    if not _re.search(r'[\+\*\/\%\^]|(?<=\d)-', s):
+        return None
+    try:
+        result = _eval_node(_ast.parse(s.replace('^', '**'), mode='eval').body)
+        if isinstance(result, float):
+            if result == int(result):
+                return str(int(result))
+            return f"{result:.10g}"
+        return str(result)
+    except Exception:
+        return None
 
 
 _POPUP_STYLE = """
@@ -161,7 +212,7 @@ class CommandLineWidget(QDockWidget):
             self._prompt.setText(prompt + ": " if prompt else "Command: ")
             if not active:
                 self.clear_hint()
-        except RuntimeError:
+        except RuntimeError:  # nosec B110
             pass
 
     def log_hint(self, text: str):
@@ -202,7 +253,7 @@ class CommandLineWidget(QDockWidget):
 
             if at_bottom:
                 sb.setValue(sb.maximum())
-        except RuntimeError:
+        except RuntimeError:  # nosec B110
             pass
 
     # ── suggestion popup ──────────────────────────────────────────────────
@@ -211,7 +262,7 @@ class CommandLineWidget(QDockWidget):
         aliases: set[str] = set(self._ui_commands.keys())
         try:
             aliases.update(self._dispatcher._registry.all_aliases())
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return sorted(aliases)
 
@@ -222,7 +273,7 @@ class CommandLineWidget(QDockWidget):
             self._input.blockSignals(True)
             self._input.setText(text)
             self._input.blockSignals(False)
-        except RuntimeError:
+        except RuntimeError:  # nosec B110
             pass
 
     def _on_buffer_submitted(self, text: str):
@@ -240,8 +291,13 @@ class CommandLineWidget(QDockWidget):
             if ui_cb is not None:
                 ui_cb()
             else:
-                self.commandEntered.emit(text)
-                self._dispatcher.dispatch(text)
+                math_result = _try_eval_math(text)
+                if math_result is not None:
+                    self.log(f"= {math_result}  (copied)", "#88ddaa")
+                    QApplication.clipboard().setText(math_result)
+                else:
+                    self.commandEntered.emit(text)
+                    self._dispatcher.dispatch(text)
 
     def _on_buffer_cancelled(self):
         """Called when Esc clears the buffer."""
@@ -249,7 +305,7 @@ class CommandLineWidget(QDockWidget):
             self._input.blockSignals(True)
             self._input.clear()
             self._input.blockSignals(False)
-        except RuntimeError:
+        except RuntimeError:  # nosec B110
             pass
 
     def _on_text_changed(self, text: str):
@@ -338,10 +394,24 @@ class CommandLineWidget(QDockWidget):
             if ui_cb is not None:
                 ui_cb()
             else:
-                self.commandEntered.emit(text)
-                self._dispatcher.dispatch(text)
+                math_result = _try_eval_math(text)
+                if math_result is not None:
+                    self.log(f"= {math_result}  (copied)", "#88ddaa")
+                    QApplication.clipboard().setText(math_result)
+                else:
+                    self.commandEntered.emit(text)
+                    self._dispatcher.dispatch(text)
 
-    def eventFilter(self, obj, event):
+    def eventFilter(self, obj, event):  # noqa: C901
+        # When the command-line input gains focus, snap the popup above it
+        # (it may have been positioned near the cursor from type-anywhere mode).
+        if event.type() == QEvent.Type.FocusIn and obj is self._input:
+            if self._popup.isVisible():
+                height = self._popup.height()
+                gpos = self._input.mapToGlobal(self._input.rect().topLeft())
+                self._popup.move(gpos.x(), gpos.y() - height)
+            return False
+
         # Track cursor movement so the popup follows the mouse
         if (event.type() == QEvent.Type.MouseMove
                 and self._popup.isVisible()

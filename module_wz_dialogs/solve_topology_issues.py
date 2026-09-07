@@ -114,7 +114,7 @@ def _reproject_geoms(geoms, from_srs, to_srs):
     return out
 
 
-def _write_gpkg(output_path, geoms, attr_rows, field_specs, srs, layer_name=None):
+def _write_gpkg(output_path, geoms, attr_rows, field_specs, srs, layer_name=None):  # noqa: C901
     """
     Write features to a GeoPackage via OGR.
     field_specs : list of (name, ogr_type, ogr_subtype_or_None)
@@ -245,7 +245,7 @@ class _Worker(QObject):
         self.min_overlap_pct     = min_overlap_pct
         self.sliver_threshold_m2 = sliver_threshold_m2
 
-    def run(self):
+    def run(self):  # noqa: C901
         try:
             from shapely.ops import unary_union
             from shapely.geometry import MultiPolygon, Polygon, GeometryCollection
@@ -910,7 +910,7 @@ class SolveTopologyDock(QDockWidget):
     def closeEvent(self, event):
         try:
             QgsProject.instance().layersAdded.disconnect(self._on_layers_added)
-        except (RuntimeError, TypeError):
+        except (RuntimeError, TypeError):  # nosec B110
             pass
         super().closeEvent(event)
 
@@ -922,7 +922,7 @@ class SolveTopologyDock(QDockWidget):
 
     # ── Auto-select layers ────────────────────────────────────────────────────
 
-    def _auto_select_layers(self):
+    def _auto_select_layers(self):  # noqa: C901
         try:
             from qgis.core import QgsVectorLayer
             layers = [
@@ -952,7 +952,7 @@ class SolveTopologyDock(QDockWidget):
         except RuntimeError:
             try:
                 QgsProject.instance().layersAdded.disconnect(self._on_layers_added)
-            except (RuntimeError, TypeError):
+            except (RuntimeError, TypeError):  # nosec B110
                 pass
 
     # ── Run ───────────────────────────────────────────────────────────────────

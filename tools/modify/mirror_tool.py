@@ -59,12 +59,11 @@ class MirrorTool(_ModifyBase):
         self._mirror_p2: QgsPointXY | None = None
         self._erase_source = False
 
-    def _handle_act_point(self, pt: QgsPointXY):
-        if self._mirror_p1 is None:
-            self._mirror_p1 = pt
-        else:
-            self._mirror_p2 = pt
-            self._transition(ToolState.PENDING_CONFIRM)
+    def activate(self):
+        self._mirror_p1 = self._mirror_p2 = None
+        super().activate()
+        if self._state == ToolState.ACTING:
+            self._request_input("xy", "Click first point of mirror axis:")
 
     def _on_event(self, sem: SemanticEvent):
         if self._state == ToolState.PENDING_CONFIRM:
@@ -73,9 +72,42 @@ class MirrorTool(_ModifyBase):
             elif sem.type == EventType.KEY_CHAR and sem.char == 'Y':
                 self._execute_mirror(erase=True)
             return
+        # Fix prompt when Enter confirms selection and auto-transitions to ACTING
+        if (self._state == ToolState.SELECTING
+                and sem.type == EventType.CONFIRM
+                and not self._ctx.selection_model.is_empty()):
+            self._transition(ToolState.ACTING)
+            self._update_prompt("Click first point of mirror axis:")
+            return
         super()._on_event(sem)
 
-    def _execute_mirror(self, erase: bool):
+    def _finish_sel_drag(self, start, end, shift):
+        super()._finish_sel_drag(start, end, shift)
+        if self._state == ToolState.ACTING:
+            self._update_prompt("Click first point of mirror axis:")
+
+    def _handle_act_point(self, pt: QgsPointXY):
+        if self._mirror_p1 is None:
+            self._mirror_p1 = pt
+            self._show_base_marker(pt)
+            self._update_prompt("Click second point of mirror axis:")
+        else:
+            self._mirror_p2 = pt
+            self._transition(ToolState.PENDING_CONFIRM)
+            self._request_input("no_value", "Enter = copy  /  Y = move (erase source):")
+
+    def _on_hover(self, sem: SemanticEvent):
+        if sem.point is None:
+            return
+        if self._state == ToolState.ACTING:
+            dyn = getattr(self._ctx, 'dyn_widget', None)
+            if dyn:
+                dyn.set_live_pair(sem.point.x(), sem.point.y())
+        if (self._state in (ToolState.ACTING, ToolState.PENDING_CONFIRM)
+                and self._mirror_p1 is not None):
+            self._update_preview(sem.point)
+
+    def _execute_mirror(self, erase: bool):  # noqa: C901
         if self._mirror_p1 is None or self._mirror_p2 is None:
             return
         hist = getattr(self._ctx, 'action_history', None)
@@ -132,3 +164,4 @@ class MirrorTool(_ModifyBase):
 
     def _on_cancel_hook(self):
         self._mirror_p1 = self._mirror_p2 = None
+        self._clear_base_marker()

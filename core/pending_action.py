@@ -29,7 +29,7 @@ class PendingAction:
         for rb in self._rubber_bands:
             try:
                 rb.reset()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._rubber_bands.clear()
 

@@ -178,7 +178,7 @@ class JoinTool(QgsMapTool):
                 return result, None
         return None, "polylines not touching — endpoints must share a vertex"
 
-    def _join_and_commit(self):
+    def _join_and_commit(self):  # noqa: C901
         if len(self._selected) < 2:
             self._log("  Select at least 2 polylines first", "#ffaaaa")
             return
@@ -242,7 +242,7 @@ class JoinTool(QgsMapTool):
         self._log(msg, "#88ff88")
 
         self._clear_all()
-        self._log("  JOIN: click polylines to select")
+        self._go_home()
 
     def _dispatch(self, sem):
         pass
@@ -271,6 +271,8 @@ class JoinTool(QgsMapTool):
             self._last_input_mode   = "no_value"
             self._last_input_prompt = "Click polylines to join:"
             self.inputModeChanged.emit("no_value", "Click polylines to join:")
+            if sel:
+                sel.clear()
             self._join_and_commit()
         else:
             self._log("JOIN  ──  click polylines to select", "#aaddff")

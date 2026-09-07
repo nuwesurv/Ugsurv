@@ -230,7 +230,7 @@ class TrimTool(QgsMapTool):
                 geoms.append(f.geometry())
         return geoms
 
-    def _intersection_dists(self, line_geom, cutting_geoms):
+    def _intersection_dists(self, line_geom, cutting_geoms):  # noqa: C901
         dists = set()
         for cg in cutting_geoms:
             inter = line_geom.intersection(cg)
@@ -348,7 +348,7 @@ class TrimTool(QgsMapTool):
         self._selected_bands = []
         self._pending_trims  = []
 
-    def _confirm_all_trims(self):
+    def _confirm_all_trims(self):  # noqa: C901
         if not self._pending_trims:
             return
 

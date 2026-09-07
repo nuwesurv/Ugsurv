@@ -33,11 +33,13 @@ from qgis.PyQt.QtCore import QVariant
 
 try:
     from ..renderer_utils import (
+        apply_circle_color_renderer,
         apply_polyline_color_renderer,
         apply_point_color_renderer,
         apply_point_label_style,
     )
 except Exception:
+    def apply_circle_color_renderer(layer): pass
     def apply_polyline_color_renderer(layer): pass
     def apply_point_color_renderer(layer): pass
     def apply_point_label_style(layer): pass
@@ -318,6 +320,9 @@ class StorageManager(QObject):
             self._add_geom_table(self._gpkg_path, "circles", QgsWkbTypes.CompoundCurve)
             lyr = self._open_gpkg_layer("circles", add_to_tree=True)
         self._circles_layer = lyr
+        self._ensure_extra_circle_fields()
+        if self._layer_alive(lyr):
+            apply_circle_color_renderer(lyr)
 
     def _ensure_points_layer(self):
         """Create and load the points layer on first actual use. No-op if already alive."""
@@ -356,6 +361,22 @@ class StorageManager(QObject):
     def _ensure_extra_line_fields(self):
         """Add any missing columns to the lines layer (safe no-op if all exist)."""
         lyr = self._lines_layer
+        if not self._layer_alive(lyr):
+            return
+        needed = [
+            ("color",           QVariant.String),
+            ("line_type",       QVariant.String),
+            ("line_thickness",  QVariant.Double),
+        ]
+        missing = [QgsField(n, t) for n, t in needed if lyr.fields().indexOf(n) < 0]
+        if not missing:
+            return
+        lyr.dataProvider().addAttributes(missing)
+        lyr.updateFields()
+
+    def _ensure_extra_circle_fields(self):
+        """Add any missing columns to the circles layer (safe no-op if all exist)."""
+        lyr = self._circles_layer
         if not self._layer_alive(lyr):
             return
         needed = [
@@ -485,8 +506,12 @@ class StorageManager(QObject):
 
         self._migrate_circles_to_own_layer()
 
+        if self._circles_layer is not None:
+            self._ensure_extra_circle_fields()
         if self._layer_alive(self._lines_layer):
             apply_polyline_color_renderer(self._lines_layer)
+        if self._layer_alive(self._circles_layer):
+            apply_circle_color_renderer(self._circles_layer)
         if self._layer_alive(self._points_layer):
             apply_point_color_renderer(self._points_layer)
             apply_point_label_style(self._points_layer)

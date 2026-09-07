@@ -7,7 +7,7 @@ from qgis.PyQt.QtSvg import QSvgRenderer
 from qgis.PyQt.QtWidgets import (
     QColorDialog, QComboBox, QDockWidget, QFileDialog, QFormLayout, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit, QPushButton,
-    QScrollArea, QSpinBox, QDoubleSpinBox, QWidget, QVBoxLayout,
+    QScrollArea, QSpinBox, QDoubleSpinBox, QTextEdit, QWidget, QVBoxLayout,
 )
 from qgis.core import (
     QgsApplication, QgsCircularString, QgsCompoundCurve, QgsGeometry, QgsPoint, QgsPointXY, QgsWkbTypes,
@@ -46,9 +46,10 @@ class PropertiesDock(QDockWidget):
         self.setObjectName("UgsurvPropertiesDock")
         self.setMinimumWidth(210)
 
-        self._layer    = None
-        self._fid      = None
-        self._updating = False
+        self._layer      = None
+        self._fid        = None
+        self._updating   = False
+        self._selection  = []   # [(layer, fid), ...] for multi-select; empty when single
 
         outer = QWidget()
         outer_vbox = QVBoxLayout(outer)
@@ -90,13 +91,22 @@ class PropertiesDock(QDockWidget):
     # ------------------------------------------------------------------
 
     def update_feature(self, layer, fid):
-        self._layer = layer
-        self._fid   = fid
+        self._layer     = layer
+        self._fid       = fid
+        self._selection = []
+        self._refresh()
+
+    def update_features(self, items):
+        """Show merged properties for multiple selected features."""
+        self._layer     = None
+        self._fid       = None
+        self._selection = list(items)
         self._refresh()
 
     def clear_selection(self):
-        self._layer = None
-        self._fid   = None
+        self._layer     = None
+        self._fid       = None
+        self._selection = []
         self._clear_form()
 
     def refresh_if_current(self, layer, fid):
@@ -176,6 +186,9 @@ class PropertiesDock(QDockWidget):
     # ------------------------------------------------------------------
 
     def _refresh(self):
+        if self._selection:
+            self._refresh_multi()
+            return
         if self._layer is None or self._fid is None:
             self._clear_form()
             return
@@ -204,6 +217,8 @@ class PropertiesDock(QDockWidget):
             self._build_hatch_rows(feat)
         elif lyr_name == "dimensions" and not geom.isEmpty():
             self._build_dimension_rows(feat)
+        elif lyr_name == "text":
+            self._build_text_rows(feat)
         elif not geom.isEmpty():
             self._form.addRow("Type:", self._ro(QgsWkbTypes.displayString(geom.wkbType())))
 
@@ -211,7 +226,7 @@ class PropertiesDock(QDockWidget):
     # Per-type row builders
     # ------------------------------------------------------------------
 
-    def _build_polyline_rows(self, feat, geom):
+    def _build_polyline_rows(self, feat, geom):  # noqa: C901
         from qgis.core import QgsPointXY as _Pt
         pts       = [_Pt(v.x(), v.y()) for v in geom.vertices()]
         is_closed = self._is_closed(pts)
@@ -260,6 +275,7 @@ class PropertiesDock(QDockWidget):
                 if not self._layer.isEditable():
                     self._layer.startEditing()
                 self._layer.changeAttributeValue(self._fid, _idx, text)
+                apply_polyline_color_renderer(self._layer)
                 self._layer.triggerRepaint()
 
         lt_combo.currentTextChanged.connect(on_lt_changed)
@@ -277,12 +293,13 @@ class PropertiesDock(QDockWidget):
                 if not self._layer.isEditable():
                     self._layer.startEditing()
                 self._layer.changeAttributeValue(self._fid, _idx, round(w, 3))
+                apply_polyline_color_renderer(self._layer)
                 self._layer.triggerRepaint()
 
         lw_edit.editingFinished.connect(on_lw_edited)
         self._form.addRow("Thickness:", lw_edit)
 
-    def _build_circle_rows(self, feat, geom):
+    def _build_circle_rows(self, feat, geom):  # noqa: C901
         radius_idx = self._layer.fields().indexOf("radius")
         radius     = feat.attribute(radius_idx) if radius_idx >= 0 else None
         center     = self._circle_center(geom)
@@ -380,6 +397,7 @@ class PropertiesDock(QDockWidget):
                 if not self._layer.isEditable():
                     self._layer.startEditing()
                 self._layer.changeAttributeValue(self._fid, _idx, text)
+                apply_circle_color_renderer(self._layer)
                 self._layer.triggerRepaint()
 
         lt_combo.currentTextChanged.connect(on_lt_changed)
@@ -397,12 +415,13 @@ class PropertiesDock(QDockWidget):
                 if not self._layer.isEditable():
                     self._layer.startEditing()
                 self._layer.changeAttributeValue(self._fid, _idx, round(w, 3))
+                apply_circle_color_renderer(self._layer)
                 self._layer.triggerRepaint()
 
         lw_edit.editingFinished.connect(on_lw_edited)
         self._form.addRow("Thickness:", lw_edit)
 
-    def _build_point_rows(self, feat, geom):
+    def _build_point_rows(self, feat, geom):  # noqa: C901
         pt = geom.asPoint()
 
         x_edit = self._edit(f"{pt.x():.3f}", "x")
@@ -553,7 +572,47 @@ class PropertiesDock(QDockWidget):
         if picker is not None:
             self._form.addRow("Icons:", picker)
 
-    def _build_hatch_rows(self, feat):
+    def _build_text_rows(self, feat):
+        lt_idx = self._layer.fields().indexOf("label_text")
+        cl_idx = self._layer.fields().indexOf("cad_layer")
+
+        current_text = self._attr(feat, lt_idx) or ""
+        te = QTextEdit()
+        te.setPlainText(current_text)
+        te.setMinimumHeight(72)
+        te.setMaximumHeight(160)
+
+        _save_timer = QTimer(te)
+        _save_timer.setSingleShot(True)
+        _save_timer.setInterval(300)
+
+        def _do_save(_idx=lt_idx):
+            val = te.toPlainText()
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, val)
+                self._layer.triggerRepaint()
+
+        _save_timer.timeout.connect(_do_save)
+        te.textChanged.connect(_save_timer.start)
+        self._form.addRow("Label:", te)
+        self._form.addRow(self._sep())
+
+        current_cl = self._attr(feat, cl_idx) or ""
+        cl_edit = self._edit(current_cl, "cad layer name")
+
+        def on_cl_edited(_idx=cl_idx):
+            val = cl_edit.text().strip()
+            if _idx >= 0 and self._fid is not None:
+                if not self._layer.isEditable():
+                    self._layer.startEditing()
+                self._layer.changeAttributeValue(self._fid, _idx, val)
+
+        cl_edit.editingFinished.connect(on_cl_edited)
+        self._form.addRow("Cad Layer:", cl_edit)
+
+    def _build_hatch_rows(self, feat):  # noqa: C901
         pat_idx  = self._layer.fields().indexOf("fill_pattern")
         size_idx = self._layer.fields().indexOf("element_size")
         ang_idx  = self._layer.fields().indexOf("angle")
@@ -646,7 +705,7 @@ class PropertiesDock(QDockWidget):
         self._form.addRow(self._sep())
         self._form.addRow("Color:", self._make_color_button())
 
-    def _build_dimension_rows(self, feat):
+    def _build_dimension_rows(self, feat):  # noqa: C901
         dist_idx = self._layer.fields().indexOf("distance")
         dp_idx   = self._layer.fields().indexOf("decimal_places")
         size_idx = self._layer.fields().indexOf("text_size")
@@ -803,6 +862,605 @@ class PropertiesDock(QDockWidget):
                 self._deferred_refresh()
 
             btn.clicked.connect(on_pick)
+            grid.addWidget(btn, pos // COLS, pos % COLS)
+
+        n_items = len(svgs) + 1
+        n_rows  = (n_items + COLS - 1) // COLS
+        scroll = QScrollArea()
+        scroll.setWidget(container)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(min(n_rows, 3) * (ICON_PX + 10) + 8)
+        scroll.setFrameShape(QFrame.StyledPanel)
+        return scroll
+
+    # ------------------------------------------------------------------
+    # Multi-feature properties
+    # ------------------------------------------------------------------
+
+    def _refresh_multi(self):
+        self._clear_form()
+        items = self._selection
+        n = len(items)
+
+        layer_names = sorted(set(lyr.name() for lyr, _ in items))
+        self._form.addRow("Selection:", self._ro(f"{n} features"))
+        self._form.addRow("Layer(s):",  self._ro(", ".join(layer_names)))
+        self._form.addRow(self._sep())
+
+        if len(layer_names) != 1:
+            return  # mixed types — header only
+
+        # Cache all features up-front so multi_val doesn't call getFeature
+        # once per field per feature (N×F → N calls).
+        _feat_cache = {(lyr.id(), fid): lyr.getFeature(fid) for lyr, fid in items}
+
+        def multi_val(fname):
+            vals = []
+            for lyr, fid in items:
+                idx = lyr.fields().indexOf(fname)
+                if idx < 0:
+                    return None, False
+                feat = _feat_cache.get((lyr.id(), fid))
+                if feat is None:
+                    return None, False
+                val  = self._attr(feat, idx)
+                vals.append(str(val) if val is not None else "")
+            if not vals:
+                return None, False
+            return (vals[0], True) if len(set(vals)) == 1 else (None, False)
+
+        def apply_all(fname, value):
+            for lyr, fid in items:
+                idx = lyr.fields().indexOf(fname)
+                if idx < 0:
+                    continue
+                if not lyr.isEditable():
+                    lyr.startEditing()
+                lyr.changeAttributeValue(fid, idx, value)
+
+        def repaint_all():
+            seen = set()
+            for lyr, _ in items:
+                lid = lyr.id()
+                if lid not in seen:
+                    seen.add(lid)
+                    lyr.triggerRepaint()
+
+        lyr_name = layer_names[0]
+        if lyr_name == "points":
+            self._build_multi_point_rows(items, multi_val, apply_all, repaint_all)
+        elif lyr_name == "lines":
+            self._build_multi_polyline_rows(items, multi_val, apply_all, repaint_all)
+        elif lyr_name == "circles":
+            self._build_multi_circle_rows(items, multi_val, apply_all, repaint_all)
+        elif lyr_name == "_hatches":
+            self._build_multi_hatch_rows(items, multi_val, apply_all, repaint_all)
+        elif lyr_name == "text":
+            self._build_multi_text_rows(items, multi_val, apply_all, repaint_all)
+
+    # ------------------------------------------------------------------
+    # Multi-feature type-specific builders
+    # (mirror the single-feature _build_*_rows, minus geometry fields)
+    # ------------------------------------------------------------------
+
+    def _build_multi_point_rows(self, items, multi_val, apply_all, repaint_all):  # noqa: C901
+        # Resolved once with lookupField (case-insensitive) — same as single-select
+        svg_idx = items[0][0].fields().lookupField("symbol")
+
+        val, is_common = multi_val("cad_layer")
+        cl_edit = self._edit(val if is_common else "", "cad layer name")
+        if not is_common:
+            cl_edit.setPlaceholderText("(mixed)")
+
+        def on_cl():
+            text = cl_edit.text().strip()
+            if text:
+                apply_all("cad_layer", text)
+
+        cl_edit.editingFinished.connect(on_cl)
+        self._form.addRow("Cad Layer:", cl_edit)
+        self._form.addRow(self._sep())
+
+        val, is_common = multi_val("Description")
+        desc_edit = self._edit(val if is_common else "", "e.g. BM, TP, WH…")
+        if not is_common:
+            desc_edit.setPlaceholderText("(mixed)")
+
+        def on_desc(_svg_idx=svg_idx):
+            text = desc_edit.text().strip()
+            stored = text if text else None
+            apply_all("Description", stored)
+            if stored is not None and _svg_idx >= 0:
+                svg_path = None
+                if stored.lower() == "basic":
+                    svg_path = "basic"
+                elif os.path.isdir(_PLUGIN_ICONS_DIR):
+                    for _fname in os.listdir(_PLUGIN_ICONS_DIR):
+                        if (_fname.lower().endswith(".svg")
+                                and os.path.splitext(_fname)[0].lower() == stored.lower()):
+                            svg_path = os.path.join(_PLUGIN_ICONS_DIR, _fname)
+                            break
+                if svg_path is not None:
+                    for lyr, fid in items:
+                        if not lyr.isEditable():
+                            lyr.startEditing()
+                        lyr.changeAttributeValue(fid, _svg_idx, svg_path)
+            seen = set()
+            for lyr, _ in items:
+                if lyr.id() not in seen:
+                    seen.add(lyr.id())
+                    apply_point_color_renderer(lyr)
+            repaint_all()
+            self._deferred_refresh()
+
+        desc_edit.editingFinished.connect(on_desc)
+        self._form.addRow("Description:", desc_edit)
+        self._form.addRow(self._sep())
+
+        val, is_common = multi_val("symbol_size")
+        size_spin = QDoubleSpinBox()
+        size_spin.setRange(0.0, 500.0)
+        size_spin.setSingleStep(0.5)
+        size_spin.setDecimals(2)
+        size_spin.setSuffix(" px")
+        size_spin.setSpecialValueText("(mixed)")
+        if is_common and val:
+            try:
+                size_spin.setValue(float(val))
+            except (ValueError, TypeError):
+                size_spin.setValue(0.0)
+        else:
+            size_spin.setValue(0.0)
+
+        def on_size(v):
+            if v > 0:
+                apply_all("symbol_size", round(v, 3))
+                repaint_all()
+
+        size_spin.valueChanged.connect(on_size)
+        self._form.addRow("Size:", size_spin)
+
+        svg_val, svg_common = multi_val("symbol")
+        current_svg = svg_val if svg_common else ""
+
+        self._form.addRow(self._sep())
+
+        if svg_common and current_svg:
+            svg_lbl = self._ro(os.path.basename(current_svg))
+        elif svg_common:
+            svg_lbl = self._ro("None")
+        else:
+            svg_lbl = self._ro("(mixed)")
+        self._form.addRow("SVG:", svg_lbl)
+
+        def _apply_svg(path_or_none, _idx=svg_idx):
+            if _idx < 0:
+                return
+            layers_done = {}
+            for lyr, fid in items:
+                lid = lyr.id()
+                if lid not in layers_done:
+                    if not lyr.isEditable():
+                        lyr.startEditing()
+                    lyr.beginEditCommand("Set SVG")
+                    layers_done[lid] = lyr
+                lyr.changeAttributeValue(fid, _idx, path_or_none)
+            for lyr in layers_done.values():
+                lyr.endEditCommand()
+                apply_point_color_renderer(lyr)
+                lyr.triggerRepaint()
+
+        def browse_svg():
+            path, _ = QFileDialog.getOpenFileName(None, "Select SVG pin", "", "SVG files (*.svg)")
+            if path:
+                _apply_svg(path)
+                self._deferred_refresh()
+
+        def clear_svg():
+            _apply_svg(None)
+            self._deferred_refresh()
+
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(browse_svg)
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(clear_svg)
+        clear_btn.setEnabled(bool(svg_common and current_svg))
+        btn_row = QWidget()
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.addWidget(browse_btn)
+        btn_layout.addWidget(clear_btn)
+        self._form.addRow(btn_row)
+
+        picker = self._make_multi_icon_picker(items, current_svg, svg_idx)
+        if picker is not None:
+            self._form.addRow("Icons:", picker)
+
+    def _build_multi_polyline_rows(self, items, multi_val, apply_all, repaint_all):  # noqa: C901
+        val, is_common = multi_val("cad_layer")
+        cl_edit = self._edit(val if is_common else "", "cad layer name")
+        if not is_common:
+            cl_edit.setPlaceholderText("(mixed)")
+
+        def on_cl():
+            text = cl_edit.text().strip()
+            if text:
+                apply_all("cad_layer", text)
+
+        cl_edit.editingFinished.connect(on_cl)
+        self._form.addRow("Cad Layer:", cl_edit)
+        self._form.addRow(self._sep())
+        self._form.addRow("Color:", self._make_multi_color_button(items))
+
+        val, is_common = multi_val("line_type")
+        lt_combo = QComboBox()
+        lt_combo.addItem("")
+        for name in ["solid", "dash", "dot", "dash dot", "dash dot dot"]:
+            lt_combo.addItem(name)
+        if is_common and val:
+            lt_combo.setCurrentText(val)
+
+        def _rebuild_line_renderer():
+            seen = set()
+            for lyr, _ in items:
+                lid = lyr.id()
+                if lid not in seen:
+                    seen.add(lid)
+                    apply_polyline_color_renderer(lyr)
+            repaint_all()
+
+        def on_lt(text):
+            if not text:
+                return
+            apply_all("line_type", text)
+            _rebuild_line_renderer()
+
+        lt_combo.currentTextChanged.connect(on_lt)
+        self._form.addRow("Line Type:", lt_combo)
+
+        val, is_common = multi_val("line_thickness")
+        lw_edit = self._edit(
+            f"{float(val):.2f}" if is_common and val else "", "mm"
+        )
+        if not is_common:
+            lw_edit.setPlaceholderText("(mixed)")
+
+        def on_lw():
+            try:
+                w = float(lw_edit.text())
+            except ValueError:
+                return
+            apply_all("line_thickness", round(w, 3))
+            _rebuild_line_renderer()
+
+        lw_edit.editingFinished.connect(on_lw)
+        self._form.addRow("Thickness:", lw_edit)
+
+    def _build_multi_circle_rows(self, items, multi_val, apply_all, repaint_all):  # noqa: C901
+        self._form.addRow("Color:", self._make_multi_color_button(items))
+
+        val, is_common = multi_val("line_type")
+        lt_combo = QComboBox()
+        lt_combo.addItem("")
+        for name in ["solid", "dash", "dot", "dash dot", "dash dot dot"]:
+            lt_combo.addItem(name)
+        if is_common and val:
+            lt_combo.setCurrentText(val)
+
+        def _rebuild_circle_renderer():
+            seen = set()
+            for lyr, _ in items:
+                lid = lyr.id()
+                if lid not in seen:
+                    seen.add(lid)
+                    apply_circle_color_renderer(lyr)
+            repaint_all()
+
+        def on_lt(text):
+            if not text:
+                return
+            apply_all("line_type", text)
+            _rebuild_circle_renderer()
+
+        lt_combo.currentTextChanged.connect(on_lt)
+        self._form.addRow("Line Type:", lt_combo)
+
+        val, is_common = multi_val("line_thickness")
+        lw_edit = self._edit(
+            f"{float(val):.2f}" if is_common and val else "", "mm"
+        )
+        if not is_common:
+            lw_edit.setPlaceholderText("(mixed)")
+
+        def on_lw():
+            try:
+                w = float(lw_edit.text())
+            except ValueError:
+                return
+            apply_all("line_thickness", round(w, 3))
+            _rebuild_circle_renderer()
+
+        lw_edit.editingFinished.connect(on_lw)
+        self._form.addRow("Thickness:", lw_edit)
+
+    def _build_multi_hatch_rows(self, items, multi_val, apply_all, repaint_all):  # noqa: C901
+        val, is_common = multi_val("fill_pattern")
+        pat_combo = QComboBox()
+        pat_combo.addItem("")
+        for name in ["lines", "diagonal", "crosshatch", "dots", "pavers", "wetland"]:
+            pat_combo.addItem(name)
+        if is_common and val:
+            pat_combo.setCurrentText(val)
+
+        def on_pat(text):
+            if not text:
+                return
+            apply_all("fill_pattern", text)
+            if text == "wetland":
+                apply_all("color", "#46aeef")
+            seen = set()
+            for lyr, _ in items:
+                if lyr.id() not in seen:
+                    seen.add(lyr.id())
+                    apply_hatch_renderer(lyr)
+            repaint_all()
+            self._deferred_refresh()
+
+        pat_combo.currentTextChanged.connect(on_pat)
+        self._form.addRow("Pattern:", pat_combo)
+
+        val, is_common = multi_val("element_size")
+        sz_edit = self._edit(
+            f"{float(val):.2f}" if is_common and val else "", "map units"
+        )
+        if not is_common:
+            sz_edit.setPlaceholderText("(mixed)")
+
+        def on_sz():
+            try:
+                v = float(sz_edit.text())
+            except ValueError:
+                return
+            if v > 0:
+                apply_all("element_size", round(v, 4))
+                repaint_all()
+
+        sz_edit.editingFinished.connect(on_sz)
+        self._form.addRow("Size:", sz_edit)
+
+        val, is_common = multi_val("angle")
+        ang_edit = self._edit(
+            f"{float(val):.1f}" if is_common and val else "", "degrees"
+        )
+        if not is_common:
+            ang_edit.setPlaceholderText("(mixed)")
+
+        def on_ang():
+            try:
+                v = float(ang_edit.text()) % 360
+            except ValueError:
+                return
+            apply_all("angle", round(v, 1))
+            repaint_all()
+
+        ang_edit.editingFinished.connect(on_ang)
+        self._form.addRow("Angle:", ang_edit)
+
+        val, is_common = multi_val("opacity")
+        opa_edit = self._edit(
+            f"{float(val):.2f}" if is_common and val else "", "0 – 1"
+        )
+        if not is_common:
+            opa_edit.setPlaceholderText("(mixed)")
+
+        def on_opa():
+            try:
+                v = max(0.0, min(1.0, float(opa_edit.text())))
+            except ValueError:
+                return
+            apply_all("opacity", round(v, 2))
+            repaint_all()
+
+        opa_edit.editingFinished.connect(on_opa)
+        self._form.addRow("Opacity:", opa_edit)
+
+        self._form.addRow(self._sep())
+        self._form.addRow("Color:", self._make_multi_color_button(items))
+
+    def _build_multi_text_rows(self, items, multi_val, apply_all, repaint_all):
+        val, is_common = multi_val("label_text")
+        te = QTextEdit()
+        te.setPlainText(val if is_common else "")
+        if not is_common:
+            te.setPlaceholderText("(mixed)")
+        te.setMinimumHeight(72)
+        te.setMaximumHeight(160)
+
+        _save_timer = QTimer(te)
+        _save_timer.setSingleShot(True)
+        _save_timer.setInterval(300)
+
+        def _do_save():
+            apply_all("label_text", te.toPlainText())
+            repaint_all()
+
+        _save_timer.timeout.connect(_do_save)
+        te.textChanged.connect(_save_timer.start)
+        self._form.addRow("Label:", te)
+        self._form.addRow(self._sep())
+
+        val, is_common = multi_val("cad_layer")
+        cl_edit = self._edit(val if is_common else "", "cad layer name")
+        if not is_common:
+            cl_edit.setPlaceholderText("(mixed)")
+
+        def on_cl():
+            v = cl_edit.text().strip()
+            if v:
+                apply_all("cad_layer", v)
+
+        cl_edit.editingFinished.connect(on_cl)
+        self._form.addRow("Cad Layer:", cl_edit)
+
+    def _make_multi_color_button(self, items):
+        all_colors = []
+        for lyr, fid in items:
+            cidx = lyr.fields().indexOf("color")
+            if cidx < 0:
+                continue
+            val = self._attr(lyr.getFeature(fid), cidx)
+            if val:
+                c = QColor(str(val))
+                if c.isValid():
+                    all_colors.append(c.name())
+
+        is_common  = bool(all_colors) and len(set(all_colors)) == 1
+        init_color = QColor(all_colors[0]) if is_common else QColor(0, 0, 255)
+
+        btn = QPushButton()
+        if is_common:
+            btn.setStyleSheet(
+                f"background-color: rgb({init_color.red()},{init_color.green()},{init_color.blue()});"
+                "border: 1px solid #666; border-radius: 2px; min-height: 20px;"
+            )
+        else:
+            btn.setText("(mixed)")
+            btn.setStyleSheet("border: 1px solid #666; border-radius: 2px; min-height: 20px;")
+
+        def on_clicked():
+            cur_colors = []
+            for lyr, fid in items:
+                cidx = lyr.fields().indexOf("color")
+                if cidx < 0:
+                    continue
+                val = self._attr(lyr.getFeature(fid), cidx)
+                if val:
+                    c = QColor(str(val))
+                    if c.isValid():
+                        cur_colors.append(c.name())
+            start = QColor(cur_colors[0]) if cur_colors and len(set(cur_colors)) == 1 else init_color
+            chosen = QColorDialog.getColor(start, None, "Color")
+            if not chosen.isValid():
+                return
+            layers_done = {}
+            for lyr, fid in items:
+                cidx = lyr.fields().indexOf("color")
+                if cidx < 0:
+                    continue
+                if not lyr.isEditable():
+                    lyr.startEditing()
+                lyr.changeAttributeValue(fid, cidx, chosen.name())
+                layers_done[lyr.id()] = lyr
+            for lyr in layers_done.values():
+                lyr_name = lyr.name()
+                if lyr_name == "circles":
+                    apply_circle_color_renderer(lyr)
+                elif lyr_name == "lines":
+                    apply_polyline_color_renderer(lyr)
+                elif lyr_name == "points":
+                    apply_point_color_renderer(lyr)
+                elif lyr_name == "_hatches":
+                    apply_hatch_renderer(lyr)
+                elif lyr_name == "dimensions":
+                    apply_dimension_style(lyr)
+                lyr.triggerRepaint()
+            btn.setStyleSheet(
+                f"background-color: rgb({chosen.red()},{chosen.green()},{chosen.blue()});"
+                "border: 1px solid #666; border-radius: 2px; min-height: 20px;"
+            )
+            btn.setText("")
+
+        btn.clicked.connect(on_clicked)
+        return btn
+
+    def _make_multi_icon_picker(self, items, current_svg, svg_idx):
+        if not os.path.isdir(_PLUGIN_ICONS_DIR):
+            return None
+
+        svgs = sorted(
+            f for f in os.listdir(_PLUGIN_ICONS_DIR) if f.lower().endswith(".svg")
+        )
+
+        ICON_PX = 44
+        COLS    = 4
+
+        container = QWidget()
+        grid      = QGridLayout(container)
+        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setSpacing(4)
+
+        def _pick_and_refresh(path_or_basic, _idx=svg_idx):
+            if _idx < 0:
+                return
+            layers_done = {}
+            for lyr, fid in items:
+                lid = lyr.id()
+                if lid not in layers_done:
+                    if not lyr.isEditable():
+                        lyr.startEditing()
+                    lyr.beginEditCommand("Set SVG")
+                    layers_done[lid] = lyr
+                lyr.changeAttributeValue(fid, _idx, path_or_basic)
+            for lyr in layers_done.values():
+                lyr.endEditCommand()
+                apply_point_color_renderer(lyr)
+                lyr.triggerRepaint()
+            self._deferred_refresh()
+
+        # "Basic" tile
+        basic_pix = QPixmap(ICON_PX, ICON_PX)
+        basic_pix.fill(Qt.transparent)
+        bp = QPainter(basic_pix)
+        bp.setRenderHint(QPainter.Antialiasing)
+        bp.setPen(QPen(QColor(47, 47, 47), 1.5))
+        bp.setBrush(QBrush(QColor(255, 255, 255)))
+        r = ICON_PX // 3
+        cx2, cy2 = ICON_PX // 2, ICON_PX // 2
+        bp.drawEllipse(cx2 - r, cy2 - r, 2 * r, 2 * r)
+        bp.end()
+
+        basic_btn = QPushButton()
+        basic_btn.setIcon(QIcon(basic_pix))
+        basic_btn.setIconSize(QSize(ICON_PX - 4, ICON_PX - 4))
+        basic_btn.setFixedSize(ICON_PX + 6, ICON_PX + 6)
+        basic_btn.setToolTip("basic")
+        basic_btn.setFlat(True)
+        basic_selected = bool(current_svg and current_svg == "basic")
+        basic_btn.setStyleSheet(
+            "border: 2px solid #0078d4; background: #e3f2fd; border-radius: 4px;"
+            if basic_selected else
+            "border: 1px solid #bbb; border-radius: 4px;"
+        )
+        basic_btn.clicked.connect(lambda checked=False: _pick_and_refresh("basic"))
+        grid.addWidget(basic_btn, 0, 0)
+
+        for i, fname in enumerate(svgs):
+            path = os.path.join(_PLUGIN_ICONS_DIR, fname)
+            pos  = i + 1
+
+            pix = QPixmap(ICON_PX, ICON_PX)
+            pix.fill(Qt.transparent)
+            renderer = QSvgRenderer(path)
+            if renderer.isValid():
+                painter = QPainter(pix)
+                painter.setRenderHint(QPainter.Antialiasing)
+                renderer.render(painter, QRectF(0, 0, ICON_PX, ICON_PX))
+                painter.end()
+
+            btn = QPushButton()
+            btn.setIcon(QIcon(pix))
+            btn.setIconSize(QSize(ICON_PX - 4, ICON_PX - 4))
+            btn.setFixedSize(ICON_PX + 6, ICON_PX + 6)
+            btn.setToolTip(os.path.splitext(fname)[0])
+            btn.setFlat(True)
+
+            selected = bool(current_svg and os.path.abspath(path) == os.path.abspath(current_svg))
+            btn.setStyleSheet(
+                "border: 2px solid #0078d4; background: #e3f2fd; border-radius: 4px;"
+                if selected else
+                "border: 1px solid #bbb; border-radius: 4px;"
+            )
+            btn.clicked.connect(lambda checked=False, p=path: _pick_and_refresh(p))
             grid.addWidget(btn, pos // COLS, pos % COLS)
 
         n_items = len(svgs) + 1

@@ -53,7 +53,7 @@ class SelectionOverlay:
                 try:
                     rb.reset()
                     rb.hide()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
         self._bands.clear()
 
@@ -63,7 +63,7 @@ class SelectionOverlay:
             for rb in self._bands:
                 try:
                     rb.hide()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
         else:
             self._rebuild()
@@ -72,5 +72,5 @@ class SelectionOverlay:
         self._clear()
         try:
             self._sel.selectionChanged.disconnect(self._rebuild)
-        except Exception:
+        except Exception:  # nosec B110
             pass

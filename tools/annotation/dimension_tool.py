@@ -459,6 +459,17 @@ class AutoDimensionTool(BaseTool):
         self._log("ADIM — click a feature to dimension all its segments")
         self._request_input("no_value", "Click a feature to auto-dimension:")
 
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in list(sel):
+                layer = QgsProject.instance().mapLayer(lid)
+                if layer:
+                    feat = layer.getFeature(fid)
+                    if feat.isValid():
+                        self._dim_segments(feat)
+            sel.clear()
+            self._go_home()
+
     # ── events ────────────────────────────────────────────────────────────
 
     def _on_event(self, sem: SemanticEvent):
@@ -492,12 +503,7 @@ class AutoDimensionTool(BaseTool):
 
     # ── dim entire feature ────────────────────────────────────────────────
 
-    def _dim_feature_at(self, pt: QgsPointXY):
-        _, feat = _find_feature_near(self._ctx, pt)
-        if feat is None:
-            self._log("No feature found at click point.", "#ffaa55")
-            return
-
+    def _dim_segments(self, feat) -> bool:
         segs  = _segments_from_geom(feat.geometry())
         added = 0
         for a, b in segs:
@@ -505,13 +511,21 @@ class AutoDimensionTool(BaseTool):
             geom = _project_to_layer_geom(a, b)
             if _add_dim_feature(self._dim_layer, geom, dist):
                 added += 1
-
-        total = len(segs)
+        total   = len(segs)
         skipped = total - added
         msg = f"ADIM: {added} dimension{'s' if added != 1 else ''} added"
         if skipped:
             msg += f", {skipped} already existed (skipped)"
         self._log(msg, "#aaffaa" if added else "#ffaa55")
+        return added > 0
+
+    def _dim_feature_at(self, pt: QgsPointXY):
+        _, feat = _find_feature_near(self._ctx, pt)
+        if feat is None:
+            self._log("No feature found at click point.", "#ffaa55")
+            return
+        if self._dim_segments(feat):
+            self._go_home()
 
     # ── reset / cancel ────────────────────────────────────────────────────
 

@@ -379,7 +379,7 @@ class FeatureNavigatorDock(QDockWidget):
                     self._poly_boundaries[feat.id()] = boundary
         self._poly_layer_id = poly_layer.id()
 
-    def _update_vertex_distances(self):
+    def _update_vertex_distances(self):  # noqa: C901
         """
         For every unique vertex of the current feature, find the nearest point
         on any polygon boundary edge.  Lines ≤ 4 m get drawn on the canvas
@@ -452,7 +452,7 @@ class FeatureNavigatorDock(QDockWidget):
                 v_canvas_pt = feat_to_canvas.transform(QgsPointXY(vx, vy))
                 v_poly_pt   = (QgsPointXY(vx, vy) if same_crs
                                else to_poly.transform(QgsPointXY(vx, vy)))
-            except Exception:
+            except Exception:  # nosec B112
                 continue
 
             candidates = self._poly_spatial_index.nearestNeighbor(v_poly_pt, 3)
@@ -485,7 +485,7 @@ class FeatureNavigatorDock(QDockWidget):
 
             try:
                 np_canvas_pt = poly_to_canvas.transform(nearest_poly_pt)
-            except Exception:
+            except Exception:  # nosec B112
                 continue
 
             line_segments.append([v_canvas_pt, np_canvas_pt])

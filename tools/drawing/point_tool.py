@@ -25,8 +25,8 @@ class PointTool(BaseTool):
     def _on_event(self, sem: SemanticEvent):
         if sem.type in (EventType.POINT_PICKED, EventType.COORDINATE_ENTERED) and sem.point:
             self._commit_point(sem.point)
-            self._go_home()
-        elif sem.type == EventType.CONFIRM:
+            self._request_input("xy", "Specify point:")
+        elif sem.type in (EventType.CONFIRM, EventType.CANCEL):
             self._go_home()
 
     def _on_hover(self, sem: SemanticEvent):

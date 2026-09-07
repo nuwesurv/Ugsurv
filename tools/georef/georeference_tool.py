@@ -256,7 +256,7 @@ class GeoreferenceTool(BaseTool):
         if self._placement_rb is not None:
             try:
                 self.canvas().scene().removeItem(self._placement_rb)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._placement_rb = None
 
@@ -542,7 +542,7 @@ class GeoreferenceTool(BaseTool):
         if self._display_layer is not None:
             try:
                 QgsProject.instance().removeMapLayer(self._display_layer.id())
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._display_layer = None
 
@@ -567,14 +567,14 @@ class GeoreferenceTool(BaseTool):
             m = self._gcp_markers.pop()
             try:
                 self.canvas().scene().removeItem(m)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     def _clear_gcp_markers(self):
         for m in self._gcp_markers:
             try:
                 self.canvas().scene().removeItem(m)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._gcp_markers.clear()
 
@@ -591,7 +591,7 @@ class GeoreferenceTool(BaseTool):
         if self._pending_marker is not None:
             try:
                 self.canvas().scene().removeItem(self._pending_marker)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._pending_marker = None
 

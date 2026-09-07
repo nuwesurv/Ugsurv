@@ -27,24 +27,47 @@ class AutoPointTool(BaseTool):
         super().activate()
         self._prefix = "pt"
         self._awaiting_prefix = True
+        self._pre_geoms = []
+
+        sel = getattr(self._ctx, 'selection_model', None)
+        if sel and not sel.is_empty():
+            for lid, fid in list(sel):
+                layer = QgsProject.instance().mapLayer(lid)
+                if not isinstance(layer, QgsVectorLayer):
+                    continue
+                if QgsWkbTypes.geometryType(layer.wkbType()) != QgsWkbTypes.GeometryType.LineGeometry:
+                    continue
+                feat = layer.getFeature(fid)
+                if feat.isValid() and not feat.geometry().isEmpty():
+                    self._pre_geoms.append(feat.geometry())
+            if self._pre_geoms:
+                sel.clear()
+
         self._transition(ToolState.ACTING)
         self._request_input("text", "Prefix:")
 
     def _on_event(self, sem: SemanticEvent):
         if self._awaiting_prefix:
             if sem.type == EventType.VALUE_ENTERED:
-                # textEntered routes here with value as str;
-                # valueEntered (numeric) also arrives here — both become the prefix
                 v = sem.value
                 self._prefix = v.strip() if isinstance(v, str) else _clean_num(v)
                 self._prefix = self._prefix or "pt"
                 self._awaiting_prefix = False
-                self._request_input("no_value", f"Click polyline  [{self._prefix}]:")
+                if self._pre_geoms:
+                    for geom in self._pre_geoms:
+                        self._place_points_on_geom(geom)
+                    self._go_home()
+                else:
+                    self._request_input("no_value", f"Click polyline  [{self._prefix}]:")
 
             elif sem.type == EventType.CONFIRM:
-                # plain Enter with no text → keep "pt"
                 self._awaiting_prefix = False
-                self._request_input("no_value", "Click polyline  [pt]:")
+                if self._pre_geoms:
+                    for geom in self._pre_geoms:
+                        self._place_points_on_geom(geom)
+                    self._go_home()
+                else:
+                    self._request_input("no_value", "Click polyline  [pt]:")
 
             elif sem.type == EventType.POINT_PICKED and sem.point:
                 # direct click → skip prefix prompt, use default
@@ -70,7 +93,9 @@ class AutoPointTool(BaseTool):
         if geom is None:
             self._log("No polyline found at click. Make sure a line layer is active.", '#ffaaaa')
             return
+        self._place_points_on_geom(geom)
 
+    def _place_points_on_geom(self, geom):
         vertices  = self._extract_vertices(geom)
         prefix    = self._prefix
         cad_layer = self._ctx.active_cad_layer or "0"

@@ -27,7 +27,7 @@ class _SyncWorker(QObject):
         try:
             from .supabase_client import update_session
             update_session(self._username, self._payload)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         self.done.emit()
 

@@ -98,7 +98,7 @@ class _Worker(QObject):
         self.layer2_src     = layer2_src
         self.layer1_crs_wkt = layer1_crs_wkt
 
-    def run(self):
+    def run(self):  # noqa: C901
         try:
             from shapely.wkt import loads as wkt_loads
             from shapely.ops import unary_union

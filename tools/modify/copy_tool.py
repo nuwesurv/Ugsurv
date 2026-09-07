@@ -333,7 +333,7 @@ class CopyTool(QgsMapTool):
             QgsProject.instance().addMapLayer(new_lyr)
         return True
 
-    def _apply_copy(self, dest_pt: QgsPointXY):
+    def _apply_copy(self, dest_pt: QgsPointXY):  # noqa: C901
         if not self._base_pt:
             return
         crs_mgr = getattr(self._ctx, 'crs_manager', None)
@@ -434,7 +434,7 @@ class CopyTool(QgsMapTool):
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         self._update_preview(map_pt)
 
-    def canvasPressEvent(self, event):
+    def canvasPressEvent(self, event):  # noqa: C901
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         shift  = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 

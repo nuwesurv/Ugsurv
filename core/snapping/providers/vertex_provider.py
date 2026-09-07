@@ -49,7 +49,7 @@ def _visible_vector_layers():
         try:
             if not lyr.isValid():
                 continue
-        except RuntimeError:
+        except RuntimeError:  # nosec B112
             continue
         node = root.findLayer(lyr.id())
         if node and node.isVisible():

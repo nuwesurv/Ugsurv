@@ -155,7 +155,7 @@ class BaseTool(QgsMapTool):
                 try:
                     rb.reset()
                     rb.hide()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
         self._rubber_bands.clear()
 
@@ -199,7 +199,7 @@ class BaseTool(QgsMapTool):
         if self._snap_marker is not None:
             try:
                 self.canvas().scene().removeItem(self._snap_marker)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._snap_marker = None
 

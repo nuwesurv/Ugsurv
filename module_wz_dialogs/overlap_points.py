@@ -233,7 +233,7 @@ class OverlapPointsDock(QDockWidget):
     #  Main search logic                                                   #
     # ------------------------------------------------------------------ #
 
-    def run_search(self):
+    def run_search(self):  # noqa: C901
         """Iterate every feature → every ring → every vertex pair and collect overlaps."""
         if not HAS_NUMPY:
             self._set_status("numpy is not available — cannot run.", "red")
@@ -310,7 +310,7 @@ class OverlapPointsDock(QDockWidget):
             return
         self._solve_rows(rows)
 
-    def _solve_rows(self, rows):
+    def _solve_rows(self, rows):  # noqa: C901
         layer = self.layer_combo.currentLayer()
         if not layer:
             self._set_status("No layer selected!", "red")

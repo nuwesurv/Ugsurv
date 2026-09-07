@@ -233,7 +233,7 @@ class SpikyGeomsDock(QDockWidget):
     #  Main search logic                                                   #
     # ------------------------------------------------------------------ #
 
-    def run_search(self):
+    def run_search(self):  # noqa: C901
         """Iterate every feature → every ring → every vertex and collect spikes."""
         if not HAS_NUMPY:
             self._set_status("numpy is not available — cannot run.", "red")

@@ -66,10 +66,30 @@ class AlignTool(BaseTool):
         self._reset_session()
         self._selecting_raster = True
         self._transition(ToolState.ACTING)
-        self._log(
-            "Click on a raster in the canvas to select it for alignment.", "#aaddff"
-        )
-        self._request_input("no_value", "Click on a raster to select")
+
+        iface = getattr(self._ctx, 'iface', None)
+        active = iface.activeLayer() if iface else None
+        if (active is not None
+                and active.type() == QgsMapLayerType.RasterLayer
+                and os.path.exists(active.source())
+                and self._read_raster_info(active)):
+            self._source_layer = active
+            self._selecting_raster = False
+            self._show_selection_rb(active)
+            epsg = self._project_epsg()
+            crs_desc = QgsCoordinateReferenceSystem(f"EPSG:{epsg}").description()
+            self._log(
+                f"Selected: '{active.name()}'  ({self._raster_w}×{self._raster_h} px). "
+                f"GCP coordinates in EPSG:{epsg} ({crs_desc}). "
+                "Click image points → type E, N.  Enter = align  Esc = cancel.",
+                "#aaddff",
+            )
+            self._request_input("no_value", "Click image point to set GCP 1")
+        else:
+            self._log(
+                "Click on a raster in the canvas to select it for alignment.", "#aaddff"
+            )
+            self._request_input("no_value", "Click on a raster to select")
 
     def deactivate(self):
         self._clear_selection_rb()
@@ -441,14 +461,14 @@ class AlignTool(BaseTool):
             m = self._gcp_markers.pop()
             try:
                 self.canvas().scene().removeItem(m)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     def _clear_gcp_markers(self):
         for m in self._gcp_markers:
             try:
                 self.canvas().scene().removeItem(m)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._gcp_markers.clear()
 
@@ -465,7 +485,7 @@ class AlignTool(BaseTool):
         if self._pending_marker is not None:
             try:
                 self.canvas().scene().removeItem(self._pending_marker)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._pending_marker = None
 
@@ -497,7 +517,7 @@ class AlignTool(BaseTool):
         if self._selection_rb is not None:
             try:
                 self.canvas().scene().removeItem(self._selection_rb)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._selection_rb = None
 

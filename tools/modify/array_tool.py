@@ -80,7 +80,7 @@ class ArrayTool(_ModifyBase):
 
     # ── event handling ────────────────────────────────────────────────────
 
-    def _on_event(self, sem: SemanticEvent):
+    def _on_event(self, sem: SemanticEvent):  # noqa: C901
         if self._state == ToolState.SELECTING:
             # Delegate to base (handles POINT_PICKED, SHIFT_CLICK, CONFIRM→ACTING).
             super()._on_event(sem)

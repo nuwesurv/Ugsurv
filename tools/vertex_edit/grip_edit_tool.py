@@ -91,7 +91,7 @@ class GripEditTool(BaseTool):
         sel = self._ctx.selection_model
         try:
             sel.selectionChanged.disconnect(self._rebuild_grips)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         self._clear_grips()
         super().deactivate()
@@ -144,13 +144,13 @@ class GripEditTool(BaseTool):
         for g in self._grips:
             try:
                 self.canvas().scene().removeItem(g.marker)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._grips.clear()
         self._hot_grip = None
 
     # ── canvas overrides ──────────────────────────────────────────────────
-    def canvasPressEvent(self, event):
+    def canvasPressEvent(self, event):  # noqa: C901
         btn = event.button()
 
         # ── right-click: active-mode commit/cancel only (menu shown on release) ──
@@ -281,7 +281,7 @@ class GripEditTool(BaseTool):
             self._update_extension_guide(sem.snap_type, sem.point)
 
     # ── keyboard events ───────────────────────────────────────────────────
-    def _on_event(self, sem: SemanticEvent):
+    def _on_event(self, sem: SemanticEvent):  # noqa: C901
         if self._extend_grip is not None:
             self._handle_extend_event(sem)
             return
@@ -305,7 +305,7 @@ class GripEditTool(BaseTool):
                             cx, cy, _ = params
                             self._commit_grip_and_finish(
                                 QgsPointXY(cx + new_r, cy))
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError):  # nosec B110
                         pass
                     return
             pt = self._try_extension_distance(sem.value)

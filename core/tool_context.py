@@ -44,6 +44,6 @@ class ToolContext:
                 continue
             if lyr.id() in sm_ids:
                 continue
-            if lyr.name().startswith('_') and lyr.isSpatial() and lyr.isValid():
+            if (lyr.name().startswith('_') or lyr.name() in ('dimensions', 'text')) and lyr.isSpatial() and lyr.isValid():
                 result.append(lyr)
         return result

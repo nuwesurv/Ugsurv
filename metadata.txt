@@ -1,51 +1,44 @@
 # This file contains metadata for your plugin.
+# This file should be included when you package your plugin.
 
-# This file should be included when you package your plugin.# Mandatory items:
+# Mandatory items:
 
 [general]
 name=Ugsurv
 qgisMinimumVersion=3.0
 description=CAD-style survey drafting and editing toolkit for Uganda land and boundary survey workflows.
-version=0.4
+version=0.5
 author=Nuwe Surv
 email=nuwesurv@gmail.com
 
-about=Ugsurv is a comprehensive CAD-style drafting and survey-editing plugin built for Uganda land surveyors working in QGIS. All geometry is stored in a GeoPackage in EPSG:32636 (WGS 84 / UTM Zone 36N) with full CRS enforcement and on-the-fly reprojection.
-
-Drawing tools: point, line, polyline, circle, arc, rectangle, polygon — all with dynamic keyboard input and snap-to-geometry.
-
-Modify tools: move, copy, rotate, scale, mirror, offset, array, trim, extend, fillet, chamfer, explode, and crop — matching the core CAD edit workflow.
-
-Vertex tools: grip-edit, add vertex, remove vertex, join segments, and break at point.
-
-Annotation: linear, angular, and aligned dimensioning; text labels; georeferencing and print-alignment tools.
-
-Selection: window/crossing/fence selection, erase selection, select-similar, and stretch.
-
-Layer management: draw-order grouping via named cad_layers with colour, linetype, visibility, lock, and sort-order controls — without creating extra QGIS layers.
-
-Topology: spiky-corner detection, topology correction (SOLVETOPO), and geometry revert (restores original_geometry WKT on selected features).
-
-Auto-plot: automated sheet layout and plotting for survey plans.
-
-Designed for cadastral, boundary, and topographic survey drafting entirely within QGIS.
+about=Ugsurv is a comprehensive CAD-style drafting and survey-editing plugin for Uganda land surveyors working in QGIS. All geometry is stored in a GeoPackage in EPSG:32636 (WGS 84 / UTM Zone 36N) with full CRS enforcement and on-the-fly reprojection.
+	Drawing tools: point, line, polyline, circle, rectangle, polygon - all with dynamic keyboard input and snap-to-geometry.
+	Modify tools: move, copy, rotate, scale, mirror, offset, array, trim, extend, chamfer, explode, and crop - matching the core CAD edit workflow.
+	Vertex tools: grip-edit, add vertex, remove vertex, join segments, and break at point.
+	Annotation: linear, angular, and aligned dimensioning; text labels; georeferencing and print-alignment tools.
+	Selection: window/crossing/fence selection, erase selection, and select-similar.
+	Layer management: draw-order grouping via named cad_layers with colour, linetype, visibility, lock, and sort-order controls - without creating extra QGIS layers.
+	Topology: spiky-corner detection, topology correction (SLV), and geometry revert.
+	Designed for cadastral, boundary, survey drafting entirely within QGIS.
 
 tracker=https://github.com/nuwesurv/Ugsurv/issues
 repository=https://github.com/nuwesurv/Ugsurv
+
 # End of mandatory metadata
 
 # Recommended items:
 
 hasProcessingProvider=no
-# Uncomment the following line and add your changelog:
 # changelog=
 
 # Tags are comma separated with spaces allowed
 tags=survey, cadastral, CAD, drafting, Uganda, boundary, topology, dimensions, editing, drawing
 
 homepage=https://github.com/nuwesurv/Ugsurv
+# Category of the plugin: Raster, Vector, Database or Web
 category=Plugins
 icon=icon.png
+
 # experimental flag
 experimental=False
 
@@ -54,12 +47,7 @@ deprecated=False
 
 # Since QGIS 3.8, a comma separated list of plugins to be installed
 # (or upgraded) can be specified.
-# Check the documentation for more information.
 # plugin_dependencies=
-
-Category of the plugin: Raster, Vector, Database or Web
-# category=
 
 # If the plugin can run on QGIS Server.
 server=False
-

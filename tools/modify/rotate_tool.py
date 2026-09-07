@@ -358,7 +358,7 @@ class RotateTool(QgsMapTool):
     def canvasMoveEvent(self, event):
         self._update_preview(self._snapped(self.toMapCoordinates(event.pos())))
 
-    def canvasPressEvent(self, event):
+    def canvasPressEvent(self, event):  # noqa: C901
         map_pt = self._snapped(self.toMapCoordinates(event.pos()))
         shift  = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 

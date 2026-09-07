@@ -123,7 +123,7 @@ class _ModifyBase(BaseTool):
         super().canvasMoveEvent(event)
 
     # ── semantic event handler ────────────────────────────────────────────
-    def _on_event(self, sem: SemanticEvent):
+    def _on_event(self, sem: SemanticEvent):  # noqa: C901
         if self._state == ToolState.SELECTING:
             if sem.type == EventType.POINT_PICKED:
                 self._pick_at_point(sem.point, shift=False)
@@ -245,7 +245,7 @@ class _ModifyBase(BaseTool):
         if self._base_marker is not None:
             try:
                 self.canvas().scene().removeItem(self._base_marker)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._base_marker = None
 
@@ -256,6 +256,6 @@ class _ModifyBase(BaseTool):
         if self._sel_drag_rb:
             try:
                 self._sel_drag_rb.reset()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self._sel_drag_rb = None

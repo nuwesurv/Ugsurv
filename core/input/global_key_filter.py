@@ -71,7 +71,7 @@ class GlobalKeyFilter(QObject):
 
     # ── routing ────────────────────────────────────────────────────────────
 
-    def _filter(self, event) -> bool:
+    def _filter(self, event) -> bool:  # noqa: C901
         # ── ShortcutOverride ──────────────────────────────────────────────
         # Qt sends ShortcutOverride BEFORE KeyPress to decide whether a
         # registered QAction shortcut (like QGIS's 'S' snap toggle) should
@@ -194,6 +194,7 @@ class GlobalKeyFilter(QObject):
 
         ch = event.text()
         if ch and ch.isprintable() and ch != '\t':
+            self._tool_mgr.force_home()
             inp.setText(inp.text() + ch)
             return True
 

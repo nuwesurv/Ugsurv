@@ -56,7 +56,7 @@ class RevertMapTool(QgsMapToolIdentifyFeature):
             self.canvas.unsetMapTool(self)
             try:
                 self._cmd_dock._input.setFocus()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._clear_state()
         super().deactivate()
@@ -129,7 +129,7 @@ class RevertMapTool(QgsMapToolIdentifyFeature):
     #  Revert algorithm                                                    #
     # ------------------------------------------------------------------ #
 
-    def _execute_revert(self):
+    def _execute_revert(self):  # noqa: C901
         layer = self._active_layer
         if not isinstance(layer, QgsVectorLayer) or not self._selected_fids:
             self._log('Nothing to revert — select at least one feature first.')

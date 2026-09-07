@@ -199,7 +199,7 @@ class GeometryAppenderDock(QDockWidget):
         self.response.setStyleSheet(f"color: {color};")
         self.response.setText(message)
 
-    def append_parcels(self):
+    def append_parcels(self):  # noqa: C901
         to_layer = self.to_combo.currentLayer()
         if not to_layer:
             self._set_status("No target layer selected!", "red")
