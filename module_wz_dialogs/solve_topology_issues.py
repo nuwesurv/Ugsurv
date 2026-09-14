@@ -97,6 +97,19 @@ def _reproject_geoms(geoms, from_srs, to_srs):
         return geoms
     if from_srs.IsSame(to_srs):
         return geoms
+    # Fast path: pyproj + shapely.ops.transform (no WKT round-trips)
+    try:
+        from pyproj import Transformer
+        from shapely.ops import transform
+        from_epsg = from_srs.GetAuthorityCode(None)
+        to_epsg   = to_srs.GetAuthorityCode(None)
+        if from_epsg and to_epsg:
+            t = Transformer.from_crs(int(from_epsg), int(to_epsg), always_xy=True)
+            return [transform(t.transform, g) if (g is not None and not g.is_empty) else g
+                    for g in geoms]
+    except Exception:
+        pass
+    # Fallback: OGR WKT round-trip
     from osgeo import ogr, osr
     from shapely.wkt import loads as wkt_loads
     ct  = osr.CoordinateTransformation(from_srs, to_srs)
@@ -112,6 +125,28 @@ def _reproject_geoms(geoms, from_srs, to_srs):
         ogr_g.Transform(ct)
         out.append(wkt_loads(ogr_g.ExportToWkt()))
     return out
+
+
+def _buffer_geoms(geoms, distance, quad_segs=8):
+    """Buffer a list of shapely geometries; uses Shapely 2.x vectorised path when available."""
+    try:
+        import shapely as _shp
+        _shp.buffer  # AttributeError on Shapely 1.x
+        import numpy as _np
+        valid_idx = [i for i, g in enumerate(geoms) if g is not None and not g.is_empty]
+        if not valid_idx:
+            return [None] * len(geoms)
+        arr      = _np.empty(len(valid_idx), dtype=object)
+        for k, i in enumerate(valid_idx):
+            arr[k] = geoms[i]
+        buffered = _shp.buffer(arr, distance, quad_segs=quad_segs)
+        result   = [None] * len(geoms)
+        for k, i in enumerate(valid_idx):
+            result[i] = buffered[k]
+        return result
+    except (AttributeError, Exception):
+        return [g.buffer(distance, resolution=quad_segs) if (g is not None and not g.is_empty) else None
+                for g in geoms]
 
 
 def _write_gpkg(output_path, geoms, attr_rows, field_specs, srs, layer_name=None):  # noqa: C901
@@ -141,6 +176,7 @@ def _write_gpkg(output_path, geoms, attr_rows, field_specs, srs, layer_name=None
     field_names = [name for name, _, _ in field_specs]
     defn = lyr.GetLayerDefn()
 
+    ds.StartTransaction()
     for g, row in zip(geoms, attr_rows):
         feat = ogr.Feature(defn)
         if g is not None and not g.is_empty:
@@ -157,6 +193,7 @@ def _write_gpkg(output_path, geoms, attr_rows, field_specs, srs, layer_name=None
                 except Exception:
                     feat.SetField(name, str(val))
         lyr.CreateFeature(feat)
+    ds.CommitTransaction()
 
     ds = None
 
@@ -270,8 +307,7 @@ class _Worker(QObject):
                 self.progress.emit(f"Buffering rivers by {self.river_buffer_m} m…")
                 rv_geoms, _, rv_srs, _, _ = _read_source(self.rivers_src)
                 rv_geoms        = _reproject_geoms(rv_geoms, rv_srs, target_srs)
-                buf_river_geoms = [g.buffer(self.river_buffer_m) if (g and not g.is_empty) else None
-                                   for g in rv_geoms]
+                buf_river_geoms = _buffer_geoms(rv_geoms, self.river_buffer_m)
                 rivers_sindex   = _STRIndex(buf_river_geoms)
 
             buf_road_geoms = None
@@ -280,8 +316,7 @@ class _Worker(QObject):
                 self.progress.emit(f"Buffering roads by {self.road_buffer_m} m…")
                 rd_geoms, _, rd_srs, _, _ = _read_source(self.roads_src)
                 rd_geoms       = _reproject_geoms(rd_geoms, rd_srs, target_srs)
-                buf_road_geoms = [g.buffer(self.road_buffer_m) if (g and not g.is_empty) else None
-                                  for g in rd_geoms]
+                buf_road_geoms = _buffer_geoms(rd_geoms, self.road_buffer_m)
                 roads_sindex   = _STRIndex(buf_road_geoms)
 
             buf_wb_geoms = None
@@ -290,8 +325,7 @@ class _Worker(QObject):
                 self.progress.emit(f"Buffering waterbodies by {self.wb_buffer_m} m…")
                 wb_geoms, _, wb_srs, _, _ = _read_source(self.waterbodies_src)
                 wb_geoms     = _reproject_geoms(wb_geoms, wb_srs, target_srs)
-                buf_wb_geoms = [g.buffer(self.wb_buffer_m) if (g and not g.is_empty) else None
-                                for g in wb_geoms]
+                buf_wb_geoms = _buffer_geoms(wb_geoms, self.wb_buffer_m)
                 wb_sindex    = _STRIndex(buf_wb_geoms)
 
             surveyed_repaired  = []
@@ -304,8 +338,10 @@ class _Worker(QObject):
                 sv_geoms           = _reproject_geoms(sv_geoms, sv_srs, target_srs)
                 surveyed_raw_geoms = sv_geoms
                 laf_col_s          = _find_laf_col(sv_fields)
-                surveyed_repaired  = [g.buffer(0) if (g and not g.is_empty) else None
-                                      for g in sv_geoms]
+                surveyed_repaired  = [
+                    (g if g.is_valid else g.buffer(0)) if (g and not g.is_empty) else None
+                    for g in sv_geoms
+                ]
                 surveyed_sindex    = _STRIndex(surveyed_repaired)
                 surv_laf_arr       = (
                     [str(a.get(laf_col_s, '') or '').strip() for a in sv_attrs]
@@ -366,6 +402,9 @@ class _Worker(QObject):
                 new_pieces = []
                 changed    = False
                 for p in pieces:
+                    if not p.intersects(cutter):
+                        new_pieces.append(p)
+                        continue
                     diff  = p.difference(cutter)
                     parts = _flatten_geom(diff)
                     if parts:
@@ -499,22 +538,24 @@ class _Worker(QObject):
                                   if lyr in overlap_set)
                 combo_counts[combo_key] = combo_counts.get(combo_key, 0) + 1
 
-                pieces = [geom]
-
+                active_cutters = []
                 if hits_river and local_rivers:
-                    pieces, _ = _apply_cut(pieces, local_rivers)
-
+                    active_cutters.append(local_rivers)
                 if hits_road and local_roads:
-                    pieces, _ = _apply_cut(pieces, local_roads)
-
+                    active_cutters.append(local_roads)
                 if hits_water and local_waters:
-                    pieces, _ = _apply_cut(pieces, local_waters)
-
+                    active_cutters.append(local_waters)
                 if hits_neighbour:
-                    nbr_union = (conflict_geoms[0]
-                                 if len(conflict_geoms) == 1
-                                 else unary_union(conflict_geoms))
-                    pieces, _ = _apply_cut(pieces, nbr_union)
+                    active_cutters.append(
+                        conflict_geoms[0] if len(conflict_geoms) == 1
+                        else unary_union(conflict_geoms)
+                    )
+
+                pieces = [geom]
+                if active_cutters:
+                    combined = (active_cutters[0] if len(active_cutters) == 1
+                                else unary_union(active_cutters))
+                    pieces, _ = _apply_cut(pieces, combined)
 
                 if len(pieces) > 1:
                     large = [p for p in pieces if p.area >= 200.0]
@@ -570,18 +611,11 @@ class _Worker(QObject):
                 out_rows.append(row)
 
             # ── Overlap area columns ──────────────────────────────────────
+            # Uses existing STRtree indexes — no global union needed.
             self.progress.emit("Computing overlap_pct / overlap_area…")
+            has_any_ref = any([rivers_sindex, roads_sindex, wb_sindex, surveyed_sindex])
             try:
-                all_ref = []
-                for src in (buf_river_geoms, buf_road_geoms, buf_wb_geoms):
-                    if src:
-                        all_ref.extend(g for g in src if g is not None and not g.is_empty)
-                if surveyed_repaired:
-                    all_ref.extend(g for g in surveyed_repaired if g is not None and not g.is_empty)
-
-                if all_ref:
-                    self.progress.emit("Building reference union…")
-                    ref_union = unary_union(all_ref)
+                if has_any_ref:
                     seen_orig = {}   # orig_idx → (overlap_pct, overlap_area) — compute once per original parcel
                     for row in out_rows:
                         orig_idx = int(row['_orig_row_idx'])
@@ -591,8 +625,34 @@ class _Worker(QObject):
                                 seen_orig[orig_idx] = (0.0, 0.0)
                             else:
                                 try:
-                                    inter    = orig_geom.buffer(0).intersection(ref_union)
-                                    ovl_area = inter.area if not inter.is_empty else 0.0
+                                    local_refs = []
+                                    b = orig_geom.bounds
+                                    if rivers_sindex is not None:
+                                        local_refs.extend(
+                                            buf_river_geoms[ri] for ri in rivers_sindex.intersection(b)
+                                            if buf_river_geoms[ri] is not None
+                                        )
+                                    if roads_sindex is not None:
+                                        local_refs.extend(
+                                            buf_road_geoms[ri] for ri in roads_sindex.intersection(b)
+                                            if buf_road_geoms[ri] is not None
+                                        )
+                                    if wb_sindex is not None:
+                                        local_refs.extend(
+                                            buf_wb_geoms[wi] for wi in wb_sindex.intersection(b)
+                                            if buf_wb_geoms[wi] is not None
+                                        )
+                                    if surveyed_sindex is not None:
+                                        local_refs.extend(
+                                            surveyed_repaired[si] for si in surveyed_sindex.intersection(b)
+                                            if surveyed_repaired[si] is not None
+                                        )
+                                    if not local_refs:
+                                        ovl_area = 0.0
+                                    else:
+                                        local_union = unary_union(local_refs) if len(local_refs) > 1 else local_refs[0]
+                                        inter    = orig_geom.buffer(0).intersection(local_union)
+                                        ovl_area = inter.area if not inter.is_empty else 0.0
                                 except Exception:
                                     ovl_area = 0.0
                                 seen_orig[orig_idx] = (
@@ -917,6 +977,8 @@ class SolveTopologyDock(QDockWidget):
     # ── Status ────────────────────────────────────────────────────────────────
 
     def _set_status(self, message, color="green"):
+        if sip.isdeleted(self) or sip.isdeleted(self._status):
+            return
         self._status.setStyleSheet(f"color: {color};")
         self._status.setText(message)
 
@@ -996,12 +1058,16 @@ class SolveTopologyDock(QDockWidget):
         self._worker.constraints.connect(self._on_constraints)
         self._worker.finished.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
-        self._thread.finished.connect(lambda: self._run_btn.setEnabled(True))
+        self._thread.finished.connect(
+            lambda: self._run_btn.setEnabled(True) if not sip.isdeleted(self) else None
+        )
         self._thread.start()
 
     # ── Finished handler ──────────────────────────────────────────────────────
 
     def _on_finished(self, result: dict):
+        if sip.isdeleted(self):
+            return
         self._result = result
         self._set_status(result['summary'], "green")
         self._load_output()
@@ -1009,6 +1075,8 @@ class SolveTopologyDock(QDockWidget):
         self._populate_review(result)
 
     def _on_error(self, msg):
+        if sip.isdeleted(self):
+            return
         self._set_status(f"Error: {msg}", "red")
 
     # ── Load output into QGIS ─────────────────────────────────────────────────

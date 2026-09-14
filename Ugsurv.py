@@ -265,6 +265,11 @@ class Ugsurv:
         self._cmd_dock = cmd_dock
         ctx.cmd_dock = cmd_dock
 
+        def _on_cmd_closed():
+            self._teardown()
+            self._active = False
+        cmd_dock.closed.connect(_on_cmd_closed)
+
         dyn = DynamicInputWidget(canvas, translator, canvas)
         self._dyn_widget = dyn
         ctx.dyn_widget = dyn

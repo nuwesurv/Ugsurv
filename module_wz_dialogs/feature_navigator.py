@@ -24,6 +24,9 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsProject,
     QgsDistanceArea,
+    QgsExpression,
+    QgsExpressionContext,
+    QgsExpressionContextUtils,
 )
 
 _LABEL_FONT = QFont('Arial', 7)
@@ -261,12 +264,26 @@ class FeatureNavigatorDock(QDockWidget):
             self.counter_lbl.setText('Select a vector layer')
             return
 
-        expr = self.expr_edit.text().strip()
-        req = QgsFeatureRequest()
-        if expr:
-            req.setFilterExpression(expr)
+        expr_text = self.expr_edit.text().strip()
 
-        self._fids = [f.id() for f in layer.getFeatures(req)]
+        if not expr_text:
+            self._fids = [f.id() for f in layer.getFeatures()]
+        else:
+            expr = QgsExpression(expr_text)
+            if expr.hasParserError():
+                self.counter_lbl.setText(f'Expr error: {expr.parserErrorString()}')
+                return
+
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+            expr.prepare(ctx)
+
+            self._fids = []
+            for feat in layer.getFeatures():
+                ctx.setFeature(feat)
+                result = expr.evaluate(ctx)
+                if not expr.hasEvalError() and result:
+                    self._fids.append(feat.id())
 
         if not self._fids:
             self.counter_lbl.setText('0 features found')
@@ -314,7 +331,13 @@ class FeatureNavigatorDock(QDockWidget):
         geom = feat.geometry()
         if geom and not geom.isEmpty():
             if self.zoom_chk.isChecked():
-                bbox = geom.boundingBox()
+                layer_crs  = layer.crs()
+                canvas_crs = self.canvas.mapSettings().destinationCrs()
+                display_geom = QgsGeometry(geom)
+                if layer_crs != canvas_crs:
+                    xform = QgsCoordinateTransform(layer_crs, canvas_crs, QgsProject.instance())
+                    display_geom.transform(xform)
+                bbox = display_geom.boundingBox()
                 size = max(bbox.width(), bbox.height(), 1.0)
                 bbox.grow(size * 0.25)
                 self.canvas.setExtent(bbox)

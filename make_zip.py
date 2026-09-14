@@ -39,7 +39,6 @@ EXCLUDE_FILES = {
     "pylintrc",
     "Makefile",
     "cleanup.py",
-    "package_installer.py",
     ".gitignore",
     "CLAUDE.md",
     "README.html",

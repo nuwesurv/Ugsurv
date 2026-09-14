@@ -6,8 +6,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt import sip
 
-from qgis.gui import QgsMapLayerComboBox, QgsMapToolIdentifyFeature, QgsRubberBand
-from ..core import style as _style
+from qgis.gui import QgsMapLayerComboBox, QgsMapToolIdentifyFeature
 from qgis.core import (
     QgsFeature,
     QgsGeometry,
@@ -15,6 +14,7 @@ from qgis.core import (
     QgsProject,
     QgsSpatialIndex,
     QgsWkbTypes,
+    QgsVectorLayer,
 )
 
 
@@ -25,13 +25,7 @@ class AppendGeometryTool(QgsMapToolIdentifyFeature):
         self.iface = iface
         self.canvas = canvas
         self._dock = dock
-        self.picked_features = []  # list of (QgsFeature, QgsVectorLayer)
-
-        self.rubber_band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
-        self.rubber_band.setColor(_style.RB_IDENTIFY_RED)
-        self.rubber_band.setWidth(_style.RB_IDENTIFY_WIDTH)
-        self.rubber_band.setLineStyle(_style.RB_LINE_STYLE)
-        self.rubber_band.setFillColor(_style.RB_IDENTIFY_RED_FILL)
+        self._active_layer = None  # layer whose native selection we manage
 
     def _dock_alive(self):
         return not sip.isdeleted(self._dock)
@@ -41,7 +35,8 @@ class AppendGeometryTool(QgsMapToolIdentifyFeature):
         self.canvas.setFocus()
         if not self._dock_alive():
             return
-        n = len(self.picked_features)
+        from_layer = self._dock.from_combo.currentLayer()
+        n = len(from_layer.selectedFeatureIds()) if from_layer else 0
         if n:
             self._dock._set_status(f"{n} feature(s) selected.", "#ffaa00")
         self._dock._select_btn.setText("Selecting...")
@@ -54,17 +49,20 @@ class AppendGeometryTool(QgsMapToolIdentifyFeature):
         super().deactivate()
 
     def show_appended(self, n_added, skipped, to_name):
-        self.picked_features.clear()
-        self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self._clear_layer_selection()
         if self._dock_alive():
             msg = f"Appended {n_added} feature(s) to '{to_name}'."
             if skipped:
                 msg += f"  ({skipped} skipped — already exists or type mismatch)"
             self._dock._set_status(msg, "green")
 
+    def _clear_layer_selection(self):
+        if self._active_layer and not sip.isdeleted(self._active_layer):
+            self._active_layer.removeSelection()
+        self._active_layer = None
+
     def clear(self):
-        self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
-        self.picked_features.clear()
+        self._clear_layer_selection()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -87,6 +85,10 @@ class AppendGeometryTool(QgsMapToolIdentifyFeature):
                 self._dock._set_status("Choose a source layer first.", "red")
                 return
 
+            # If the source layer changed, clear the old layer's selection
+            if self._active_layer and self._active_layer.id() != from_layer.id():
+                self._clear_layer_selection()
+
             results = self.identify(
                 event.x(), event.y(),
                 [from_layer],
@@ -97,32 +99,16 @@ class AppendGeometryTool(QgsMapToolIdentifyFeature):
 
             if results:
                 feature = results[0].mFeature
-                feat_layer = results[0].mLayer
-
-                already = any(
-                    f.id() == feature.id() and lyr.id() == feat_layer.id()
-                    for f, lyr in self.picked_features
+                from_layer.selectByIds(
+                    [feature.id()],
+                    QgsVectorLayer.SelectBehavior.AddToSelection,
                 )
-                if already:
-                    return
+                self._active_layer = from_layer
 
-                geom = QgsGeometry(feature.geometry())
-
-                project_crs = QgsProject.instance().crs()
-                feat_crs = feat_layer.crs()
-                if feat_crs != project_crs:
-                    transform = QgsCoordinateTransform(feat_crs, project_crs, QgsProject.instance())
-                    geom.transform(transform)
-
-                self.picked_features.append((feature, feat_layer))
-                self.rubber_band.addGeometry(geom, None)
-                self.rubber_band.show()
-
-                n = len(self.picked_features)
+                n = len(from_layer.selectedFeatureIds())
                 self._dock._set_status(
-                    f"Feature {n} selected from '{feat_layer.name()}' "
-                    f"[fid={feature.id()}]  —  {n} total selected.",
-                    "#ffaa00"
+                    f"Feature [fid={feature.id()}] added — {n} total selected.",
+                    "#ffaa00",
                 )
             else:
                 self._dock._set_status("No feature found at that point.", "#888888")
@@ -205,7 +191,12 @@ class GeometryAppenderDock(QDockWidget):
             self._set_status("No target layer selected!", "red")
             return
 
-        picked = self.tool.picked_features
+        from_layer = self.from_combo.currentLayer()
+        if not from_layer:
+            self._set_status("No source layer selected!", "red")
+            return
+
+        picked = list(from_layer.selectedFeatures())
         if not picked:
             self._set_status("Nothing selected — click features on the map first.", "red")
             return
@@ -221,7 +212,7 @@ class GeometryAppenderDock(QDockWidget):
             new_features = []
             skipped = 0
 
-            for feat, from_layer in picked:
+            for feat in picked:
                 geom = feat.geometry()
 
                 transform = None

@@ -112,6 +112,7 @@ QListWidget::item:selected, QListWidget::item:hover {
 class CommandLineWidget(QDockWidget):
     commandEntered   = pyqtSignal(str)   # raw token or typed text
     textValueEntered = pyqtSignal(str)   # used for mid-command text
+    closed           = pyqtSignal()      # emitted when dock is closed by user
 
     def __init__(self, dispatcher, input_translator, parent=None):
         super().__init__("Command", parent)
@@ -187,6 +188,7 @@ class CommandLineWidget(QDockWidget):
     def closeEvent(self, event):
         QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
+        self.closed.emit()
 
     # ── public API ────────────────────────────────────────────────────────
     def register_ui_command(self, *aliases: str, callback):
