@@ -466,16 +466,16 @@ class CommandLineWidget(QDockWidget):
                         self._input.clear()
                         return True
 
-                # Up → popup navigation if open, else history
+                # Up → popup navigation if open, else history (older)
                 if key == Qt.Key.Key_Up:
                     if self._popup.isVisible():
                         row = self._popup.currentRow()
                         self._popup.setCurrentRow(max(0, row - 1))
                         return True
-                    self._navigate_history(-1)
+                    self._navigate_history(1)
                     return True
 
-                # Down → popup navigation if open, else history
+                # Down → popup navigation if open, else history (newer)
                 if key == Qt.Key.Key_Down:
                     if self._popup.isVisible():
                         row = self._popup.currentRow()
@@ -483,7 +483,7 @@ class CommandLineWidget(QDockWidget):
                             min(self._popup.count() - 1, row + 1)
                         )
                         return True
-                    self._navigate_history(1)
+                    self._navigate_history(-1)
                     return True
 
                 # Space → execute (same as Enter)

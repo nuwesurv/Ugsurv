@@ -686,6 +686,10 @@ class Ugsurv:
         ctx.go_home    = tool_mgr.go_home
         ctx.launch_tool = dispatcher.dispatch_tool_key
 
+        # Give the canvas keyboard focus immediately so the GlobalKeyFilter
+        # receives keystrokes without requiring a canvas click first.
+        canvas.setFocus()
+
     # ── extra utility panels ─────────────────────────────────────────────
     def _register_extra_tools(self, cmd_dock, iface, canvas, mw):  # noqa: C901
         """Register free utility tools immediately; gated tools only after sign-in."""
@@ -873,19 +877,10 @@ class Ugsurv:
         from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
         _cb_spiky = _make_toggle(lambda: SpikyGeomsDock(canvas, mw))
 
-        _calc_oa_ref = [None]
-        def _activate_calc_oa():
-            if _calc_oa_ref[0] is None:
-                from .module_wz_dialogs.overlap_area import CalcOverlapAreaTool
-                _calc_oa_ref[0] = CalcOverlapAreaTool(canvas, iface, cmd_dock)
-            canvas.setMapTool(_calc_oa_ref[0])
-
-        _calc_oa2_ref = [None]
-        def _activate_calc_oa2():
-            if _calc_oa2_ref[0] is None:
-                from .module_wz_dialogs.overlap_area import CalcOverlapAreaTool2
-                _calc_oa2_ref[0] = CalcOverlapAreaTool2(canvas, iface, cmd_dock)
-            canvas.setMapTool(_calc_oa2_ref[0])
+        def _open_coa():
+            from .module_wz_dialogs.overlap_area import CalcOverlapAreaDock3
+            return CalcOverlapAreaDock3(mw)
+        _cb_coa = _make_toggle(_open_coa)
 
         _tfix_ref = [None]
         def _activate_tfix():
@@ -918,8 +913,7 @@ class Ugsurv:
             cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
             cmd_dock.register_ui_command("SLV",    "ST", callback=_cb_slv)
             cmd_dock.register_ui_command("SPIKY",  "SG", callback=_cb_spiky)
-            cmd_dock.register_ui_command("CALC_OVERLAP_AREA", "COA",  callback=_activate_calc_oa)
-            cmd_dock.register_ui_command("COA2",                       callback=_activate_calc_oa2)
+            cmd_dock.register_ui_command("COA", callback=_cb_coa)
             cmd_dock.register_ui_command("TS",     "TF", callback=_activate_tfix)
 
         # ── WHOAMI — only entry point to sign-in ──────────────────────────
