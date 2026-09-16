@@ -1,286 +1,172 @@
 # -*- coding: utf-8 -*-
-import warnings
-warnings.filterwarnings("ignore")
-
-from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject, QVariant
-from qgis.PyQt.QtWidgets import (
-    QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton,
+from qgis.PyQt.QtCore import Qt, QVariant
+from qgis.core import (
+    QgsProject,
+    QgsGeometry,
+    QgsCoordinateTransform,
+    QgsWkbTypes,
+    QgsField,
 )
-from qgis.core import QgsMapLayerProxyModel, QgsField
-from qgis.gui import QgsMapLayerComboBox
+from qgis.gui import QgsMapToolIdentifyFeature, QgsRubberBand
+from ..core import style as _style
 
 _COL_PCT  = 'overlap_pct'
 _COL_AREA = 'overlap_area'
 
 
-class _STRIndex:
-    """Spatial index backed by shapely STRtree; drop-in for geopandas .sindex.intersection()."""
+class CalcOverlapAreaTool(QgsMapToolIdentifyFeature):
 
-    def __init__(self, geoms):
-        from shapely.strtree import STRtree
-        self._real_idxs = [i for i, g in enumerate(geoms)
-                           if g is not None and not g.is_empty]
-        valid = [geoms[i] for i in self._real_idxs]
-        self._tree = STRtree(valid) if valid else None
+    def __init__(self, canvas, iface, cmd_dock):
+        super().__init__(canvas)
+        self.iface = iface
+        self.canvas = canvas
+        self._cmd_dock = cmd_dock
+        self._picked_fids = set()
 
-    def intersection(self, bounds):
-        if self._tree is None:
-            return []
-        from shapely.geometry import box
-        hits = self._tree.query(box(*bounds))
-        return [self._real_idxs[int(h)] for h in hits]
+        self._target_feat = None
+        self._target_layer = None
+        self._target_geom = None   # in project CRS
+        self._comp_geoms = []
 
+        self.rubber_band1 = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.rubber_band1.setColor(_style.RB_IDENTIFY_RED)
+        self.rubber_band1.setWidth(_style.RB_IDENTIFY_WIDTH)
+        self.rubber_band1.setLineStyle(_style.RB_LINE_STYLE)
+        self.rubber_band1.setFillColor(_style.RB_IDENTIFY_RED_FILL)
 
-def _read_source(source):
-    """Read a vector file via OGR. Returns (geoms, srs)."""
-    from osgeo import ogr
-    from shapely.wkt import loads as wkt_loads
+        self.rubber_band2 = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.rubber_band2.setColor(_style.RB_IDENTIFY_BLUE)
+        self.rubber_band2.setWidth(_style.RB_IDENTIFY_WIDTH)
+        self.rubber_band2.setLineStyle(_style.RB_LINE_STYLE)
+        self.rubber_band2.setFillColor(_style.RB_IDENTIFY_BLUE_FILL)
 
-    path, layername = source, None
-    if '|layername=' in source:
-        path, rest = source.split('|', 1)
-        layername  = rest.split('layername=', 1)[1].split('|')[0]
+    def _log(self, msg, color='#aaddff'):
+        self._cmd_dock.log(msg, color)
 
-    ds = ogr.Open(path, 0)
-    if ds is None:
-        raise IOError(f"Cannot open: {path}")
-    lyr = ds.GetLayerByName(layername) if layername else ds.GetLayer(0)
-    if lyr is None:
-        raise IOError(f"Layer '{layername}' not found in {path}")
+    def _show_polygon(self, geom, rubber_band):
+        rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        rubber_band.addGeometry(geom, None)
+        rubber_band.show()
 
-    srs   = lyr.GetSpatialRef()
-    geoms = []
-    for feat in lyr:
-        geom_ref = feat.GetGeometryRef()
-        if geom_ref is not None:
-            geom_ref.FlattenTo2D()
-            geoms.append(wkt_loads(geom_ref.ExportToWkt()))
-        else:
-            geoms.append(None)
+    def _clear_state(self):
+        self.rubber_band1.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self.rubber_band2.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        self._picked_fids.clear()
+        self._target_feat = None
+        self._target_layer = None
+        self._target_geom = None
+        self._comp_geoms.clear()
 
-    ds = None
-    return geoms, srs
+    def activate(self):
+        super().activate()
+        self.canvas.setFocus()
+        self._log('Click target feature (red), then comparison features (blue). Right-click to calculate.')
 
+    def deactivate(self):
+        self._clear_state()
+        try:
+            self._cmd_dock._input.setFocus()
+        except Exception:
+            pass
+        super().deactivate()
 
-def _reproject_geoms(geoms, from_srs, to_srs):
-    """Reproject shapely geometries; returns list unchanged if CRS is the same."""
-    if from_srs is None or to_srs is None:
-        return geoms
-    if from_srs.IsSame(to_srs):
-        return geoms
-    from osgeo import ogr, osr
-    from shapely.wkt import loads as wkt_loads
-    ct  = osr.CoordinateTransformation(from_srs, to_srs)
-    out = []
-    for g in geoms:
-        if g is None or g.is_empty:
-            out.append(g)
-            continue
-        ogr_g = ogr.CreateGeometryFromWkt(g.wkt)
-        if ogr_g is None:
-            out.append(g)
-            continue
-        ogr_g.Transform(ct)
-        out.append(wkt_loads(ogr_g.ExportToWkt()))
-    return out
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.deactivate()
 
+    def canvasMoveEvent(self, event):
+        pass
 
-class _Worker(QObject):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(object)
-    error    = pyqtSignal(str)
+    def canvasPressEvent(self, event):  # noqa: C901
+        try:
+            if event.button() == Qt.MouseButton.RightButton:
+                self._calculate()
+                self._clear_state()
+                self._cmd_dock.log('─' * 40, '#555555')
+                return
 
-    def __init__(self, fid_wkt_list, layer2_src, layer1_crs_wkt):
-        super().__init__()
-        self.fid_wkt_list   = fid_wkt_list
-        self.layer2_src     = layer2_src
-        self.layer1_crs_wkt = layer1_crs_wkt
+            if event.button() != Qt.MouseButton.LeftButton:
+                return
 
-    def run(self):  # noqa: C901
+            active_layer = self.iface.activeLayer()
+            if not active_layer:
+                self._log('No active layer selected in the Layers panel.')
+                return
+
+            results = self.identify(
+                event.x(), event.y(),
+                [active_layer],
+                QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll,
+            )
+            if not results:
+                self._log('No feature detected.')
+                return
+
+            feature   = results[0].mFeature
+            feat_layer = results[0].mLayer
+
+            fid_key = (feat_layer.id(), feature.id())
+            if fid_key in self._picked_fids:
+                return
+            self._picked_fids.add(fid_key)
+
+            geom = QgsGeometry(feature.geometry())
+            project_crs = QgsProject.instance().crs()
+            feat_crs = feat_layer.crs()
+            if feat_crs != project_crs:
+                xform = QgsCoordinateTransform(feat_crs, project_crs, QgsProject.instance())
+                geom.transform(xform)
+
+            if self._target_geom is None:
+                self._target_feat  = feature
+                self._target_layer = feat_layer
+                self._target_geom  = geom
+                self._show_polygon(geom, self.rubber_band1)
+                self._log(f'Target: {feat_layer.name()} fid={feature.id()}')
+            else:
+                self._comp_geoms.append(geom)
+                merged = QgsGeometry.unaryUnion(self._comp_geoms)
+                self._show_polygon(merged, self.rubber_band2)
+                self._log(f'Comparison #{len(self._comp_geoms)}: {feat_layer.name()} fid={feature.id()}')
+
+        except Exception as e:
+            self._log(f'Error: {e}')
+
+    def _calculate(self):
+        if self._target_geom is None:
+            self._log('No target feature selected.')
+            return
+        if not self._comp_geoms:
+            self._log('No comparison features selected.')
+            return
+
         try:
             from shapely.wkt import loads as wkt_loads
             from shapely.ops import unary_union
-            from osgeo import osr
 
-            target_srs = osr.SpatialReference()
-            target_srs.ImportFromWkt(self.layer1_crs_wkt)
+            target_sh  = wkt_loads(self._target_geom.asWkt())
+            comp_sh    = [wkt_loads(g.asWkt()) for g in self._comp_geoms]
+            comp_union = unary_union(comp_sh) if len(comp_sh) > 1 else comp_sh[0]
 
-            self.progress.emit("Loading comparison layer…")
-            geoms2_raw, src_srs = _read_source(self.layer2_src)
-            geoms2_raw = _reproject_geoms(geoms2_raw, src_srs, target_srs)
-            geoms2  = [g for g in geoms2_raw if g is not None and not g.is_empty]
+            target_area = target_sh.area
+            if target_area <= 0:
+                self._log('Target feature has zero area.')
+                return
 
-            self.progress.emit("Building spatial index for comparison layer…")
-            sindex2 = _STRIndex(geoms2)
-
-            n           = len(self.fid_wkt_list)
-            results     = {}
-            report_step = max(1, n // 20)
-
-            self.progress.emit(f"Computing overlap for {n} features…")
-            for i, (fid, wkt) in enumerate(self.fid_wkt_list):
-                if i % report_step == 0:
-                    self.progress.emit(f"Processing {i}/{n}  ({100 * i // n}%)…")
-
-                if not wkt:
-                    results[fid] = {'pct': None, 'area': None}
-                    continue
-
-                try:
-                    geom1 = wkt_loads(wkt)
-                except Exception:
-                    results[fid] = {'pct': None, 'area': None}
-                    continue
-
-                if geom1 is None or geom1.is_empty:
-                    results[fid] = {'pct': None, 'area': None}
-                    continue
-
-                feature_area = geom1.area
-                if feature_area <= 0:
-                    results[fid] = {'pct': 0.0, 'area': 0.0}
-                    continue
-
-                cands = sindex2.intersection(geom1.bounds)
-                if not cands:
-                    results[fid] = {'pct': 0.0, 'area': 0.0}
-                    continue
-
-                try:
-                    cand_geoms   = [geoms2[c] for c in cands]
-                    layer2_local = (
-                        unary_union(cand_geoms) if len(cand_geoms) > 1 else cand_geoms[0]
-                    )
-                    intersection = geom1.intersection(layer2_local)
-                    ovl_area     = intersection.area if not intersection.is_empty else 0.0
-                except Exception:
-                    ovl_area = 0.0
-
-                pct = min(100.0, 100.0 * ovl_area / feature_area)
-                results[fid] = {
-                    'pct':  round(pct,      4),
-                    'area': round(ovl_area, 4),
-                }
-
-            self.progress.emit(f"Done. Computed {n} feature(s).")
-            self.finished.emit(results)
+            intersection = target_sh.intersection(comp_union)
+            ovl_area = intersection.area if not intersection.is_empty else 0.0
+            ovl_pct  = min(100.0, 100.0 * ovl_area / target_area)
+            ovl_area = round(ovl_area, 4)
+            ovl_pct  = round(ovl_pct,  4)
 
         except Exception as e:
-            import traceback
-            self.error.emit(f"{e}\n{traceback.format_exc()}")
-
-
-class OverlapAreaDock(QDockWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle('Overlap Area')
-        self._thread = None
-        self._worker = None
-
-        root   = QWidget()
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(4)
-
-        H = 26
-
-        def _layer_row(label_text):
-            row   = QHBoxLayout()
-            lbl   = QLabel(label_text)
-            lbl.setFixedWidth(130)
-            combo = QgsMapLayerComboBox()
-            combo.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
-            combo.setFixedHeight(H)
-            row.addWidget(lbl)
-            row.addWidget(combo)
-            layout.addLayout(row)
-            return combo
-
-        self.cmb_layer1 = _layer_row("Dataset1 (target):")
-        self.cmb_layer2 = _layer_row("Comparison layer:")
-
-        self._status = QLabel("Ready.")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status)
-
-        layout.addStretch()
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        self._run_btn = QPushButton("Run")
-        self._run_btn.setFixedHeight(H + 4)
-        self._run_btn.clicked.connect(self._run)
-        btn_row.addWidget(self._run_btn)
-        layout.addLayout(btn_row)
-
-        self.setWidget(root)
-
-    def _set_status(self, message, color="green"):
-        self._status.setStyleSheet(f"color: {color};")
-        self._status.setText(message)
-
-    def _run(self):
-        layer1 = self.cmb_layer1.currentLayer()
-        layer2 = self.cmb_layer2.currentLayer()
-
-        if not layer1:
-            self._set_status("Dataset1 is required!", "red"); return
-        if not layer2:
-            self._set_status("Comparison layer is required!", "red"); return
-        if layer1 == layer2:
-            self._set_status("Dataset1 and comparison layer must be different!", "red"); return
-
-        fid_wkt_list = []
-        for feat in layer1.getFeatures():
-            geom = feat.geometry()
-            wkt  = geom.asWkt() if (geom and not geom.isEmpty()) else None
-            fid_wkt_list.append((feat.id(), wkt))
-
-        if not fid_wkt_list:
-            self._set_status("Dataset1 has no features.", "red"); return
-
-        self._run_btn.setEnabled(False)
-        self._set_status("Running…", "orange")
-        self._layer1_ref = layer1
-
-        self._thread = QThread()
-        self._worker = _Worker(
-            fid_wkt_list   = fid_wkt_list,
-            layer2_src     = layer2.source(),
-            layer1_crs_wkt = layer1.crs().toWkt(),
-        )
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda msg: self._set_status(msg, "orange"))
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error.connect(self._thread.quit)
-        self._thread.finished.connect(self._cleanup_thread)
-        self._thread.start()
-
-    def _cleanup_thread(self):
-        self._run_btn.setEnabled(True)
-        if self._thread:
-            self._thread.deleteLater()
-            self._thread = None
-        if self._worker:
-            self._worker.deleteLater()
-            self._worker = None
-
-    def _on_finished(self, results: dict):
-        layer = getattr(self, '_layer1_ref', None)
-        if layer is None or sip.isdeleted(layer):
-            self._set_status("Layer was removed before results could be applied.", "red")
+            self._log(f'Calculation error: {e}')
             return
 
-        provider = layer.dataProvider()
+        layer = self._target_layer
+        fid   = self._target_feat.id()
 
-        # Create any missing fields first, then resolve indices once both exist.
-        # Check against the provider's own field list (the real DB schema) to avoid
-        # a stale layer field-cache triggering a duplicate-column OGR error.
+        provider = layer.dataProvider()
         for col_name in (_COL_PCT, _COL_AREA):
             if provider.fields().indexOf(col_name) == -1:
                 provider.addAttributes([QgsField(col_name, QVariant.Double, 'double', 14, 4)])
@@ -290,26 +176,96 @@ class OverlapAreaDock(QDockWidget):
         idx_area = layer.fields().indexOf(_COL_AREA)
 
         if idx_pct == -1 or idx_area == -1:
-            self._set_status("Could not create one or both output fields.", "red")
+            self._log('Could not create output fields.')
             return
 
-        attr_map = {}
-        for fid, vals in results.items():
-            if vals['pct'] is not None:
-                attr_map[fid] = {idx_pct: vals['pct'], idx_area: vals['area']}
-
-        provider.changeAttributeValues(attr_map)
+        provider.changeAttributeValues({fid: {idx_pct: ovl_pct, idx_area: ovl_area}})
         layer.updateFields()
         layer.triggerRepaint()
 
-        n         = len(results)
-        n_nonzero = sum(1 for v in results.values() if v['pct'] is not None and v['pct'] > 0)
-        self._set_status(
-            f"Done. {n} features processed — "
-            f"{n_nonzero} with non-zero overlap.\n"
-            f"Columns written: {_COL_PCT}, {_COL_AREA}",
-            "green",
+        self._log(
+            f'Done. overlap_pct={ovl_pct}%  overlap_area={ovl_area} sq units'
+            f'  → written to {layer.name()} fid={fid}',
+            '#44ff88',
         )
 
-    def _on_error(self, msg):
-        self._set_status(f"Error: {msg}", "red")
+
+class CalcOverlapAreaTool2(CalcOverlapAreaTool):
+    """Same as CalcOverlapAreaTool but uses the target feature's original_geometry
+    field (WKT) instead of its current geometry for the overlap calculation."""
+
+    _ORIG_FIELD = 'original_geometry'
+
+    def activate(self):
+        super().activate()
+        self._log(f'COA2: target uses {self._ORIG_FIELD} field. Click target (red), comparison features (blue), right-click to calculate.')
+
+    def canvasPressEvent(self, event):  # noqa: C901
+        try:
+            if event.button() == Qt.MouseButton.RightButton:
+                self._calculate()
+                self._clear_state()
+                self._cmd_dock.log('─' * 40, '#555555')
+                return
+
+            if event.button() != Qt.MouseButton.LeftButton:
+                return
+
+            active_layer = self.iface.activeLayer()
+            if not active_layer:
+                self._log('No active layer selected in the Layers panel.')
+                return
+
+            results = self.identify(
+                event.x(), event.y(),
+                [active_layer],
+                QgsMapToolIdentifyFeature.IdentifyMode.TopDownAll,
+            )
+            if not results:
+                self._log('No feature detected.')
+                return
+
+            feature    = results[0].mFeature
+            feat_layer = results[0].mLayer
+
+            fid_key = (feat_layer.id(), feature.id())
+            if fid_key in self._picked_fids:
+                return
+            self._picked_fids.add(fid_key)
+
+            project_crs = QgsProject.instance().crs()
+            feat_crs    = feat_layer.crs()
+
+            if self._target_geom is None:
+                # Target: read original_geometry field
+                orig_wkt = feature[self._ORIG_FIELD]
+                if not orig_wkt:
+                    self._picked_fids.discard(fid_key)
+                    self._log(f'Target feature has no value in "{self._ORIG_FIELD}" field.')
+                    return
+                geom = QgsGeometry.fromWkt(str(orig_wkt))
+                if geom is None or geom.isEmpty():
+                    self._picked_fids.discard(fid_key)
+                    self._log(f'"{self._ORIG_FIELD}" field contains invalid WKT.')
+                    return
+                if feat_crs != project_crs:
+                    xform = QgsCoordinateTransform(feat_crs, project_crs, QgsProject.instance())
+                    geom.transform(xform)
+                self._target_feat  = feature
+                self._target_layer = feat_layer
+                self._target_geom  = geom
+                self._show_polygon(geom, self.rubber_band1)
+                self._log(f'Target (original_geometry): {feat_layer.name()} fid={feature.id()}')
+            else:
+                # Comparison: use current geometry
+                geom = QgsGeometry(feature.geometry())
+                if feat_crs != project_crs:
+                    xform = QgsCoordinateTransform(feat_crs, project_crs, QgsProject.instance())
+                    geom.transform(xform)
+                self._comp_geoms.append(geom)
+                merged = QgsGeometry.unaryUnion(self._comp_geoms)
+                self._show_polygon(merged, self.rubber_band2)
+                self._log(f'Comparison #{len(self._comp_geoms)}: {feat_layer.name()} fid={feature.id()}')
+
+        except Exception as e:
+            self._log(f'Error: {e}')

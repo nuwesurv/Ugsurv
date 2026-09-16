@@ -873,8 +873,19 @@ class Ugsurv:
         from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
         _cb_spiky = _make_toggle(lambda: SpikyGeomsDock(canvas, mw))
 
-        from .module_wz_dialogs.overlap_area import OverlapAreaDock
-        _cb_oa = _make_toggle(lambda: OverlapAreaDock(mw))
+        _calc_oa_ref = [None]
+        def _activate_calc_oa():
+            if _calc_oa_ref[0] is None:
+                from .module_wz_dialogs.overlap_area import CalcOverlapAreaTool
+                _calc_oa_ref[0] = CalcOverlapAreaTool(canvas, iface, cmd_dock)
+            canvas.setMapTool(_calc_oa_ref[0])
+
+        _calc_oa2_ref = [None]
+        def _activate_calc_oa2():
+            if _calc_oa2_ref[0] is None:
+                from .module_wz_dialogs.overlap_area import CalcOverlapAreaTool2
+                _calc_oa2_ref[0] = CalcOverlapAreaTool2(canvas, iface, cmd_dock)
+            canvas.setMapTool(_calc_oa2_ref[0])
 
         _tfix_ref = [None]
         def _activate_tfix():
@@ -907,7 +918,8 @@ class Ugsurv:
             cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
             cmd_dock.register_ui_command("SLV",    "ST", callback=_cb_slv)
             cmd_dock.register_ui_command("SPIKY",  "SG", callback=_cb_spiky)
-            cmd_dock.register_ui_command("OA",         callback=_cb_oa)
+            cmd_dock.register_ui_command("CALC_OVERLAP_AREA", "COA",  callback=_activate_calc_oa)
+            cmd_dock.register_ui_command("COA2",                       callback=_activate_calc_oa2)
             cmd_dock.register_ui_command("TS",     "TF", callback=_activate_tfix)
 
         # ── WHOAMI — only entry point to sign-in ──────────────────────────
