@@ -740,6 +740,10 @@ class Ugsurv:
             canvas.setMapTool(self._revert_tool)
         cmd_dock.register_ui_command("RV", "REV", callback=_activate_revert)
 
+        from .module_wz_dialogs.revert_geometry import RevertGeometryDock
+        cmd_dock.register_ui_command("RV2",
+            callback=_make_toggle(lambda: RevertGeometryDock(mw)))
+
         _pd = self._props_dock
         cmd_dock.register_ui_command("PROPSDOCK", "PD",
             callback=lambda: (_pd.show(), _pd.raise_()))
@@ -877,10 +881,24 @@ class Ugsurv:
         from .module_wz_dialogs.spiky_geometry import SpikyGeomsDock
         _cb_spiky = _make_toggle(lambda: SpikyGeomsDock(canvas, mw))
 
+        _coa2_ref = [None]
+        def _activate_coa2():
+            if _coa2_ref[0] is None:
+                from .module_wz_dialogs.overlap_area import CalcOverlapAreaTool2
+                _coa2_ref[0] = CalcOverlapAreaTool2(canvas, iface, cmd_dock)
+            canvas.setMapTool(_coa2_ref[0])
+
         def _open_coa():
             from .module_wz_dialogs.overlap_area import CalcOverlapAreaDock3
             return CalcOverlapAreaDock3(mw)
         _cb_coa = _make_toggle(_open_coa)
+
+        _geom_ref = [None]
+        def _activate_geom():
+            if _geom_ref[0] is None:
+                from .tools.geom_print import GeomPrintTool
+                _geom_ref[0] = GeomPrintTool(canvas, iface, cmd_dock)
+            canvas.setMapTool(_geom_ref[0])
 
         _tfix_ref = [None]
         def _activate_tfix():
@@ -913,8 +931,10 @@ class Ugsurv:
             cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
             cmd_dock.register_ui_command("SLV",    "ST", callback=_cb_slv)
             cmd_dock.register_ui_command("SPIKY",  "SG", callback=_cb_spiky)
-            cmd_dock.register_ui_command("COA", callback=_cb_coa)
-            cmd_dock.register_ui_command("TS",     "TF", callback=_activate_tfix)
+            cmd_dock.register_ui_command("COA",  callback=_cb_coa)
+            cmd_dock.register_ui_command("COA2", callback=_activate_coa2)
+            cmd_dock.register_ui_command("GEOM", "GM", callback=_activate_geom)
+            cmd_dock.register_ui_command("TS",   "TF", callback=_activate_tfix)
 
         # ── WHOAMI — only entry point to sign-in ──────────────────────────
 
