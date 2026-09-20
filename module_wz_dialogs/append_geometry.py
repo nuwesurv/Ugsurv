@@ -258,9 +258,10 @@ class GeometryAppenderDock(QDockWidget):
                     if geom.equals(existing_geom):
                         exists = True
                         break
-                    if geom.intersects(existing_geom):
+                    area = geom.area()
+                    if area > 0 and geom.intersects(existing_geom):
                         overlap = geom.intersection(existing_geom).area()
-                        if overlap / geom.area() > 0.95:
+                        if overlap / area > 0.95:
                             exists = True
                             break
 

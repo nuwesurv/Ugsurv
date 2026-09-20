@@ -744,6 +744,10 @@ class Ugsurv:
         cmd_dock.register_ui_command("RV2",
             callback=_make_toggle(lambda: RevertGeometryDock(mw)))
 
+        from .module_wz_dialogs.merge_lines import MergeLinesDock
+        cmd_dock.register_ui_command("MERGE", "ML",
+            callback=_make_toggle(lambda: MergeLinesDock(mw)))
+
         _pd = self._props_dock
         cmd_dock.register_ui_command("PROPSDOCK", "PD",
             callback=lambda: (_pd.show(), _pd.raise_()))
