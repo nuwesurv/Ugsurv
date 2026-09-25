@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import tempfile
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -887,6 +888,8 @@ class SolveTopologyDock(QDockWidget):
 
         self._status = QLabel('Ready.')
         self._status.setWordWrap(True)
+        self._status.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self._status.setCursor(Qt.IBeamCursor)
         layout.addWidget(self._status)
 
         layout.addStretch()
@@ -1017,6 +1020,39 @@ class SolveTopologyDock(QDockWidget):
             except (RuntimeError, TypeError):  # nosec B110
                 pass
 
+    # ── Run helpers ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _layer_source_for_ogr(layer):
+        """Return an OGR-readable source string for *layer*.
+
+        File-backed layers are returned as-is.  Memory / scratch layers are
+        exported to a temporary GeoPackage and that path is returned instead.
+        The caller is responsible for deleting the temp file afterwards.
+        """
+        src = layer.source()
+        path = src.split('|')[0]
+        if os.path.isfile(path):
+            return src, None          # (source, tmp_path_to_clean)
+
+        # Memory / virtual layer — export to a temp GeoPackage
+        from qgis.core import QgsVectorFileWriter, QgsCoordinateTransformContext
+        tmp = tempfile.NamedTemporaryFile(suffix='.gpkg', delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
+        opts = QgsVectorFileWriter.SaveVectorOptions()
+        opts.driverName = 'GPKG'
+        opts.layerName  = layer.name()
+
+        err, msg, _, _ = QgsVectorFileWriter.writeAsVectorFormatV3(
+            layer, tmp_path, QgsCoordinateTransformContext(), opts
+        )
+        if err != QgsVectorFileWriter.NoError:
+            raise IOError(f"Failed to export temp layer '{layer.name()}': {msg}")
+
+        return f"{tmp_path}|layername={layer.name()}", tmp_path
+
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def _run(self):
@@ -1036,13 +1072,34 @@ class SolveTopologyDock(QDockWidget):
         self._set_status("Running…", "orange")
         self._output_path = output_path
 
+        # Export any memory/temp layers to real files the worker thread can read
+        self._tmp_files = []
+        try:
+            def _src(lyr):
+                if lyr is None:
+                    return None
+                src, tmp = self._layer_source_for_ogr(lyr)
+                if tmp:
+                    self._tmp_files.append(tmp)
+                return src
+
+            parcels_src     = _src(parcels_layer)
+            rivers_src      = _src(rivers_layer)
+            roads_src       = _src(roads_layer)
+            waterbodies_src = _src(waterbody_layer)
+            surveyed_src    = _src(surveyed_layer)
+        except IOError as exc:
+            self._set_status(f"Error: {exc}", "red")
+            self._run_btn.setEnabled(True)
+            return
+
         self._thread = QThread()
         self._worker = _Worker(
-            parcels_src         = parcels_layer.source(),
-            rivers_src          = rivers_layer.source()    if rivers_layer    else None,
-            roads_src           = roads_layer.source()     if roads_layer     else None,
-            waterbodies_src     = waterbody_layer.source() if waterbody_layer else None,
-            surveyed_src        = surveyed_layer.source()  if surveyed_layer  else None,
+            parcels_src         = parcels_src,
+            rivers_src          = rivers_src,
+            roads_src           = roads_src,
+            waterbodies_src     = waterbodies_src,
+            surveyed_src        = surveyed_src,
             output_path         = output_path,
             river_buffer_m      = self.spn_river_buf.value(),
             road_buffer_m       = self.spn_road_buf.value(),
@@ -1058,9 +1115,17 @@ class SolveTopologyDock(QDockWidget):
         self._worker.constraints.connect(self._on_constraints)
         self._worker.finished.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
-        self._thread.finished.connect(
-            lambda: self._run_btn.setEnabled(True) if not sip.isdeleted(self) else None
-        )
+        def _on_thread_done():
+            if not sip.isdeleted(self):
+                self._run_btn.setEnabled(True)
+            for p in getattr(self, '_tmp_files', []):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            self._tmp_files = []
+
+        self._thread.finished.connect(_on_thread_done)
         self._thread.start()
 
     # ── Finished handler ──────────────────────────────────────────────────────
