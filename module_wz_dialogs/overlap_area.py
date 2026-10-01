@@ -21,7 +21,7 @@ _ORIG_FIELD = 'original_geometry'
 
 
 class CalcOverlapAreaTool2(QgsMapToolIdentifyFeature):
-    """COA2 — click target feature (uses original_geometry field), then
+    """OVP_CALC2 — click target feature (uses original_geometry field), then
     comparison features (actual geometry). Right-click to calculate."""
 
     def __init__(self, canvas, iface, cmd_dock):
@@ -68,7 +68,7 @@ class CalcOverlapAreaTool2(QgsMapToolIdentifyFeature):
     def activate(self):
         super().activate()
         self.canvas.setFocus()
-        self._log('COA2: click target (red, uses original_geometry), then comparison features (blue). Right-click to calculate.')
+        self._log('OVP_CALC2: click target (red, uses original_geometry), then comparison features (blue). Right-click to calculate.')
 
     def deactivate(self):
         self._clear_state()
@@ -302,7 +302,7 @@ class CalcOverlapAreaDock3(QDockWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('COA — Overlap Area')
+        self.setWindowTitle('OVERLAP_CALC — Overlap Area')
         self._thread     = None
         self._worker     = None
         self._layer1_ref = None

@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
+import os
+
 from qgis.PyQt.QtCore import Qt, QRectF
 from qgis.PyQt.QtGui import QFont, QColor, QFontMetricsF
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton,
-    QLineEdit, QCheckBox, QFrame, QSizePolicy,
+    QLineEdit, QCheckBox, QFrame, QSizePolicy, QFileDialog,
+    QApplication,
 )
 
 from qgis.gui import (
     QgsMapLayerComboBox, QgsExpressionBuilderDialog,
-    QgsRubberBand, QgsMapCanvasItem,
+    QgsRubberBand, QgsMapCanvasItem, QgsFieldComboBox,
 )
 
 from ..core import style as _style
@@ -65,6 +68,7 @@ class _DistLabelItem(QgsMapCanvasItem):
         painter.drawText(rect, Qt.AlignCenter, self._text)
 
 
+
 class FeatureNavigatorDock(QDockWidget):
     """
     Navigate through filtered features one by one using ◀ / ▶ buttons (or
@@ -97,6 +101,7 @@ class FeatureNavigatorDock(QDockWidget):
 
         self._fids: list = []
         self._index: int = -1
+        self._advanced_open: bool = False
 
         # distance-to-polygon state
         self._dist_rubber_band = None     # single QgsRubberBand for all lines
@@ -213,6 +218,61 @@ class FeatureNavigatorDock(QDockWidget):
         poly_row.addWidget(self.poly_layer_combo)
         vbox.addLayout(poly_row)
 
+        # ── Advanced toggle ──────────────────────────────────────────────
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.HLine)
+        sep3.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep3)
+
+        self.adv_btn = QPushButton('Advanced')
+        self.adv_btn.clicked.connect(self._toggle_advanced)
+        vbox.addWidget(self.adv_btn)
+
+        # ── Advanced section (hidden until toggled) ──────────────────────
+        self._adv_frame = QFrame()
+        self._adv_frame.setFrameShape(QFrame.StyledPanel)
+        adv_vbox = QVBoxLayout(self._adv_frame)
+        adv_vbox.setSpacing(5)
+        adv_vbox.setContentsMargins(6, 6, 6, 6)
+
+        field_row = QHBoxLayout()
+        field_row.addWidget(QLabel('ID field:'))
+        self._adv_field_combo = QgsFieldComboBox()
+        self._adv_field_combo.setLayer(self.layer_combo.currentLayer())
+        field_row.addWidget(self._adv_field_combo)
+        adv_vbox.addLayout(field_row)
+
+        prefix_row = QHBoxLayout()
+        prefix_row.addWidget(QLabel('Prefix:'))
+        self._adv_prefix_edit = QLineEdit()
+        self._adv_prefix_edit.setPlaceholderText('optional, e.g. PLOT_')
+        prefix_row.addWidget(self._adv_prefix_edit)
+        adv_vbox.addLayout(prefix_row)
+
+        adv_vbox.addWidget(QLabel('Base folder:'))
+        folder_row = QHBoxLayout()
+        self._adv_folder_edit = QLineEdit()
+        self._adv_folder_edit.setPlaceholderText('Folder containing ID-named subfolders…')
+        folder_row.addWidget(self._adv_folder_edit)
+        adv_browse_btn = QPushButton('…')
+        adv_browse_btn.setFixedWidth(30)
+        adv_browse_btn.setToolTip('Choose base folder')
+        adv_browse_btn.clicked.connect(self._browse_adv_folder)
+        folder_row.addWidget(adv_browse_btn)
+        adv_vbox.addLayout(folder_row)
+
+        self._adv_open_btn = QPushButton('Open Folder')
+        self._adv_open_btn.clicked.connect(self._open_feature_folder)
+        adv_vbox.addWidget(self._adv_open_btn)
+
+        self._adv_status = QLabel('')
+        self._adv_status.setStyleSheet('color: gray; font-size: 10px;')
+        self._adv_status.setWordWrap(True)
+        adv_vbox.addWidget(self._adv_status)
+
+        self._adv_frame.setVisible(False)
+        vbox.addWidget(self._adv_frame)
+
         self.setWidget(root)
 
     # ------------------------------------------------------------------ #
@@ -238,6 +298,7 @@ class FeatureNavigatorDock(QDockWidget):
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
         self._clear_dist_overlays()
+        self._adv_field_combo.setLayer(_layer)
 
     def _on_dist_toggle(self, state):
         if not state:
@@ -265,9 +326,15 @@ class FeatureNavigatorDock(QDockWidget):
             return
 
         expr_text = self.expr_edit.text().strip()
+        total = layer.featureCount()
 
         if not expr_text:
-            self._fids = [f.id() for f in layer.getFeatures()]
+            self._fids = []
+            for i, f in enumerate(layer.getFeatures()):
+                self._fids.append(f.id())
+                if i % 500 == 0:
+                    self.counter_lbl.setText(f'Loading… {i} / {total}')
+                    QApplication.processEvents()
         else:
             expr = QgsExpression(expr_text)
             if expr.hasParserError():
@@ -279,11 +346,14 @@ class FeatureNavigatorDock(QDockWidget):
             expr.prepare(ctx)
 
             self._fids = []
-            for feat in layer.getFeatures():
+            for i, feat in enumerate(layer.getFeatures()):
                 ctx.setFeature(feat)
                 result = expr.evaluate(ctx)
                 if not expr.hasEvalError() and result:
                     self._fids.append(feat.id())
+                if i % 500 == 0:
+                    self.counter_lbl.setText(f'Filtering… {i} / {total}')
+                    QApplication.processEvents()
 
         if not self._fids:
             self.counter_lbl.setText('0 features found')
@@ -345,6 +415,59 @@ class FeatureNavigatorDock(QDockWidget):
 
         self._update_nav_buttons()
         self._update_vertex_distances()
+
+    # ------------------------------------------------------------------ #
+    #  Advanced – folder opener                                            #
+    # ------------------------------------------------------------------ #
+
+    def _toggle_advanced(self):
+        self._advanced_open = not self._advanced_open
+        self._adv_frame.setVisible(self._advanced_open)
+        if self._advanced_open:
+            from qgis.utils import iface
+            mw = iface.mainWindow()
+            if mw.dockWidgetArea(self) != Qt.RightDockWidgetArea:
+                mw.addDockWidget(Qt.RightDockWidgetArea, self)
+            self.setMinimumWidth(360)
+
+    def _browse_adv_folder(self):
+        current = self._adv_folder_edit.text() or ''
+        folder = QFileDialog.getExistingDirectory(self, 'Select base folder', current)
+        if folder:
+            self._adv_folder_edit.setText(folder)
+
+    def _open_feature_folder(self):
+        self._adv_status.setText('')
+        layer = self.layer_combo.currentLayer()
+        if not isinstance(layer, QgsVectorLayer) or self._index < 0 or not self._fids:
+            self._adv_status.setText('Navigate to a feature first.')
+            return
+
+        field_name = self._adv_field_combo.currentField()
+        if not field_name:
+            self._adv_status.setText('Select an ID field.')
+            return
+
+        base_folder = self._adv_folder_edit.text().strip()
+        if not base_folder:
+            self._adv_status.setText('Select a base folder.')
+            return
+
+        fid = self._fids[self._index]
+        feat = layer.getFeature(fid)
+        field_val = feat.attribute(field_name)
+        if field_val is None:
+            self._adv_status.setText('Field value is NULL for this feature.')
+            return
+
+        prefix = self._adv_prefix_edit.text()
+        target = os.path.join(base_folder, f'{prefix}{field_val}')
+
+        if os.path.isdir(target):
+            os.startfile(target)
+            self._adv_status.setText(f'Opened: {target}')
+        else:
+            self._adv_status.setText(f'Not found: {target}')
 
     # ------------------------------------------------------------------ #
     #  Vertex → polygon distance                                           #

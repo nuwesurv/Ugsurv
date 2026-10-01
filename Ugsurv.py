@@ -935,8 +935,8 @@ class Ugsurv:
             cmd_dock.register_ui_command("PARCEL", "PP", callback=_open_parcel_plotter)
             cmd_dock.register_ui_command("SLV",    "ST", callback=_cb_slv)
             cmd_dock.register_ui_command("SPIKY",  "SG", callback=_cb_spiky)
-            cmd_dock.register_ui_command("COA",  callback=_cb_coa)
-            cmd_dock.register_ui_command("COA2", callback=_activate_coa2)
+            cmd_dock.register_ui_command("OVERLAP_CALC", "OVP_CALC", callback=_cb_coa)
+            cmd_dock.register_ui_command("OVERLAP_CALC2", "OVP_CALC2", callback=_activate_coa2)
             cmd_dock.register_ui_command("GEOM", "GM", callback=_activate_geom)
             cmd_dock.register_ui_command("TS",   "TF", callback=_activate_tfix)
 
