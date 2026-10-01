@@ -699,6 +699,7 @@ class AdvancedNavigatorWindow(QDialog):
         self._data_by_id    = {}   # id_value -> list[int] (row indices)
         self._attr_edits    = {}   # col -> QLineEdit
         self._attr_match_idx = 0  # which duplicate match is currently shown
+        self._current_pdf_name = None  # basename of last opened PDF
 
         from qgis.PyQt.QtCore import QTimer
         self._save_timer = QTimer(self)
@@ -868,6 +869,16 @@ class AdvancedNavigatorWindow(QDialog):
         )
         self._reason_lbl.setVisible(False)
         vbox.addWidget(self._reason_lbl)
+
+        self._pdf_missing_lbl = QLabel('')
+        self._pdf_missing_lbl.setWordWrap(True)
+        self._pdf_missing_lbl.setAlignment(Qt.AlignCenter)
+        self._pdf_missing_lbl.setStyleSheet(
+            'color: #8B4000; background: #FFF3CD; '
+            'padding: 6px 8px; border-radius: 4px; font-size: 11px;'
+        )
+        self._pdf_missing_lbl.setVisible(False)
+        vbox.addWidget(self._pdf_missing_lbl)
 
         vbox.addWidget(self._make_pdf_viewer(), 1)
         return w
@@ -1044,6 +1055,7 @@ class AdvancedNavigatorWindow(QDialog):
         self._update_nav_buttons()
         self._refresh_reason_label()
         self._refresh_pdf_list()
+        self._auto_open_pdf()
         self._refresh_attributes()
         if not isinstance(self._layer, QgsVectorLayer) or self._index < 0 or not self._fids:
             return
@@ -1114,8 +1126,36 @@ class AdvancedNavigatorWindow(QDialog):
         lbl.setStyleSheet('color: gray; font-size: 10px;')
         return lbl
 
+    def _auto_open_pdf(self):
+        """After navigating to a new feature, reopen the counterpart of the
+        last-viewed PDF from the new feature's folder."""
+        if not self._current_pdf_name:
+            return
+        folder = self._current_feature_folder()
+        if not folder or not os.path.isdir(folder):
+            return
+
+        pdfs = [f for f in os.listdir(folder)
+                if f.lower().endswith('.pdf')]
+
+        if self._current_pdf_name.startswith('ID_'):
+            # match any PDF that starts with 'ID_' in the new folder
+            match = next((f for f in pdfs if f.startswith('ID_')), None)
+        else:
+            # exact filename match
+            match = self._current_pdf_name if self._current_pdf_name in pdfs else None
+
+        if match:
+            self._open_pdf(os.path.join(folder, match))
+        else:
+            self._pdf_missing_lbl.setText(
+                f'⚠  PDF "{self._current_pdf_name}" not found in this feature\'s folder.')
+            self._pdf_missing_lbl.setVisible(True)
+
     def _open_pdf(self, path):
         from qgis.PyQt.QtCore import QUrl
+        self._current_pdf_name = os.path.basename(path)
+        self._pdf_missing_lbl.setVisible(False)
         self._web_view.setUrl(QUrl.fromLocalFile(path))
 
     def _browse_folder(self):
