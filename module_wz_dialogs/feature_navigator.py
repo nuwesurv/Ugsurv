@@ -4,10 +4,10 @@ import os
 from qgis.PyQt.QtCore import Qt, QRectF
 from qgis.PyQt.QtGui import QFont, QColor, QFontMetricsF
 from qgis.PyQt.QtWidgets import (
-    QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+    QDockWidget, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton,
     QLineEdit, QCheckBox, QFrame, QSizePolicy, QFileDialog,
-    QApplication,
+    QApplication, QSplitter, QScrollArea, QFormLayout, QComboBox,
 )
 
 from qgis.gui import (
@@ -101,7 +101,6 @@ class FeatureNavigatorDock(QDockWidget):
 
         self._fids: list = []
         self._index: int = -1
-        self._advanced_open: bool = False
 
         # distance-to-polygon state
         self._dist_rubber_band = None     # single QgsRubberBand for all lines
@@ -218,60 +217,16 @@ class FeatureNavigatorDock(QDockWidget):
         poly_row.addWidget(self.poly_layer_combo)
         vbox.addLayout(poly_row)
 
-        # ── Advanced toggle ──────────────────────────────────────────────
+        # ── Advanced ─────────────────────────────────────────────────────
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.HLine)
         sep3.setFrameShadow(QFrame.Sunken)
         vbox.addWidget(sep3)
 
         self.adv_btn = QPushButton('Advanced')
-        self.adv_btn.clicked.connect(self._toggle_advanced)
+        self.adv_btn.setToolTip('Open full-screen view with PDF viewer and attribute editor')
+        self.adv_btn.clicked.connect(self._open_advanced)
         vbox.addWidget(self.adv_btn)
-
-        # ── Advanced section (hidden until toggled) ──────────────────────
-        self._adv_frame = QFrame()
-        self._adv_frame.setFrameShape(QFrame.StyledPanel)
-        adv_vbox = QVBoxLayout(self._adv_frame)
-        adv_vbox.setSpacing(5)
-        adv_vbox.setContentsMargins(6, 6, 6, 6)
-
-        field_row = QHBoxLayout()
-        field_row.addWidget(QLabel('ID field:'))
-        self._adv_field_combo = QgsFieldComboBox()
-        self._adv_field_combo.setLayer(self.layer_combo.currentLayer())
-        field_row.addWidget(self._adv_field_combo)
-        adv_vbox.addLayout(field_row)
-
-        prefix_row = QHBoxLayout()
-        prefix_row.addWidget(QLabel('Prefix:'))
-        self._adv_prefix_edit = QLineEdit()
-        self._adv_prefix_edit.setPlaceholderText('optional, e.g. PLOT_')
-        prefix_row.addWidget(self._adv_prefix_edit)
-        adv_vbox.addLayout(prefix_row)
-
-        adv_vbox.addWidget(QLabel('Base folder:'))
-        folder_row = QHBoxLayout()
-        self._adv_folder_edit = QLineEdit()
-        self._adv_folder_edit.setPlaceholderText('Folder containing ID-named subfolders…')
-        folder_row.addWidget(self._adv_folder_edit)
-        adv_browse_btn = QPushButton('…')
-        adv_browse_btn.setFixedWidth(30)
-        adv_browse_btn.setToolTip('Choose base folder')
-        adv_browse_btn.clicked.connect(self._browse_adv_folder)
-        folder_row.addWidget(adv_browse_btn)
-        adv_vbox.addLayout(folder_row)
-
-        self._adv_open_btn = QPushButton('Open Folder')
-        self._adv_open_btn.clicked.connect(self._open_feature_folder)
-        adv_vbox.addWidget(self._adv_open_btn)
-
-        self._adv_status = QLabel('')
-        self._adv_status.setStyleSheet('color: gray; font-size: 10px;')
-        self._adv_status.setWordWrap(True)
-        adv_vbox.addWidget(self._adv_status)
-
-        self._adv_frame.setVisible(False)
-        vbox.addWidget(self._adv_frame)
 
         self.setWidget(root)
 
@@ -298,7 +253,6 @@ class FeatureNavigatorDock(QDockWidget):
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
         self._clear_dist_overlays()
-        self._adv_field_combo.setLayer(_layer)
 
     def _on_dist_toggle(self, state):
         if not state:
@@ -417,57 +371,26 @@ class FeatureNavigatorDock(QDockWidget):
         self._update_vertex_distances()
 
     # ------------------------------------------------------------------ #
-    #  Advanced – folder opener                                            #
+    #  Advanced window                                                     #
     # ------------------------------------------------------------------ #
 
-    def _toggle_advanced(self):
-        self._advanced_open = not self._advanced_open
-        self._adv_frame.setVisible(self._advanced_open)
-        if self._advanced_open:
-            from qgis.utils import iface
-            mw = iface.mainWindow()
-            if mw.dockWidgetArea(self) != Qt.RightDockWidgetArea:
-                mw.addDockWidget(Qt.RightDockWidgetArea, self)
-            self.setMinimumWidth(360)
-
-    def _browse_adv_folder(self):
-        current = self._adv_folder_edit.text() or ''
-        folder = QFileDialog.getExistingDirectory(self, 'Select base folder', current)
-        if folder:
-            self._adv_folder_edit.setText(folder)
-
-    def _open_feature_folder(self):
-        self._adv_status.setText('')
-        layer = self.layer_combo.currentLayer()
-        if not isinstance(layer, QgsVectorLayer) or self._index < 0 or not self._fids:
-            self._adv_status.setText('Navigate to a feature first.')
+    def _open_advanced(self):
+        if not isinstance(self.layer_combo.currentLayer(), QgsVectorLayer):
             return
-
-        field_name = self._adv_field_combo.currentField()
-        if not field_name:
-            self._adv_status.setText('Select an ID field.')
-            return
-
-        base_folder = self._adv_folder_edit.text().strip()
-        if not base_folder:
-            self._adv_status.setText('Select a base folder.')
-            return
-
-        fid = self._fids[self._index]
-        feat = layer.getFeature(fid)
-        field_val = feat.attribute(field_name)
-        if field_val is None:
-            self._adv_status.setText('Field value is NULL for this feature.')
-            return
-
-        prefix = self._adv_prefix_edit.text()
-        target = os.path.join(base_folder, f'{prefix}{field_val}')
-
-        if os.path.isdir(target):
-            os.startfile(target)
-            self._adv_status.setText(f'Opened: {target}')
-        else:
-            self._adv_status.setText(f'Not found: {target}')
+        if not hasattr(self, '_adv_win') or not self._adv_win.isVisible():
+            self._adv_win = AdvancedNavigatorWindow(
+                canvas=self.canvas,
+                layer=self.layer_combo.currentLayer(),
+                fids=list(self._fids),
+                index=self._index,
+                expr=self.expr_edit.text(),
+                zoom=self.zoom_chk.isChecked(),
+                select=self.select_chk.isChecked(),
+                parent=None,
+            )
+        self._adv_win.show()
+        self._adv_win.raise_()
+        self._adv_win.activateWindow()
 
     # ------------------------------------------------------------------ #
     #  Vertex → polygon distance                                           #
@@ -659,3 +582,745 @@ class FeatureNavigatorDock(QDockWidget):
             self._label_items.append(_DistLabelItem(self.canvas, mid_pt, text))
 
         self.canvas.refresh()
+
+
+# ======================================================================== #
+#  Embedded PDF viewer (PyMuPDF / fitz)                                     #
+# ======================================================================== #
+
+class _FitzPdfViewer(QWidget):
+    """Renders PDF pages as images using PyMuPDF. API mimics QWebEngineView."""
+
+    _ZOOM = 2.0   # render scale — increase for sharper text
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._doc      = None
+        self._page_idx = 0
+        self._build_ui()
+
+    def _build_ui(self):
+        from qgis.PyQt.QtWidgets import QScrollArea as _SA
+        vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(2)
+
+        nav = QHBoxLayout()
+        self._prev_page = QPushButton('◀')
+        self._prev_page.setFixedWidth(32)
+        self._prev_page.clicked.connect(self._go_prev)
+        self._page_lbl = QLabel('No PDF loaded')
+        self._page_lbl.setAlignment(Qt.AlignCenter)
+        self._next_page = QPushButton('▶')
+        self._next_page.setFixedWidth(32)
+        self._next_page.clicked.connect(self._go_next)
+        nav.addWidget(self._prev_page)
+        nav.addWidget(self._page_lbl)
+        nav.addWidget(self._next_page)
+        vbox.addLayout(nav)
+
+        self._scroll = _SA()
+        self._scroll.setWidgetResizable(True)
+        self._img_lbl = QLabel()
+        self._img_lbl.setAlignment(Qt.AlignCenter)
+        self._scroll.setWidget(self._img_lbl)
+        vbox.addWidget(self._scroll, 1)
+
+    # QWebEngineView-compatible entry point
+    def setUrl(self, url):
+        self._load(url.toLocalFile())
+
+    def _load(self, path):
+        try:
+            import fitz
+            self._doc      = fitz.open(path)
+            self._page_idx = 0
+            self._render()
+        except ImportError:
+            self._page_lbl.setText('PyMuPDF not installed')
+            self._img_lbl.setText(
+                'Install PyMuPDF (pip install pymupdf) to view PDFs inline.')
+        except Exception as e:
+            self._page_lbl.setText('Error')
+            self._img_lbl.setText(str(e))
+
+    def _render(self):
+        if self._doc is None:
+            return
+        import fitz
+        from qgis.PyQt.QtGui import QImage, QPixmap
+        total = self._doc.page_count
+        self._page_lbl.setText(f'Page {self._page_idx + 1} / {total}')
+        self._prev_page.setEnabled(self._page_idx > 0)
+        self._next_page.setEnabled(self._page_idx < total - 1)
+
+        page = self._doc[self._page_idx]
+        mat  = fitz.Matrix(self._ZOOM, self._ZOOM)
+        pix  = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+        img  = QImage(bytes(pix.samples), pix.width, pix.height,
+                      pix.stride, QImage.Format_RGB888)
+        self._img_lbl.setPixmap(QPixmap.fromImage(img))
+
+    def _go_prev(self):
+        if self._page_idx > 0:
+            self._page_idx -= 1
+            self._render()
+
+    def _go_next(self):
+        if self._doc and self._page_idx < self._doc.page_count - 1:
+            self._page_idx += 1
+            self._render()
+
+
+# ======================================================================== #
+#  Full-screen advanced view                                                #
+# ======================================================================== #
+
+class AdvancedNavigatorWindow(QDialog):
+    """
+    Full-screen three-panel view:
+      Left   — navigation controls + PDF file list for current feature folder
+      Middle — embedded PDF viewer
+      Right  — attribute editor backed by a user-chosen CSV / Excel file
+    """
+
+    def __init__(self, canvas, layer, fids, index,
+                 expr='', zoom=True, select=True, parent=None):
+        super().__init__(parent)
+        self.canvas  = canvas
+        self._layer  = layer
+        self._fids   = list(fids)
+        self._index  = index
+
+        self._data_file     = ''
+        self._data_id_col   = ''
+        self._data_headers  = []
+        self._data_all_rows = []   # list of dicts — full file in memory
+        self._data_by_id    = {}   # id_value -> list[int] (row indices)
+        self._attr_edits    = {}   # col -> QLineEdit
+        self._attr_match_idx = 0  # which duplicate match is currently shown
+
+        from qgis.PyQt.QtCore import QTimer
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(3000)
+        self._save_timer.timeout.connect(self._save_attributes)
+
+        self.setWindowTitle('Feature Navigator — Advanced')
+        self.setWindowFlags(Qt.Window)
+        self._build_ui()
+
+        # ── carry over dock settings ──────────────────────────────────────
+        self._expr_edit.setText(expr)
+        self._zoom_chk.setChecked(zoom)
+        self._select_chk.setChecked(select)
+
+        self._update_nav_buttons()
+        if self._fids and self._index >= 0:
+            self._show_current()
+        self.showMaximized()
+
+    # ------------------------------------------------------------------ #
+    #  UI                                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _build_ui(self):
+        root_vbox = QVBoxLayout(self)
+        root_vbox.setSpacing(4)
+        root_vbox.setContentsMargins(6, 6, 6, 6)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._build_left_panel())
+        splitter.addWidget(self._build_middle_panel())
+        splitter.addWidget(self._build_right_panel())
+        splitter.setSizes([280, 700, 320])
+        root_vbox.addWidget(splitter, 1)
+
+    # ── Left panel ───────────────────────────────────────────────────────
+
+    def _build_left_panel(self):
+        w = QWidget()
+        vbox = QVBoxLayout(w)
+        vbox.setSpacing(6)
+        vbox.setContentsMargins(6, 6, 6, 6)
+
+        # ── Layer ────────────────────────────────────────────────────────
+        lr = QHBoxLayout()
+        lr.addWidget(QLabel('Layer:'))
+        self._layer_combo = QgsMapLayerComboBox()
+        self._layer_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self._layer_combo.setLayer(self._layer)
+        self._layer_combo.layerChanged.connect(self._on_layer_changed)
+        lr.addWidget(self._layer_combo)
+        vbox.addLayout(lr)
+
+        # ── Expression ───────────────────────────────────────────────────
+        er = QHBoxLayout()
+        self._expr_edit = QLineEdit()
+        self._expr_edit.setPlaceholderText('Filter expression  (empty = all features)')
+        self._expr_edit.returnPressed.connect(self._apply_filter)
+        er.addWidget(self._expr_edit)
+        eb = QPushButton('…'); eb.setFixedWidth(30)
+        eb.setToolTip('Open expression builder')
+        eb.clicked.connect(self._open_expr_builder)
+        er.addWidget(eb)
+        vbox.addLayout(er)
+
+        self._apply_btn = QPushButton('Apply Filter')
+        self._apply_btn.clicked.connect(self._apply_filter)
+        vbox.addWidget(self._apply_btn)
+
+        sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine); sep1.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep1)
+
+        # ── Navigation ───────────────────────────────────────────────────
+        nav_row = QHBoxLayout()
+        self._prev_btn = QPushButton('◀  Prev')
+        self._prev_btn.setEnabled(False)
+        self._prev_btn.setMinimumWidth(80)
+        self._prev_btn.clicked.connect(self._go_prev)
+
+        self._counter_lbl = QLabel('—')
+        self._counter_lbl.setAlignment(Qt.AlignCenter)
+        f = QFont(); f.setBold(True)
+        self._counter_lbl.setFont(f)
+        self._counter_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        self._next_btn = QPushButton('Next  ▶')
+        self._next_btn.setEnabled(False)
+        self._next_btn.setMinimumWidth(80)
+        self._next_btn.clicked.connect(self._go_next)
+
+        nav_row.addWidget(self._prev_btn)
+        nav_row.addWidget(self._counter_lbl)
+        nav_row.addWidget(self._next_btn)
+        vbox.addLayout(nav_row)
+
+        hint = QLabel('Tip: Left / Right arrow keys also navigate')
+        hint.setStyleSheet('color: gray; font-size: 10px;')
+        hint.setAlignment(Qt.AlignCenter)
+        vbox.addWidget(hint)
+
+        self._zoom_chk = QCheckBox('Zoom to feature')
+        self._zoom_chk.setChecked(True)
+        vbox.addWidget(self._zoom_chk)
+
+        self._select_chk = QCheckBox('Select feature on layer')
+        self._select_chk.setChecked(True)
+        vbox.addWidget(self._select_chk)
+
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.HLine); sep2.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep2)
+
+        # ── PDF list ─────────────────────────────────────────────────────
+        vbox.addWidget(QLabel('PDF files in feature folder:'))
+        self._pdf_scroll = QScrollArea()
+        self._pdf_scroll.setWidgetResizable(True)
+        vbox.addWidget(self._pdf_scroll, 1)
+
+        sep3 = QFrame(); sep3.setFrameShape(QFrame.HLine); sep3.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep3)
+
+        # ── Folder settings ───────────────────────────────────────────────
+        vbox.addWidget(QLabel('Feature folders base:'))
+        fr = QHBoxLayout()
+        self._folder_edit = QLineEdit()
+        self._folder_edit.setPlaceholderText('Base folder…')
+        self._folder_edit.textChanged.connect(lambda _: self._refresh_pdf_list())
+        fr.addWidget(self._folder_edit)
+        b = QPushButton('…'); b.setFixedWidth(28); b.clicked.connect(self._browse_folder)
+        fr.addWidget(b)
+        vbox.addLayout(fr)
+
+        ir = QHBoxLayout()
+        ir.addWidget(QLabel('ID field:'))
+        self._id_combo = QgsFieldComboBox()
+        self._id_combo.setLayer(self._layer)
+        self._id_combo.fieldChanged.connect(lambda _: self._refresh_pdf_list())
+        ir.addWidget(self._id_combo)
+        vbox.addLayout(ir)
+
+        pr = QHBoxLayout()
+        pr.addWidget(QLabel('Prefix:'))
+        self._prefix_edit = QLineEdit()
+        self._prefix_edit.setPlaceholderText('optional')
+        self._prefix_edit.textChanged.connect(lambda _: self._refresh_pdf_list())
+        pr.addWidget(self._prefix_edit)
+        vbox.addLayout(pr)
+
+        return w
+
+    # ── Middle panel ─────────────────────────────────────────────────────
+
+    def _build_middle_panel(self):
+        w = QWidget()
+        vbox = QVBoxLayout(w)
+        vbox.setContentsMargins(4, 4, 4, 0)
+        vbox.setSpacing(4)
+
+        self._reason_lbl = QLabel('')
+        self._reason_lbl.setWordWrap(True)
+        self._reason_lbl.setStyleSheet(
+            'font-weight: bold; font-size: 12px; '
+            'padding: 4px 6px; '
+            'background: #f0f4ff; '
+            'border-radius: 4px;'
+        )
+        self._reason_lbl.setVisible(False)
+        vbox.addWidget(self._reason_lbl)
+
+        vbox.addWidget(self._make_pdf_viewer(), 1)
+        return w
+
+    def _make_pdf_viewer(self):
+        try:
+            from qgis.PyQt.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
+            self._web_view = QWebEngineView()
+            s = self._web_view.settings()
+            s.setAttribute(QWebEngineSettings.PluginsEnabled, True)
+            try:
+                s.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
+            except AttributeError:
+                pass
+        except ImportError:
+            self._web_view = _FitzPdfViewer()
+        return self._web_view
+
+    # ── Right panel ──────────────────────────────────────────────────────
+
+    def _build_right_panel(self):
+        w = QWidget()
+        vbox = QVBoxLayout(w)
+        vbox.setSpacing(5)
+        vbox.setContentsMargins(4, 4, 4, 4)
+
+        vbox.addWidget(QLabel('Data file (CSV / Excel):'))
+        dfr = QHBoxLayout()
+        self._data_file_edit = QLineEdit()
+        self._data_file_edit.setPlaceholderText('Pick CSV or Excel file…')
+        dfr.addWidget(self._data_file_edit)
+        db = QPushButton('…'); db.setFixedWidth(28); db.clicked.connect(self._browse_data_file)
+        dfr.addWidget(db)
+        vbox.addLayout(dfr)
+
+        idr = QHBoxLayout()
+        idr.addWidget(QLabel('ID column:'))
+        self._data_id_combo = QComboBox()
+        idr.addWidget(self._data_id_combo)
+        load_btn = QPushButton('Load'); load_btn.clicked.connect(self._load_data_file)
+        idr.addWidget(load_btn)
+        vbox.addLayout(idr)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep)
+
+        self._attr_scroll = QScrollArea()
+        self._attr_scroll.setWidgetResizable(True)
+        vbox.addWidget(self._attr_scroll, 1)
+
+        self._attr_status = QLabel('')
+        self._attr_status.setStyleSheet('color: gray; font-size: 10px;')
+        self._attr_status.setWordWrap(True)
+        vbox.addWidget(self._attr_status)
+
+        return w
+
+    # ------------------------------------------------------------------ #
+    #  Navigation                                                          #
+    # ------------------------------------------------------------------ #
+
+    def _refresh_reason_label(self):
+        expr_text = self._expr_edit.text().strip()
+        if not expr_text or not isinstance(self._layer, QgsVectorLayer) \
+                or self._index < 0 or not self._fids:
+            self._reason_lbl.setVisible(False)
+            return
+
+        expr = QgsExpression(expr_text)
+        cols = [c for c in expr.referencedColumns()
+                if c != QgsFeatureRequest.ALL_ATTRIBUTES]
+        if not cols:
+            self._reason_lbl.setVisible(False)
+            return
+
+        feat  = self._layer.getFeature(self._fids[self._index])
+        parts = []
+        for col in cols:
+            val = feat.attribute(col)
+            if val is not None and str(val).strip():
+                parts.append(f'{col}:  {val}')
+
+        if parts:
+            self._reason_lbl.setText('  |  '.join(parts))
+            self._reason_lbl.setVisible(True)
+        else:
+            self._reason_lbl.setVisible(False)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Left:
+            self._go_prev()
+        elif event.key() == Qt.Key_Right:
+            self._go_next()
+        else:
+            super().keyPressEvent(event)
+
+    def _on_layer_changed(self, layer):
+        self._layer = layer
+        self._fids  = []
+        self._index = -1
+        self._counter_lbl.setText('—')
+        self._prev_btn.setEnabled(False)
+        self._next_btn.setEnabled(False)
+        self._id_combo.setLayer(layer)
+        self._refresh_pdf_list()
+
+    def _open_expr_builder(self):
+        if not isinstance(self._layer, QgsVectorLayer):
+            return
+        dlg = QgsExpressionBuilderDialog(self._layer, self._expr_edit.text(), self)
+        if dlg.exec():
+            self._expr_edit.setText(dlg.expressionText().strip())
+
+    def _apply_filter(self):
+        layer = self._layer_combo.currentLayer()
+        if not isinstance(layer, QgsVectorLayer):
+            self._counter_lbl.setText('Select a layer')
+            return
+        self._layer = layer
+        expr_text = self._expr_edit.text().strip()
+        total = layer.featureCount()
+
+        if not expr_text:
+            self._fids = []
+            for i, f in enumerate(layer.getFeatures()):
+                self._fids.append(f.id())
+                if i % 500 == 0:
+                    self._counter_lbl.setText(f'Loading… {i} / {total}')
+                    QApplication.processEvents()
+        else:
+            expr = QgsExpression(expr_text)
+            if expr.hasParserError():
+                self._counter_lbl.setText(f'Expr error: {expr.parserErrorString()}')
+                return
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+            expr.prepare(ctx)
+            self._fids = []
+            for i, feat in enumerate(layer.getFeatures()):
+                ctx.setFeature(feat)
+                if not expr.hasEvalError() and expr.evaluate(ctx):
+                    self._fids.append(feat.id())
+                if i % 500 == 0:
+                    self._counter_lbl.setText(f'Filtering… {i} / {total}')
+                    QApplication.processEvents()
+
+        if not self._fids:
+            self._counter_lbl.setText('0 features found')
+            self._prev_btn.setEnabled(False)
+            self._next_btn.setEnabled(False)
+            return
+        self._index = 0
+        self._show_current()
+
+    def _go_prev(self):
+        if self._fids and self._index > 0:
+            self._index -= 1
+            self._show_current()
+
+    def _go_next(self):
+        if self._fids and self._index < len(self._fids) - 1:
+            self._index += 1
+            self._show_current()
+
+    def _update_nav_buttons(self):
+        total = len(self._fids)
+        self._prev_btn.setEnabled(self._index > 0)
+        self._next_btn.setEnabled(self._index < total - 1)
+        self._counter_lbl.setText(
+            f'Feature {self._index + 1} of {total}' if total else '—')
+
+    def _show_current(self):
+        self._attr_match_idx = 0
+        self._update_nav_buttons()
+        self._refresh_reason_label()
+        self._refresh_pdf_list()
+        self._refresh_attributes()
+        if not isinstance(self._layer, QgsVectorLayer) or self._index < 0 or not self._fids:
+            return
+        fid  = self._fids[self._index]
+        feat = self._layer.getFeature(fid)
+        if self._select_chk.isChecked():
+            self._layer.selectByIds([fid])
+        geom = feat.geometry()
+        if geom and not geom.isEmpty() and self._zoom_chk.isChecked():
+            layer_crs  = self._layer.crs()
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+            dg = QgsGeometry(geom)
+            if layer_crs != canvas_crs:
+                dg.transform(QgsCoordinateTransform(
+                    layer_crs, canvas_crs, QgsProject.instance()))
+            bbox = dg.boundingBox()
+            bbox.grow(max(bbox.width(), bbox.height(), 1.0) * 0.25)
+            self.canvas.setExtent(bbox)
+            self.canvas.refresh()
+
+    # ------------------------------------------------------------------ #
+    #  PDF list                                                            #
+    # ------------------------------------------------------------------ #
+
+    def _current_feature_folder(self):
+        if not isinstance(self._layer, QgsVectorLayer) or self._index < 0 or not self._fids:
+            return None
+        field = self._id_combo.currentField()
+        if not field:
+            return None
+        val = self._layer.getFeature(self._fids[self._index]).attribute(field)
+        if val is None:
+            return None
+        base = self._folder_edit.text().strip()
+        if not base:
+            return None
+        return os.path.join(base, f'{self._prefix_edit.text()}{val}')
+
+    def _refresh_pdf_list(self):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(3)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        folder = self._current_feature_folder()
+        if folder and os.path.isdir(folder):
+            pdfs = sorted(f for f in os.listdir(folder) if f.lower().endswith('.pdf'))
+            if pdfs:
+                for name in pdfs:
+                    path = os.path.join(folder, name)
+                    btn = QPushButton(name)
+                    btn.setStyleSheet('text-align: left; padding: 3px 6px;')
+                    btn.setToolTip(path)
+                    btn.clicked.connect(lambda _c, p=path: self._open_pdf(p))
+                    layout.addWidget(btn)
+            else:
+                layout.addWidget(self._gray('No PDF files in folder.'))
+        else:
+            layout.addWidget(self._gray(
+                'Folder not found.' if folder else 'Configure folder settings.'))
+
+        layout.addStretch()
+        self._pdf_scroll.setWidget(container)
+
+    @staticmethod
+    def _gray(text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet('color: gray; font-size: 10px;')
+        return lbl
+
+    def _open_pdf(self, path):
+        from qgis.PyQt.QtCore import QUrl
+        self._web_view.setUrl(QUrl.fromLocalFile(path))
+
+    def _browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select base folder', self._folder_edit.text())
+        if folder:
+            self._folder_edit.setText(folder)
+            self._refresh_pdf_list()
+
+    # ------------------------------------------------------------------ #
+    #  Attribute editor                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _go_prev_match(self):
+        if self._attr_match_idx > 0:
+            self._attr_match_idx -= 1
+            self._refresh_attributes()
+
+    def _go_next_match(self):
+        feat_id = self._current_feat_id()
+        if feat_id and self._attr_match_idx < len(self._data_by_id.get(feat_id, [])) - 1:
+            self._attr_match_idx += 1
+            self._refresh_attributes()
+
+    def _current_feat_id(self):
+        if not isinstance(self._layer, QgsVectorLayer) or self._index < 0 or not self._fids:
+            return None
+        field = self._id_combo.currentField()
+        if not field:
+            return None
+        return str(self._layer.getFeature(self._fids[self._index]).attribute(field) or '')
+
+    def _browse_data_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Select data file', '', 'CSV / Excel (*.csv *.xlsx *.xls)')
+        if not path:
+            return
+        self._data_file_edit.setText(path)
+        self._data_id_combo.clear()
+        self._data_id_combo.addItems(self._read_file_headers(path))
+
+    def _read_file_headers(self, path):
+        try:
+            if path.lower().endswith('.csv'):
+                import csv
+                with open(path, newline='', encoding='utf-8-sig') as f:
+                    return next(csv.reader(f), [])
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            row = next(wb.active.iter_rows(max_row=1, values_only=True), [])
+            wb.close()
+            return [str(c) for c in row if c is not None]
+        except Exception as e:
+            self._attr_status.setText(f'Header read error: {e}')
+            return []
+
+    def _load_data_file(self):
+        path   = self._data_file_edit.text().strip()
+        id_col = self._data_id_combo.currentText()
+        if not path or not os.path.isfile(path):
+            self._attr_status.setText('Select a valid data file.')
+            return
+        if not id_col:
+            self._attr_status.setText('Select an ID column.')
+            return
+        try:
+            self._data_headers, self._data_all_rows, self._data_by_id = \
+                self._parse_data_file(path, id_col)
+            self._data_file   = path
+            self._data_id_col = id_col
+            self._attr_status.setText(f'{len(self._data_all_rows)} rows loaded.')
+            self._refresh_attributes()
+        except Exception as e:
+            self._attr_status.setText(f'Load error: {e}')
+
+    def _parse_data_file(self, path, id_col):
+        headers, rows, by_id = [], [], {}
+        if path.lower().endswith('.csv'):
+            import csv
+            with open(path, newline='', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                headers = list(reader.fieldnames or [])
+                for i, row in enumerate(reader):
+                    rows.append(dict(row))
+                    by_id.setdefault(str(row.get(id_col, '')), []).append(i)
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            all_r = list(wb.active.iter_rows(values_only=True))
+            wb.close()
+            if not all_r:
+                return headers, rows, by_id
+            headers = [str(c) for c in all_r[0]]
+            id_idx  = headers.index(id_col) if id_col in headers else None
+            for i, r in enumerate(all_r[1:]):
+                row = {headers[j]: (r[j] if j < len(r) else '') for j in range(len(headers))}
+                rows.append(row)
+                if id_idx is not None:
+                    by_id.setdefault(str(r[id_idx] if id_idx < len(r) else ''), []).append(i)
+        return headers, rows, by_id
+
+    def _refresh_attributes(self):
+        self._save_timer.stop()
+        self._attr_edits = {}
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setSpacing(4)
+        outer.setContentsMargins(2, 2, 2, 2)
+
+        form_w = QWidget()
+        form = QFormLayout(form_w)
+        form.setSpacing(4)
+        outer.addWidget(form_w)
+
+        def _done():
+            outer.addStretch()
+            self._attr_scroll.setWidget(container)
+
+        if not self._data_all_rows or not isinstance(self._layer, QgsVectorLayer) \
+                or self._index < 0 or not self._fids:
+            return _done()
+
+        field = self._id_combo.currentField()
+        if not field:
+            return _done()
+
+        feat_id = str(self._layer.getFeature(
+            self._fids[self._index]).attribute(field) or '')
+        matches = self._data_by_id.get(feat_id, [])
+
+        if not matches:
+            form.addRow(self._gray(f'No record for parcel ID: {feat_id}'))
+            return _done()
+
+        self._attr_match_idx = max(0, min(self._attr_match_idx, len(matches) - 1))
+        total = len(matches)
+
+        row = self._data_all_rows[matches[self._attr_match_idx]]
+        for col in self._data_headers:
+            edit = QLineEdit(str(row.get(col, '') or ''))
+            edit.textChanged.connect(self._on_attr_edited)
+            form.addRow(col + ':', edit)
+            self._attr_edits[col] = edit
+
+        # ── fresh nav buttons created locally — no stale C++ references ──
+        if total > 1:
+            prev_btn = QPushButton('◀')
+            prev_btn.setFixedWidth(32)
+            prev_btn.setEnabled(self._attr_match_idx > 0)
+            prev_btn.clicked.connect(self._go_prev_match)
+            match_lbl = QLabel(f'Record {self._attr_match_idx + 1} of {total}')
+            match_lbl.setAlignment(Qt.AlignCenter)
+            match_lbl.setStyleSheet('font-size: 10px; color: gray;')
+            next_btn = QPushButton('▶')
+            next_btn.setFixedWidth(32)
+            next_btn.setEnabled(self._attr_match_idx < total - 1)
+            next_btn.clicked.connect(self._go_next_match)
+            nav_row = QHBoxLayout()
+            nav_row.addWidget(prev_btn)
+            nav_row.addWidget(match_lbl)
+            nav_row.addWidget(next_btn)
+            outer.addLayout(nav_row)
+
+        _done()
+
+    def _on_attr_edited(self):
+        self._attr_status.setText('Unsaved changes…')
+        self._save_timer.start(3000)
+
+    def _save_attributes(self):
+        if not self._data_file or not self._data_all_rows or self._index < 0 or not self._fids:
+            return
+        field = self._id_combo.currentField()
+        if not field:
+            return
+        feat_id = str(self._layer.getFeature(
+            self._fids[self._index]).attribute(field) or '')
+        matches = self._data_by_id.get(feat_id, [])
+        if not matches:
+            self._attr_status.setText(f'No record for parcel ID: {feat_id}')
+            return
+        row_idx = matches[min(self._attr_match_idx, len(matches) - 1)]
+
+        for col, edit in self._attr_edits.items():
+            self._data_all_rows[row_idx][col] = edit.text()
+
+        try:
+            if self._data_file.lower().endswith('.csv'):
+                import csv
+                with open(self._data_file, 'w', newline='', encoding='utf-8-sig') as f:
+                    w = csv.DictWriter(f, fieldnames=self._data_headers)
+                    w.writeheader()
+                    w.writerows(self._data_all_rows)
+            else:
+                import openpyxl
+                wb  = openpyxl.load_workbook(self._data_file)
+                ws  = wb.active
+                id_col_idx = self._data_headers.index(self._data_id_col)
+                for xrow in ws.iter_rows(min_row=2):
+                    if str(xrow[id_col_idx].value or '') == feat_id:
+                        for j, col in enumerate(self._data_headers):
+                            xrow[j].value = self._data_all_rows[row_idx].get(col, '')
+                        break
+                wb.save(self._data_file)
+            self._attr_status.setText('Saved.')
+        except Exception as e:
+            self._attr_status.setText(f'Save error: {e}')
