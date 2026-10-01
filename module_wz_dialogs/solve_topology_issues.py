@@ -410,6 +410,9 @@ class _Worker(QObject):
             out_is_new              = []
             out_is_fully_overlapped = []
             out_is_much_overlap     = []
+            # Maps parcel index → the surveyed geoms that were actually used as
+            # conflict cutters (excludes matched/ignored neighbours).
+            parcel_conflict_surveyed = {}
 
             def _flatten_geom(g):
                 if g is None or g.is_empty:
@@ -489,6 +492,10 @@ class _Worker(QObject):
                         is_matched = True
                     if not is_matched:
                         conflict_geoms.append(surv_geom)
+
+                # Record which surveyed features actually conflict with this parcel
+                # so the overlap computation uses the same set (not the full index).
+                parcel_conflict_surveyed[i] = conflict_geoms
 
                 hits_river   = False
                 local_rivers = None
@@ -675,9 +682,12 @@ class _Worker(QObject):
                                             if buf_wb_geoms[wi] is not None
                                         )
                                     if surveyed_sindex is not None:
+                                        # Use only the surveyed features that were
+                                        # treated as real conflicts — excludes the
+                                        # matched/ignored neighbours.
                                         local_refs.extend(
-                                            surveyed_repaired[si] for si in surveyed_sindex.intersection(b)
-                                            if surveyed_repaired[si] is not None
+                                            g for g in parcel_conflict_surveyed.get(orig_idx, [])
+                                            if g is not None
                                         )
                                     if not local_refs:
                                         ovl_area = 0.0
@@ -1181,11 +1191,20 @@ class SolveTopologyDock(QDockWidget):
         path = getattr(self, '_output_path', None)
         if not path or not os.path.exists(path):
             return
-        from qgis.core import QgsVectorLayer
+        from qgis.core import QgsVectorLayer, QgsFillSymbol, QgsSingleSymbolRenderer
         layer_name = os.path.splitext(os.path.basename(path))[0]
         uri   = f"{path}|layername={layer_name}"
         layer = QgsVectorLayer(uri, layer_name, "ogr")
         if layer.isValid():
+            # Outline-only red symbol (no fill), 0.66 MM solid line
+            sym = QgsFillSymbol.createSimple({
+                'color':         '0,0,0,0',
+                'outline_color': '235,0,0,255',
+                'outline_style': 'solid',
+                'outline_width': '0.66',
+                'style':         'no',
+            })
+            layer.setRenderer(QgsSingleSymbolRenderer(sym))
             QgsProject.instance().addMapLayer(layer)
             self._out_layer = layer
 
