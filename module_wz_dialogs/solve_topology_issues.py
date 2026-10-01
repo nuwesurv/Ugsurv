@@ -17,9 +17,11 @@ from qgis.gui import QgsFileWidget, QgsMapLayerComboBox
 from qgis.core import QgsMapLayerProxyModel, QgsProject, QgsRectangle
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-_COORD_TOLERANCE_M = 0.2
-_MIN_MATCH_RATIO   = 0.50
-_NBR_MANUAL_FRAC   = 0.60
+_COORD_TOLERANCE_M        = 0.2
+_MIN_MATCH_RATIO          = 0.50
+_NBR_MANUAL_FRAC          = 0.60
+_EXISTING_PLOT_THRESHOLD_M = 1.0   # vertex proximity radius for "already exists" test
+_EXISTING_PLOT_MIN_MATCHES = 2     # need MORE THAN this many matching vertices to declare duplicate
 
 
 # ── Spatial index (shapely STRtree — no geopandas / pyarrow) ─────────────────
@@ -245,6 +247,30 @@ def _coords_mostly_match(geom_a, geom_b):
     return (matched / len(pts_a)) >= _MIN_MATCH_RATIO
 
 
+def _is_existing_plot(geom_a, geom_b,
+                      threshold_m=_EXISTING_PLOT_THRESHOLD_M,
+                      min_matches=_EXISTING_PLOT_MIN_MATCHES):
+    """True when geom_a and geom_b share more than *min_matches* vertices
+    within *threshold_m* metres of each other — the parcel already exists
+    in the surveyed layer so its geometry should not be modified."""
+    pts_a = _get_coords_np(geom_a)
+    pts_b = _get_coords_np(geom_b)
+    if len(pts_a) == 0 or len(pts_b) == 0:
+        return False
+    try:
+        from scipy.spatial import cKDTree
+        dists, _ = cKDTree(pts_b).query(pts_a)
+        matched = int(np.sum(dists <= threshold_m))
+    except ImportError:
+        matched = 0
+        for s in range(0, len(pts_a), 200):
+            blk  = pts_a[s:s + 200]
+            diff = blk[:, None, :] - pts_b[None, :, :]
+            d    = np.hypot(diff[..., 0], diff[..., 1]).min(axis=1)
+            matched += int(np.sum(d <= threshold_m))
+    return matched > min_matches
+
+
 def _largest_part(geom):
     from shapely.geometry import MultiPolygon
     if isinstance(geom, MultiPolygon):
@@ -455,6 +481,11 @@ class _Worker(QObject):
                         if p_laf and s_laf and p_laf != 'nan' and p_laf == s_laf:
                             is_matched = True
                     if not is_matched and _coords_mostly_match(geom, surv_geom):
+                        is_matched = True
+                    # Ignore a surveyed feature whose vertices sit within
+                    # _EXISTING_PLOT_THRESHOLD_M of this parcel's vertices —
+                    # it is effectively the same boundary already in the dataset.
+                    if not is_matched and _is_existing_plot(geom, surv_geom):
                         is_matched = True
                     if not is_matched:
                         conflict_geoms.append(surv_geom)
@@ -1175,17 +1206,17 @@ class SolveTopologyDock(QDockWidget):
             return
 
         _STYLES = [
-            ('river',         '26,110,191,120',  '#1A6EBF'),
-            ('road',          '192,57,43,120',   '#C0392B'),
-            ('waterbody',     '22,160,133,120',  '#16A085'),
-            ('surveyed_land', '125,60,152,120',  '#7D3C98'),
+            ('river',         '219,255,204,255', '35,35,35,255'),
+            ('road',          '255,94,23,255',   '35,35,35,255'),
+            ('waterbody',     '22,160,133,255',  '35,35,35,255'),
+            ('surveyed_land', '255,233,210,255', '35,35,35,255'),
         ]
         categories = []
         for origin, fill_rgba, border_color in _STYLES:
             sym = QgsFillSymbol.createSimple({
                 'color':         fill_rgba,
                 'outline_color': border_color,
-                'outline_width': '0.4',
+                'outline_width': '0.26',
             })
             label = origin.replace('_', ' ').title()
             categories.append(QgsRendererCategory(origin, sym, label))
