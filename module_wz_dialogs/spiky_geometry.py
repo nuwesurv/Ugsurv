@@ -150,6 +150,10 @@ class SpikyGeomsDock(QDockWidget):
 
         self.setWidget(root)
 
+    def closeEvent(self, event):
+        self._remove_active_marker()
+        super().closeEvent(event)
+
     # ------------------------------------------------------------------ #
     #  UI helpers                                                          #
     # ------------------------------------------------------------------ #

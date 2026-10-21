@@ -212,6 +212,9 @@ class GeometryAppenderDock(QDockWidget):
             new_features = []
             skipped = 0
 
+            dest_base = QgsWkbTypes.geometryType(to_layer.wkbType())
+            dest_is_multi = QgsWkbTypes.isMultiType(to_layer.wkbType())
+
             for feat in picked:
                 geom = feat.geometry()
 
@@ -225,8 +228,15 @@ class GeometryAppenderDock(QDockWidget):
 
                 if not geom.isGeosValid():
                     geom = geom.makeValid()
+                    # makeValid() on invalid lines/polygons can return GeometryCollection;
+                    # try to recover the target geometry type from the collection parts.
+                    if QgsWkbTypes.geometryType(geom.wkbType()) == QgsWkbTypes.UnknownGeometry:
+                        recovered = geom.convertToType(dest_base, dest_is_multi)
+                        if recovered is None or recovered.isNull():
+                            skipped += 1
+                            continue
+                        geom = recovered
 
-                dest_base = QgsWkbTypes.geometryType(to_layer.wkbType())
                 src_base = QgsWkbTypes.geometryType(geom.wkbType())
                 if src_base != dest_base:
                     self._set_status(
@@ -236,7 +246,6 @@ class GeometryAppenderDock(QDockWidget):
                     skipped += 1
                     continue
 
-                dest_is_multi = QgsWkbTypes.isMultiType(to_layer.wkbType())
                 if geom.isMultipart() and not dest_is_multi:
                     parts = geom.asGeometryCollection()
                     if len(parts) == 1:
@@ -259,9 +268,15 @@ class GeometryAppenderDock(QDockWidget):
                         exists = True
                         break
                     area = geom.area()
+                    length = geom.length()
                     if area > 0 and geom.intersects(existing_geom):
                         overlap = geom.intersection(existing_geom).area()
                         if overlap / area > 0.95:
+                            exists = True
+                            break
+                    elif length > 0 and geom.intersects(existing_geom):
+                        shared = geom.intersection(existing_geom).length()
+                        if shared / length > 0.95:
                             exists = True
                             break
 
@@ -283,7 +298,10 @@ class GeometryAppenderDock(QDockWidget):
                 new_feat.setAttributes(attrs)
                 new_features.append(new_feat)
 
-            to_layer.addFeatures(new_features)
+            if new_features and not to_layer.addFeatures(new_features):
+                to_layer.rollBack()
+                self._set_status("Failed to add features — provider rejected the geometries.", "red")
+                return
             to_layer.triggerRepaint()
             self.tool.show_appended(len(new_features), skipped, to_layer.name())
 

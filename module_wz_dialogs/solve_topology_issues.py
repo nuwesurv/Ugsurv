@@ -1016,6 +1016,9 @@ class SolveTopologyDock(QDockWidget):
             QgsProject.instance().layersAdded.disconnect(self._on_layers_added)
         except (RuntimeError, TypeError):  # nosec B110
             pass
+        if self._thread and self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(3000)
         super().closeEvent(event)
 
     # ── Status ────────────────────────────────────────────────────────────────

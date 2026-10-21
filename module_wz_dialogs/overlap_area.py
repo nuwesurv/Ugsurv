@@ -360,6 +360,12 @@ class CalcOverlapAreaDock3(QDockWidget):
         self._status.setStyleSheet(f'color: {color};')
         self._status.setText(msg)
 
+    def closeEvent(self, event):
+        if self._thread and self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(3000)
+        super().closeEvent(event)
+
     def _run(self):
         layer1 = self.cmb_layer1.currentLayer()
         layer2 = self.cmb_layer2.currentLayer()

@@ -33,6 +33,7 @@ from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsProject,
+    QgsWkbTypes,
 )
 
 
@@ -113,7 +114,9 @@ class CrsAdjustDock(QDockWidget):
 
         try:
             if not from_layer.isEditable():
-                from_layer.startEditing()
+                if not from_layer.startEditing():
+                    self._set_status("Layer is not editable — check it is not read-only.", "red")
+                    return
 
             if is_forward:
                 # Forward: interpret raw coordinates as target_crs, convert to layer CRS
@@ -126,19 +129,35 @@ class CrsAdjustDock(QDockWidget):
                     from_layer.crs(), target_crs, QgsProject.instance()
                 )
 
+            failed = 0
             for feat in selected_features:
                 geom = feat.geometry()
+                # Record the feature's own type — layers like _All_data_Combined can be mixed.
+                orig_base = QgsWkbTypes.geometryType(geom.wkbType())
+                orig_is_multi = geom.isMultipart()
                 geom.transform(transform)
                 if not geom.isGeosValid():
                     geom = geom.makeValid()
-                from_layer.changeGeometry(feat.id(), geom)
+                    # makeValid() on invalid geometry may return GeometryCollection.
+                    # Recover the original geometry type from the collection parts.
+                    if QgsWkbTypes.geometryType(geom.wkbType()) != orig_base:
+                        recovered = geom.convertToType(orig_base, orig_is_multi)
+                        if recovered is None or recovered.isNull():
+                            failed += 1
+                            continue
+                        geom = recovered
+                if not from_layer.changeGeometry(feat.id(), geom):
+                    failed += 1
 
             direction = "forward" if is_forward else "reverse"
             epsg = target_crs.postgisSrid()
-            self._set_status(
-                f"Adjusted {len(selected_features)} feature(s) [{direction}] → EPSG:{epsg}.",
-                "green"
-            )
+            n_ok = len(selected_features) - failed
+            msg = f"Adjusted {n_ok} feature(s) [{direction}] → EPSG:{epsg}."
+            if failed:
+                msg += f"  ({failed} failed — check layer is not read-only or locked)"
+                self._set_status(msg, "#ffaa00")
+            else:
+                self._set_status(msg, "green")
 
         except Exception as e:
             from_layer.rollBack()

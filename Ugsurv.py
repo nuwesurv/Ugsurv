@@ -709,12 +709,46 @@ class Ugsurv:
         def _make_toggle(factory):
             state = [None]
             def _toggle():
+                from qgis.PyQt import sip as _sip
+
+                # Purge any C++-deleted wrappers from the shared dock list so
+                # tabifyDockWidget() is never called with a dead reference.
+                self._extra_docks = [
+                    d for d in self._extra_docks
+                    if not _sip.isdeleted(d)
+                ]
+
+                # Guard: _on_destroyed may have failed to reset state[0] if an
+                # exception occurred inside it (e.g. deleted wrapper in list).
+                if state[0] is not None and _sip.isdeleted(state[0]):
+                    state[0] = None
+
                 if state[0] is None:
-                    state[0] = factory()
-                    iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, state[0])
+                    dock = factory()
+                    dock.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+                    def _on_destroyed(_dock=dock):
+                        # Use `is` (identity) not `==` to avoid RuntimeError on
+                        # a deleted C++ wrapper inside the list comparison.
+                        for i in reversed(range(len(self._extra_docks))):
+                            try:
+                                if self._extra_docks[i] is _dock:
+                                    self._extra_docks.pop(i)
+                                    break
+                            except Exception:
+                                self._extra_docks.pop(i)
+                        if state[0] is _dock:
+                            state[0] = None
+
+                    dock.destroyed.connect(_on_destroyed)
+                    # Set state[0] BEFORE addDockWidget so that any re-entrant
+                    # call to _toggle() (from QGIS event processing during dock
+                    # insertion) sees a non-None state and skips dock creation.
+                    state[0] = dock
+                    iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
                     if self._extra_docks:
-                        mw.tabifyDockWidget(self._extra_docks[0], state[0])
-                    self._extra_docks.append(state[0])
+                        mw.tabifyDockWidget(self._extra_docks[0], dock)
+                    self._extra_docks.append(dock)
                 state[0].show()
                 state[0].raise_()
             return _toggle
@@ -1074,7 +1108,7 @@ class Ugsurv:
             self._sel_overlay = None
 
         # Extra utility docks (lazily created by _register_extra_tools)
-        for dock in getattr(self, '_extra_docks', []):
+        for dock in list(getattr(self, '_extra_docks', [])):
             with contextlib.suppress(Exception):
                 self.iface.removeDockWidget(dock)
                 dock.close()
