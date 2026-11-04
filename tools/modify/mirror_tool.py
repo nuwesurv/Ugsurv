@@ -110,12 +110,15 @@ class MirrorTool(_ModifyBase):
     def _execute_mirror(self, erase: bool):  # noqa: C901
         if self._mirror_p1 is None or self._mirror_p2 is None:
             return
-        hist = getattr(self._ctx, 'action_history', None)
+        hist    = getattr(self._ctx, 'action_history', None)
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        p1_lyr  = crs_mgr.project_to_layer(self._mirror_p1) if crs_mgr else self._mirror_p1
+        p2_lyr  = crs_mgr.project_to_layer(self._mirror_p2) if crs_mgr else self._mirror_p2
         if hist:
             hist.begin_group()
         for layer, feat in selected_features(self._ctx):
             orig_geom = feat.geometry()
-            new_geom  = _mirror_geometry(orig_geom, self._mirror_p1, self._mirror_p2)
+            new_geom  = _mirror_geometry(orig_geom, p1_lyr, p2_lyr)
             if not layer.isEditable():
                 layer.startEditing()
             if erase:
@@ -156,11 +159,14 @@ class MirrorTool(_ModifyBase):
         )
         axis_rb.addPoint(p1)
         axis_rb.addPoint(p2)
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        p1_lyr  = crs_mgr.project_to_layer(p1) if crs_mgr else p1
+        p2_lyr  = crs_mgr.project_to_layer(p2) if crs_mgr else p2
         for layer, feat in selected_features(self._ctx):
             rb = self._new_rubber_band(
                 feat.geometry().type(), _style.RB_MIRROR, _style.RB_WIDTH
             )
-            rb.setToGeometry(_mirror_geometry(feat.geometry(), p1, p2))
+            rb.setToGeometry(_mirror_geometry(feat.geometry(), p1_lyr, p2_lyr), layer)
 
     def _on_cancel_hook(self):
         self._mirror_p1 = self._mirror_p2 = None

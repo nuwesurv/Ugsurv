@@ -1227,18 +1227,22 @@ class SolveTopologyDock(QDockWidget):
         if not layer.isValid():
             return
 
+        # fill_rgba, outline_rgba, outline_style, outline_width
         _STYLES = [
-            ('river',         '219,255,204,255', '35,35,35,255'),
-            ('road',          '255,94,23,255',   '35,35,35,255'),
-            ('waterbody',     '22,160,133,255',  '35,35,35,255'),
-            ('surveyed_land', '255,233,210,255', '35,35,35,255'),
+            ('river',         '51,204,59,43',    '51,178,59,189',   'dash',  '0.46'),
+            ('road',          '255,94,23,81',    '255,94,23,189',   'dash',  '0.46'),
+            ('surveyed_land', '255,233,210,68',  '35,35,35,255',    'solid', '0.26'),
+            ('waterbody',     '165,191,221,166', '100,152,210,255', 'solid', '0.26'),
         ]
         categories = []
-        for origin, fill_rgba, border_color in _STYLES:
+        for origin, fill_rgba, outline_rgba, outline_style, outline_w in _STYLES:
             sym = QgsFillSymbol.createSimple({
-                'color':         fill_rgba,
-                'outline_color': border_color,
-                'outline_width': '0.26',
+                'color':               fill_rgba,
+                'outline_color':       outline_rgba,
+                'outline_style':       outline_style,
+                'outline_width':       outline_w,
+                'outline_width_unit':  'MM',
+                'joinstyle':           'bevel',
             })
             label = origin.replace('_', ' ').title()
             categories.append(QgsRendererCategory(origin, sym, label))

@@ -23,11 +23,15 @@
 """
 
 import os
-
-from qgis.PyQt.QtCore import Qt
 import os.path
-from qgis.PyQt.QtWidgets import QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog, QTableWidget, QPushButton, QTableWidgetItem, QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout
-from qgis.PyQt.QtCore import QVariant
+
+from qgis.PyQt.QtCore import Qt, QVariant
+from qgis.PyQt.QtWidgets import (
+    QGroupBox, QDialog, QVBoxLayout, QLabel, QFileDialog,
+    QTableWidget, QPushButton, QTableWidgetItem,
+    QHBoxLayout, QSpacerItem, QSizePolicy, QComboBox, QGridLayout,
+)
+from qgis.PyQt.QtXml import QDomDocument
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsField, QgsCoordinateReferenceSystem,
     QgsFeature, QgsGeometry, QgsVectorFileWriter,
@@ -43,6 +47,146 @@ try:
     import shapely as sh
 except Exception:
     print('Failed to find shapely module')
+
+
+_QML_POINTS = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis styleCategories="Symbology" version="3.40.0-Bratislava">
+ <renderer-v2 type="singleSymbol" forceraster="0" referencescale="-1" symbollevels="0" enableorderby="0">
+  <symbols>
+   <symbol type="marker" name="0" alpha="1" force_rhr="0" clip_to_extent="1" is_animated="0" frame_rate="10">
+    <data_defined_properties>
+     <Option type="Map">
+      <Option value="" type="QString" name="name"/>
+      <Option name="properties"/>
+      <Option value="collection" type="QString" name="type"/>
+     </Option>
+    </data_defined_properties>
+    <layer class="SimpleMarker" id="{47bd10e6-9565-4d77-9ef1-0c586be3dcfa}" locked="0" enabled="1" pass="0">
+     <Option type="Map">
+      <Option value="0" type="QString" name="angle"/>
+      <Option value="square" type="QString" name="cap_style"/>
+      <Option value="4,0,1,255,hsv:0.94116666666666671,1,0.01522850385290303,1" type="QString" name="color"/>
+      <Option value="1" type="QString" name="horizontal_anchor_point"/>
+      <Option value="bevel" type="QString" name="joinstyle"/>
+      <Option value="circle" type="QString" name="name"/>
+      <Option value="0,0" type="QString" name="offset"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="offset_map_unit_scale"/>
+      <Option value="MM" type="QString" name="offset_unit"/>
+      <Option value="35,35,35,255,rgb:0.13725490196078433,0.13725490196078433,0.13725490196078433,1" type="QString" name="outline_color"/>
+      <Option value="solid" type="QString" name="outline_style"/>
+      <Option value="0" type="QString" name="outline_width"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="outline_width_map_unit_scale"/>
+      <Option value="MM" type="QString" name="outline_width_unit"/>
+      <Option value="diameter" type="QString" name="scale_method"/>
+      <Option value="1.2" type="QString" name="size"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="size_map_unit_scale"/>
+      <Option value="MM" type="QString" name="size_unit"/>
+      <Option value="1" type="QString" name="vertical_anchor_point"/>
+     </Option>
+     <data_defined_properties>
+      <Option type="Map">
+       <Option value="" type="QString" name="name"/>
+       <Option name="properties"/>
+       <Option value="collection" type="QString" name="type"/>
+      </Option>
+     </data_defined_properties>
+    </layer>
+   </symbol>
+  </symbols>
+  <rotation/>
+  <sizescale/>
+  <data-defined-properties>
+   <Option type="Map">
+    <Option value="" type="QString" name="name"/>
+    <Option name="properties"/>
+    <Option value="collection" type="QString" name="type"/>
+   </Option>
+  </data-defined-properties>
+ </renderer-v2>
+ <selection mode="Default">
+  <selectionColor invalid="1"/>
+ </selection>
+ <blendMode>0</blendMode>
+ <featureBlendMode>0</featureBlendMode>
+ <layerGeometryType>0</layerGeometryType>
+</qgis>"""
+
+_QML_POLYGONS = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis styleCategories="Symbology" version="3.40.0-Bratislava">
+ <renderer-v2 type="singleSymbol" forceraster="0" referencescale="-1" symbollevels="0" enableorderby="0">
+  <symbols>
+   <symbol type="fill" name="0" alpha="1" force_rhr="0" clip_to_extent="1" is_animated="0" frame_rate="10">
+    <data_defined_properties>
+     <Option type="Map">
+      <Option value="" type="QString" name="name"/>
+      <Option name="properties"/>
+      <Option value="collection" type="QString" name="type"/>
+     </Option>
+    </data_defined_properties>
+    <layer class="SimpleLine" id="{08f70fae-4ebc-446b-b1e8-ab066567568c}" locked="0" enabled="1" pass="0">
+     <Option type="Map">
+      <Option value="0" type="QString" name="align_dash_pattern"/>
+      <Option value="square" type="QString" name="capstyle"/>
+      <Option value="5;2" type="QString" name="customdash"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="customdash_map_unit_scale"/>
+      <Option value="MM" type="QString" name="customdash_unit"/>
+      <Option value="0" type="QString" name="dash_pattern_offset"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="dash_pattern_offset_map_unit_scale"/>
+      <Option value="MM" type="QString" name="dash_pattern_offset_unit"/>
+      <Option value="0" type="QString" name="draw_inside_polygon"/>
+      <Option value="bevel" type="QString" name="joinstyle"/>
+      <Option value="35,35,35,255,rgb:0.13725490196078433,0.13725490196078433,0.13725490196078433,1" type="QString" name="line_color"/>
+      <Option value="solid" type="QString" name="line_style"/>
+      <Option value="0.26" type="QString" name="line_width"/>
+      <Option value="MM" type="QString" name="line_width_unit"/>
+      <Option value="0" type="QString" name="offset"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="offset_map_unit_scale"/>
+      <Option value="MM" type="QString" name="offset_unit"/>
+      <Option value="0" type="QString" name="ring_filter"/>
+      <Option value="0" type="QString" name="trim_distance_end"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="trim_distance_end_map_unit_scale"/>
+      <Option value="MM" type="QString" name="trim_distance_end_unit"/>
+      <Option value="0" type="QString" name="trim_distance_start"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="trim_distance_start_map_unit_scale"/>
+      <Option value="MM" type="QString" name="trim_distance_start_unit"/>
+      <Option value="0" type="QString" name="tweak_dash_pattern_on_corners"/>
+      <Option value="0" type="QString" name="use_custom_dash"/>
+      <Option value="3x:0,0,0,0,0,0" type="QString" name="width_map_unit_scale"/>
+     </Option>
+     <data_defined_properties>
+      <Option type="Map">
+       <Option value="" type="QString" name="name"/>
+       <Option name="properties"/>
+       <Option value="collection" type="QString" name="type"/>
+      </Option>
+     </data_defined_properties>
+    </layer>
+   </symbol>
+  </symbols>
+  <rotation/>
+  <sizescale/>
+  <data-defined-properties>
+   <Option type="Map">
+    <Option value="" type="QString" name="name"/>
+    <Option name="properties"/>
+    <Option value="collection" type="QString" name="type"/>
+   </Option>
+  </data-defined-properties>
+ </renderer-v2>
+ <selection mode="Default">
+  <selectionColor invalid="1"/>
+ </selection>
+ <blendMode>0</blendMode>
+ <featureBlendMode>0</featureBlendMode>
+ <layerGeometryType>2</layerGeometryType>
+</qgis>"""
+
+
+def _apply_qml(layer, qml_str):
+    doc = QDomDocument()
+    doc.setContent(qml_str)
+    layer.importNamedStyle(doc)
+    layer.triggerRepaint()
 
 
 _NORTH_EXACT = {'n', 'y', 'northing', 'northings', 'north', 'lat', 'latitude', 'ycoord', 'y_coord'}
@@ -204,13 +348,15 @@ class ParcelPlotterDialog(QDialog):
         if not os.path.exists(filepath) or filepath == "No file selected":
             self.response.setText("File does not exist")
             return
-        filename = filepath.split('/')[-1]
-        print(filename)
+        filename  = filepath.split('/')[-1]
+        base_name = os.path.splitext(filename)[0]
+        poly_name = base_name + '_polygons'
+        pts_name  = base_name + '_points'
 
         # Get selected column names
-        eastings = self.eastings.currentText()
+        eastings  = self.eastings.currentText()
         northings = self.northings.currentText()
-        code = self.code.currentText()
+        code      = self.code.currentText()
 
         if not all([eastings, northings, code]):
             self.response.setText("Please select all columns")
@@ -233,66 +379,125 @@ class ParcelPlotterDialog(QDialog):
                 self.response.setText("Eastings and Northings must be numeric")
                 return
 
-            # Create geometry
-            df['geometry'] = df.index.map(lambda i: sh.Point([df.loc[i, eastings], df.loc[i, northings]]))
-
             crs = self.crsWidget.crs()
             epsg_code = crs.postgisSrid()
 
+            # Create point geometry column
+            df['geometry'] = df.index.map(lambda i: sh.Point([df.loc[i, eastings], df.loc[i, northings]]))
+
+            # --- Polygon memory layer ---
             unique_codes = df[code].unique()
-            rows = []
+            poly_rows = []
             for unique_code in unique_codes:
                 gdf1 = df[df[code] == unique_code]
-                parcel_boundary = [[point.x, point.y] for point in gdf1['geometry']]
+                parcel_boundary = [[pt.x, pt.y] for pt in gdf1['geometry']]
                 try:
                     poly = sh.Polygon(parcel_boundary)
-                    rows.append({code: unique_code, 'geometry': poly})
+                    poly_rows.append({code: unique_code, 'geometry': poly})
                 except Exception as e:
                     self.response.setText(f"Error creating polygon for code {unique_code}: {str(e)}")
                     continue
 
-            if not rows:
+            if not poly_rows:
                 self.response.setText("No valid polygons created")
                 return
 
-            mem_layer = QgsVectorLayer(f'Polygon?crs=EPSG:{epsg_code}', filename, 'memory')
-            prov = mem_layer.dataProvider()
-            prov.addAttributes([QgsField(code, QVariant.String)])
-            mem_layer.updateFields()
-            feats = []
-            for row in rows:
+            mem_poly = QgsVectorLayer(f'Polygon?crs=EPSG:{epsg_code}', poly_name, 'memory')
+            prov_poly = mem_poly.dataProvider()
+            prov_poly.addAttributes([QgsField(code, QVariant.String)])
+            mem_poly.updateFields()
+            poly_feats = []
+            for row in poly_rows:
                 geom = row['geometry']
                 if geom is None or geom.is_empty:
                     continue
                 feat = QgsFeature()
                 feat.setGeometry(QgsGeometry.fromWkt(geom.wkt))
                 feat.setAttributes([str(row[code])])
-                feats.append(feat)
-            prov.addFeatures(feats)
-            mem_layer.updateExtents()
+                poly_feats.append(feat)
+            prov_poly.addFeatures(poly_feats)
+            mem_poly.updateExtents()
 
-            new_layer_path = os.path.splitext(filepath)[0] + '.gpkg'
-            options = QgsVectorFileWriter.SaveVectorOptions()
-            options.driverName = 'GPKG'
-            options.fileEncoding = 'UTF-8'
+            # --- Point memory layer (all CSV columns as attributes) ---
+            data_cols = [c for c in df.columns if c != 'geometry']
+            mem_pts = QgsVectorLayer(f'Point?crs=EPSG:{epsg_code}', pts_name, 'memory')
+            prov_pts = mem_pts.dataProvider()
+            pt_fields = []
+            for col in data_cols:
+                dtype = df[col].dtype
+                if pd.api.types.is_integer_dtype(dtype):
+                    qtype = QVariant.Int
+                elif pd.api.types.is_float_dtype(dtype):
+                    qtype = QVariant.Double
+                else:
+                    qtype = QVariant.String
+                pt_fields.append(QgsField(col, qtype))
+            prov_pts.addAttributes(pt_fields)
+            mem_pts.updateFields()
+            pt_feats = []
+            for _, row in df.iterrows():
+                feat = QgsFeature()
+                feat.setGeometry(QgsGeometry.fromWkt(row['geometry'].wkt))
+                attrs = []
+                for col in data_cols:
+                    val = row[col]
+                    if pd.isna(val):
+                        attrs.append(None)
+                    elif pd.api.types.is_integer_dtype(df[col].dtype):
+                        attrs.append(int(val))
+                    elif pd.api.types.is_float_dtype(df[col].dtype):
+                        attrs.append(float(val))
+                    else:
+                        attrs.append(str(val))
+                feat.setAttributes(attrs)
+                pt_feats.append(feat)
+            prov_pts.addFeatures(pt_feats)
+            mem_pts.updateExtents()
+
+            # --- Save both layers to GeoPackage ---
+            gpkg_path = os.path.splitext(filepath)[0] + '.gpkg'
+
+            poly_opts = QgsVectorFileWriter.SaveVectorOptions()
+            poly_opts.driverName    = 'GPKG'
+            poly_opts.fileEncoding  = 'UTF-8'
+            poly_opts.layerName     = poly_name
             error, msg = QgsVectorFileWriter.writeAsVectorFormatV2(
-                mem_layer, new_layer_path,
-                QgsProject.instance().transformContext(), options
+                mem_poly, gpkg_path,
+                QgsProject.instance().transformContext(), poly_opts
             )
             if error != QgsVectorFileWriter.WriterError.NoError:
-                self.response.setText(f"Failed to write file: {msg}")
+                self.response.setText(f"Failed to write polygons: {msg}")
                 return
 
-            # Load layer in QGIS
-            layer_name = f'{filename}'
-            layer = QgsVectorLayer(new_layer_path, layer_name, 'ogr')
-
-            if not layer.isValid():
-                self.response.setText("Layer failed to load")
+            pts_opts = QgsVectorFileWriter.SaveVectorOptions()
+            pts_opts.driverName           = 'GPKG'
+            pts_opts.fileEncoding         = 'UTF-8'
+            pts_opts.layerName            = pts_name
+            pts_opts.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+            error, msg = QgsVectorFileWriter.writeAsVectorFormatV2(
+                mem_pts, gpkg_path,
+                QgsProject.instance().transformContext(), pts_opts
+            )
+            if error != QgsVectorFileWriter.WriterError.NoError:
+                self.response.setText(f"Failed to write points: {msg}")
                 return
 
-            QgsProject.instance().addMapLayer(layer)
-            self.response.setText("Parcels plotted successfully")
+            # --- Load both layers into QGIS ---
+            poly_layer = QgsVectorLayer(f'{gpkg_path}|layername={poly_name}', poly_name, 'ogr')
+            pts_layer  = QgsVectorLayer(f'{gpkg_path}|layername={pts_name}',  pts_name,  'ogr')
+
+            if not poly_layer.isValid():
+                self.response.setText("Polygon layer failed to load")
+                return
+            if not pts_layer.isValid():
+                self.response.setText("Points layer failed to load")
+                return
+
+            _apply_qml(poly_layer, _QML_POLYGONS)
+            _apply_qml(pts_layer,  _QML_POINTS)
+            QgsProject.instance().addMapLayer(poly_layer)
+            QgsProject.instance().addMapLayer(pts_layer)
+            self.response.setText(f"Plotted {len(poly_feats)} parcels and {len(pt_feats)} points")
 
         except Exception as e:
             self.response.setText(f"Error: {str(e)}")

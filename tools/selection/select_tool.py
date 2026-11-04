@@ -450,10 +450,12 @@ class SelectTool(BaseTool):
     _HOVER_TOL_PX = 8
 
     def _find_hover_feature(self, map_pt: QgsPointXY):
-        tol  = self._HOVER_TOL_PX * self.canvas().mapUnitsPerPixel()
-        rect = QgsRectangle(map_pt.x() - tol, map_pt.y() - tol,
-                            map_pt.x() + tol, map_pt.y() + tol)
-        pt_geom  = QgsGeometry.fromPointXY(map_pt)
+        tol     = self._HOVER_TOL_PX * self.canvas().mapUnitsPerPixel()
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        lyr_pt  = crs_mgr.project_to_layer(map_pt) if crs_mgr else map_pt
+        rect    = QgsRectangle(lyr_pt.x() - tol, lyr_pt.y() - tol,
+                               lyr_pt.x() + tol, lyr_pt.y() + tol)
+        pt_geom = QgsGeometry.fromPointXY(lyr_pt)
         best_layer, best_feat, best_d = None, None, float('inf')
         for _lid, layer in self._all_geometry_layers():
             for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
@@ -493,7 +495,8 @@ class SelectTool(BaseTool):
     # ── grip / midgrip building ────────────────────────────────────────────
     def _rebuild_grips(self):
         self._clear_grips()
-        sel = self._ctx.selection_model
+        sel     = self._ctx.selection_model
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
         for lid, fid in sel:
             layer = QgsProject.instance().mapLayer(lid)
             if layer is None:
@@ -505,11 +508,12 @@ class SelectTool(BaseTool):
             wtype = int(QgsWkbTypes.geometryType(geom.wkbType()))
             verts = list(geom.vertices())
 
-            # Blue box grips at every vertex
+            # Blue box grips at every vertex — store in project CRS for hit-testing
             n        = len(verts)
             is_multi = QgsWkbTypes.isMultiType(geom.wkbType())
             for i, v in enumerate(verts):
-                pt    = QgsPointXY(v.x(), v.y())
+                layer_pt = QgsPointXY(v.x(), v.y())
+                pt = crs_mgr.layer_to_project(layer_pt) if crs_mgr else layer_pt
                 is_ep = (wtype == 1 and not is_multi
                          and n >= 2 and (i == 0 or i == n - 1))
                 marker = QgsVertexMarker(self.canvas())
@@ -527,7 +531,8 @@ class SelectTool(BaseTool):
                     if abs(va.x() - vb.x()) < 1e-10 and abs(va.y() - vb.y()) < 1e-10:
                         continue
                     mx, my = (va.x() + vb.x()) / 2, (va.y() + vb.y()) / 2
-                    mpt    = QgsPointXY(mx, my)
+                    layer_mpt = QgsPointXY(mx, my)
+                    mpt = crs_mgr.layer_to_project(layer_mpt) if crs_mgr else layer_mpt
                     marker = QgsVertexMarker(self.canvas())
                     marker.setCenter(mpt)
                     marker.setColor(_style.MIDGRIP_COLOR)
@@ -656,7 +661,10 @@ class SelectTool(BaseTool):
         feat = layer.getFeature(grip.fid)
         if not feat.isValid():
             return
-        pts = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        crs_mgr  = getattr(self._ctx, 'crs_manager', None)
+        pts_lyr  = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        pts      = ([crs_mgr.layer_to_project(p) for p in pts_lyr]
+                    if crs_mgr else pts_lyr)
         if len(pts) < 2:
             return
         ep, adj = (pts[0], pts[1]) if grip.vertex_idx == 0 else (pts[-1], pts[-2])
@@ -666,7 +674,7 @@ class SelectTool(BaseTool):
             return
         self._extend_grip     = grip
         self._extend_dir      = (dx / dist, dy / dist)
-        self._extend_orig_pts = pts
+        self._extend_orig_pts = pts   # project CRS
         self._last_snap_ep    = None
         self._request_input("value", "Extension distance / click new endpoint:")
 
@@ -675,8 +683,11 @@ class SelectTool(BaseTool):
         layer = QgsProject.instance().mapLayer(grip.layer_id)
         if layer is None:
             return
-        pts = list(self._extend_orig_pts)
+        pts = list(self._extend_orig_pts)   # project CRS
         pts = ([new_pt] + pts) if grip.vertex_idx == 0 else (pts + [new_pt])
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        if crs_mgr:
+            pts = [crs_mgr.project_to_layer(p) for p in pts]
         if not layer.isEditable():
             layer.startEditing()
         layer.changeGeometry(grip.fid, QgsGeometry.fromPolylineXY(pts))
@@ -698,13 +709,16 @@ class SelectTool(BaseTool):
         feat = layer.getFeature(grip.fid)
         if not feat.isValid():
             return
-        pts = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        pts_lyr = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        pts     = ([crs_mgr.layer_to_project(p) for p in pts_lyr]
+                   if crs_mgr else pts_lyr)
         if len(pts) < 2:
             return
         if grip.vertex_idx == 0:
             pts = list(reversed(pts))
         self._add_pts_grip     = grip
-        self._add_pts_orig_pts = pts
+        self._add_pts_orig_pts = pts   # project CRS
         self._add_pts_new      = []
         self._last_snap_ep     = None
         self._request_input("polar", "Specify next point [Enter=commit]:")
@@ -714,7 +728,10 @@ class SelectTool(BaseTool):
         layer = QgsProject.instance().mapLayer(grip.layer_id)
         if layer is None:
             return
-        pts = list(self._add_pts_orig_pts) + self._add_pts_new
+        pts     = list(self._add_pts_orig_pts) + self._add_pts_new   # project CRS
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        if crs_mgr:
+            pts = [crs_mgr.project_to_layer(p) for p in pts]
         if not layer.isEditable():
             layer.startEditing()
         layer.changeGeometry(grip.fid, QgsGeometry.fromPolylineXY(pts))
@@ -796,8 +813,10 @@ class SelectTool(BaseTool):
         feat = layer.getFeature(midgrip.fid)
         if not feat.isValid():
             return
-        geom = feat.geometry()
-        geom.insertVertex(midgrip.pt.x(), midgrip.pt.y(), midgrip.insert_before)
+        geom    = feat.geometry()
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        ins_pt  = crs_mgr.project_to_layer(midgrip.pt) if crs_mgr else midgrip.pt
+        geom.insertVertex(ins_pt.x(), ins_pt.y(), midgrip.insert_before)
         self._drag_geom_wkt = geom.asWkt()
         self._hot_grip = Grip(
             midgrip.layer_id, midgrip.fid, midgrip.insert_before, midgrip.pt, None
@@ -811,13 +830,16 @@ class SelectTool(BaseTool):
         self._clear_rubber_bands()
         if self._drag_geom_wkt is None:
             return
-        geom  = QgsGeometry.fromWkt(self._drag_geom_wkt)
-        moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
-        rb    = self._new_rubber_band(moved.type(), _style.RB_DRAW)
+        crs_mgr    = getattr(self._ctx, 'crs_manager', None)
+        layer_new  = crs_mgr.project_to_layer(new_pt) if crs_mgr else new_pt
+        geom       = QgsGeometry.fromWkt(self._drag_geom_wkt)
+        moved      = _replace_vertex(geom, grip.vertex_idx, layer_new)
+        rb         = self._new_rubber_band(moved.type(), _style.RB_DRAW)
+        grip_layer = QgsProject.instance().mapLayer(grip.layer_id)
         if int(QgsWkbTypes.geometryType(moved.wkbType())) == 0:  # point: make preview visible
             rb.setIconSize(12)
             rb.setIcon(QgsRubberBand.ICON_BOX)
-        rb.setToGeometry(moved)
+        rb.setToGeometry(moved, grip_layer)
 
     def _commit_grip_move(self, grip: Grip, new_pt: QgsPointXY):
         if self._drag_geom_wkt is None:
@@ -825,8 +847,10 @@ class SelectTool(BaseTool):
         layer = QgsProject.instance().mapLayer(grip.layer_id)
         if layer is None:
             return
+        crs_mgr   = getattr(self._ctx, 'crs_manager', None)
+        layer_new = crs_mgr.project_to_layer(new_pt) if crs_mgr else new_pt
         geom  = QgsGeometry.fromWkt(self._drag_geom_wkt)
-        moved = _replace_vertex(geom, grip.vertex_idx, new_pt)
+        moved = _replace_vertex(geom, grip.vertex_idx, layer_new)
         if not layer.isEditable():
             layer.startEditing()
         layer.changeGeometry(grip.fid, moved)
@@ -837,11 +861,13 @@ class SelectTool(BaseTool):
         if not shift:
             sel.clear()
             self._clear_raster_selection()
-        tol = (self._ctx.snap_engine._px_to_map_units(5, self._ctx.canvas)
-               if self._ctx.snap_engine else 0.001)
-        rect = QgsRectangle(pt.x() - tol, pt.y() - tol,
-                            pt.x() + tol, pt.y() + tol)
-        click_geom = QgsGeometry.fromPointXY(pt)
+        tol     = (self._ctx.snap_engine._px_to_map_units(5, self._ctx.canvas)
+                   if self._ctx.snap_engine else 0.001)
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        lyr_pt  = crs_mgr.project_to_layer(pt) if crs_mgr else pt
+        rect    = QgsRectangle(lyr_pt.x() - tol, lyr_pt.y() - tol,
+                               lyr_pt.x() + tol, lyr_pt.y() + tol)
+        click_geom = QgsGeometry.fromPointXY(lyr_pt)
         best_lid, best_fid, best_d = None, None, float('inf')
         for layer_id, layer in self._all_geometry_layers():
             for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
@@ -921,9 +947,12 @@ class SelectTool(BaseTool):
         if abs(start.x() - end.x()) < 1e-6 and abs(start.y() - end.y()) < 1e-6:
             return   # micro-drag: single click already handled in press
         is_window = end.x() >= start.x()
-        rect  = QgsRectangle(
-            min(start.x(), end.x()), min(start.y(), end.y()),
-            max(start.x(), end.x()), max(start.y(), end.y()),
+        crs_mgr   = getattr(self._ctx, 'crs_manager', None)
+        ls = crs_mgr.project_to_layer(start) if crs_mgr else start
+        le = crs_mgr.project_to_layer(end)   if crs_mgr else end
+        rect = QgsRectangle(
+            min(ls.x(), le.x()), min(ls.y(), le.y()),
+            max(ls.x(), le.x()), max(ls.y(), le.y()),
         )
         shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
         sel   = self._ctx.selection_model

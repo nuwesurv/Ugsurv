@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-StorageManager — resolves/creates the geometries GeoPackage, gates the
-drafting toolbar until the project has been saved at least once.
+StorageManager — resolves/creates the geometries GeoPackage.
 
 Hard rules (§5):
-  - NEVER calls layer.commitChanges().
-  - Tools are disabled (toolbar greyed out) until QgsProject.fileName() != "".
-  - Hooks projectSaved to create the GeoPackage on first save.
-  - Hooks cleared/readProject to re-evaluate gating state.
+  - NEVER calls layer.commitChanges() on geometry layers.
+  - When no project is saved, drawing targets in-memory temp layers.
+  - On project save, temp layers are migrated into the permanent GeoPackage.
+  - Hooks projectSaved/cleared/readProject to re-evaluate state.
 
 GeoPackage schema (§4):
   - points   (Point) — cad_layer attribute
@@ -82,6 +81,14 @@ class StorageManager(QObject):
         self._crs_manager    = None   # set by plugin after CrsManager is created
         self._action_history = None   # set by plugin after ActionHistory is created
 
+        # Temp-layer state (used when drawing before project is saved)
+        self._in_temp_mode        = False
+        self._temp_points_layer   = None
+        self._temp_lines_layer    = None
+        self._temp_circles_layer  = None
+        self._temp_cad_lyr_layer  = None
+        self._temp_notified       = False   # show info bar once per unsaved session
+
         # Wire QGIS project signals
         QgsProject.instance().projectSaved.connect(self._on_project_saved)
         QgsProject.instance().cleared.connect(self._on_project_cleared)
@@ -129,6 +136,9 @@ class StorageManager(QObject):
         lyr = getattr(self, attr)
         if self._layer_alive(lyr):
             return lyr
+        # In temp mode with no GPKG on disk — skip the reload attempt.
+        if self._in_temp_mode:
+            return None
         if not (self._gpkg_path and os.path.exists(self._gpkg_path)):
             return None
         # Stale reference — reopen from disk (don't reload all layers).
@@ -252,37 +262,47 @@ class StorageManager(QObject):
 
     # ── project signal handlers ──────────────────────────────────────────
     def _on_project_saved(self):
+        if self._in_temp_mode:
+            self._migrate_temp_to_gpkg()
         self._evaluate_gating()
-        # Do NOT auto-create the GPKG here — it is created on first actual use.
+        # Always notify listeners so cad-layers dock refreshes after save/migration.
+        self.gatingChanged.emit(self._enabled)
 
     def _on_project_cleared(self):
+        self._cleanup_temp_layers()
         self._gpkg_path     = None
         self._points_layer  = None
         self._lines_layer   = None
         self._circles_layer = None
         self._cad_lyr_layer = None
+        self._temp_notified = False
         self._evaluate_gating()
 
     def _on_layer_deleted(self):
         """Called when any relevant layer is removed; nulls stale references."""
-        for attr in ('_points_layer', '_lines_layer', '_circles_layer', '_cad_lyr_layer'):
+        all_attrs = ('_points_layer', '_lines_layer', '_circles_layer', '_cad_lyr_layer',
+                     '_temp_points_layer', '_temp_lines_layer',
+                     '_temp_circles_layer', '_temp_cad_lyr_layer')
+        for attr in all_attrs:
             lyr = getattr(self, attr)
             if not self._layer_alive(lyr):
                 setattr(self, attr, None)
 
     def _on_project_read(self):
         self._evaluate_gating()
+        # Always notify so cad-layers dock reloads on project open.
+        self.gatingChanged.emit(self._enabled)
 
     # ── gating ────────────────────────────────────────────────────────────
     def _evaluate_gating(self):
         proj_file = QgsProject.instance().fileName()
-        new_state = bool(proj_file)
-        if new_state != self._enabled:
-            self._enabled = new_state
+        # Tools are always enabled — temp layers are used when no project is saved.
+        if not self._enabled:
+            self._enabled = True
             self._apply_gating()
             self.gatingChanged.emit(self._enabled)
         # Re-attach to an existing GPKG when a project is opened, but never create one.
-        if self._enabled and not self._gpkg_path:
+        if proj_file and not self._gpkg_path:
             self._load_existing_gpkg_if_present()
 
     def _apply_gating(self):
@@ -301,6 +321,20 @@ class StorageManager(QObject):
         """Create and load the lines layer on first actual use. No-op if already alive."""
         if self._layer_alive(self._lines_layer):
             return
+        if not QgsProject.instance().fileName():
+            if not self._layer_alive(self._temp_lines_layer):
+                self._temp_lines_layer = self._create_temp_layer(
+                    "_lines", QgsWkbTypes.CompoundCurve, [
+                        QgsField("color",          QVariant.String),
+                        QgsField("line_type",      QVariant.String),
+                        QgsField("line_thickness", QVariant.Double),
+                    ]
+                )
+                apply_polyline_color_renderer(self._temp_lines_layer)
+                self._ensure_temp_cad_layer()
+                self._notify_temp_mode()
+            self._lines_layer = self._temp_lines_layer
+            return
         self._ensure_gpkg_file()
         lyr = self._open_gpkg_layer("lines", add_to_tree=True)
         if lyr is None:
@@ -313,6 +347,20 @@ class StorageManager(QObject):
 
     def _ensure_circles_layer(self):
         if self._layer_alive(self._circles_layer):
+            return
+        if not QgsProject.instance().fileName():
+            if not self._layer_alive(self._temp_circles_layer):
+                self._temp_circles_layer = self._create_temp_layer(
+                    "_circles", QgsWkbTypes.CompoundCurve, [
+                        QgsField("color",          QVariant.String),
+                        QgsField("line_type",      QVariant.String),
+                        QgsField("line_thickness", QVariant.Double),
+                    ]
+                )
+                apply_circle_color_renderer(self._temp_circles_layer)
+                self._ensure_temp_cad_layer()
+                self._notify_temp_mode()
+            self._circles_layer = self._temp_circles_layer
             return
         self._ensure_gpkg_file()
         lyr = self._open_gpkg_layer("circles", add_to_tree=True)
@@ -327,6 +375,22 @@ class StorageManager(QObject):
     def _ensure_points_layer(self):
         """Create and load the points layer on first actual use. No-op if already alive."""
         if self._layer_alive(self._points_layer):
+            return
+        if not QgsProject.instance().fileName():
+            if not self._layer_alive(self._temp_points_layer):
+                self._temp_points_layer = self._create_temp_layer(
+                    "_points", QgsWkbTypes.Point, [
+                        QgsField("Description", QVariant.String),
+                        QgsField("color",       QVariant.String),
+                        QgsField("symbol",      QVariant.String),
+                        QgsField("symbol_size", QVariant.Double),
+                    ]
+                )
+                apply_point_color_renderer(self._temp_points_layer)
+                apply_point_label_style(self._temp_points_layer)
+                self._ensure_temp_cad_layer()
+                self._notify_temp_mode()
+            self._points_layer = self._temp_points_layer
             return
         self._ensure_gpkg_file()
         lyr = self._open_gpkg_layer("points", add_to_tree=True)
@@ -389,6 +453,163 @@ class StorageManager(QObject):
             return
         lyr.dataProvider().addAttributes(missing)
         lyr.updateFields()
+
+    # ── temp-layer helpers ────────────────────────────────────────────────
+
+    def _create_temp_layer(self, name: str, wkb_type, extra_fields: list) -> QgsVectorLayer:
+        """Create an in-memory scratch layer with cad_layer + given extra fields."""
+        crs = QgsCoordinateReferenceSystem(f"EPSG:{_LAYER_EPSG}")
+        type_str = QgsWkbTypes.displayString(wkb_type)
+        uri = f"{type_str}?crs={crs.authid()}"
+        mem = QgsVectorLayer(uri, name, "memory")
+        all_fields = [QgsField("cad_layer", QVariant.String)] + extra_fields
+        mem.dataProvider().addAttributes(all_fields)
+        mem.updateFields()
+        QgsProject.instance().addMapLayer(mem, False)
+        self._get_or_create_group().addLayer(mem)
+        mem.startEditing()
+        self._in_temp_mode = True
+        return mem
+
+    def _ensure_temp_cad_layer(self):
+        """Create an in-memory cad_layers metadata table for unsaved-project drawing."""
+        if self._layer_alive(self._cad_lyr_layer):
+            return
+        if self._layer_alive(self._temp_cad_lyr_layer):
+            self._cad_lyr_layer = self._temp_cad_lyr_layer
+            return
+        mem = QgsVectorLayer("NoGeometry", "cad_layers", "memory")
+        fields = [
+            QgsField("name",       QVariant.String),
+            QgsField("color",      QVariant.String),
+            QgsField("linetype",   QVariant.String),
+            QgsField("visible",    QVariant.Int),
+            QgsField("locked",     QVariant.Int),
+            QgsField("sort_order", QVariant.Int),
+        ]
+        mem.dataProvider().addAttributes(fields)
+        mem.updateFields()
+        mem.dataProvider().addFeatures([
+            _make_cad_layer_feat(mem.fields(), "0", "#ffffff", "solid", 1, 0, 0)
+        ])
+        QgsProject.instance().addMapLayer(mem, False)
+        self._temp_cad_lyr_layer = mem
+        self._cad_lyr_layer = mem
+
+    def _notify_temp_mode(self):
+        """Show a one-time info bar message when first drawing in unsaved-project mode."""
+        if self._temp_notified:
+            return
+        self._temp_notified = True
+        try:
+            from qgis.utils import iface
+            iface.messageBar().pushMessage(
+                "UgSurv CAD",
+                "Drawing on temporary layers — features will be saved to GeoPackage when you save the project.",
+                level=0,
+                duration=6,
+            )
+        except Exception:
+            pass
+
+    def _cleanup_temp_layers(self):
+        """Remove any in-memory temp layers from the project (called on project clear)."""
+        for attr in ('_temp_points_layer', '_temp_lines_layer',
+                     '_temp_circles_layer', '_temp_cad_lyr_layer'):
+            lyr = getattr(self, attr)
+            if self._layer_alive(lyr):
+                with _suppress():
+                    QgsProject.instance().removeMapLayer(lyr.id())
+            setattr(self, attr, None)
+        self._in_temp_mode = False
+
+    def _migrate_temp_to_gpkg(self):
+        """Copy all features from in-memory temp layers into the permanent GeoPackage."""
+        # Commit any pending edits on temp layers so getFeatures() is consistent.
+        for attr in ('_temp_points_layer', '_temp_lines_layer',
+                     '_temp_circles_layer', '_temp_cad_lyr_layer'):
+            lyr = getattr(self, attr)
+            if self._layer_alive(lyr) and lyr.isEditable():
+                lyr.commitChanges()
+
+        # Collect temp features before we clear the permanent layer references.
+        temp_data = {}
+        for attr in ('_temp_points_layer', '_temp_lines_layer', '_temp_circles_layer'):
+            lyr = getattr(self, attr)
+            temp_data[attr] = (lyr, list(lyr.getFeatures()) if self._layer_alive(lyr) else [])
+
+        # Build the CAD-layer features for migration.
+        temp_cad = self._temp_cad_lyr_layer
+        temp_cad_feats = (list(temp_cad.getFeatures())
+                          if self._layer_alive(temp_cad) else [])
+
+        # Reset permanent layer refs so _ensure_* recreates them from the GPKG.
+        self._points_layer  = None
+        self._lines_layer   = None
+        self._circles_layer = None
+        self._cad_lyr_layer = None
+        self._in_temp_mode  = False   # allow GPKG path inside _ensure_*
+
+        migrations = [
+            ('_temp_points_layer',  '_points_layer',  self._ensure_points_layer),
+            ('_temp_lines_layer',   '_lines_layer',   self._ensure_lines_layer),
+            ('_temp_circles_layer', '_circles_layer', self._ensure_circles_layer),
+        ]
+
+        for temp_attr, perm_attr, ensure_fn in migrations:
+            temp_lyr, features = temp_data[temp_attr]
+            if not self._layer_alive(temp_lyr):
+                continue
+
+            if features:
+                ensure_fn()
+                perm = getattr(self, perm_attr)
+                if self._layer_alive(perm):
+                    if not perm.isEditable():
+                        perm.startEditing()
+                    perm_fields = perm.fields()
+                    for feat in features:
+                        new_feat = QgsFeature(perm_fields)
+                        new_feat.setGeometry(feat.geometry())
+                        for field in feat.fields():
+                            idx = perm_fields.indexOf(field.name())
+                            if idx >= 0:
+                                new_feat[field.name()] = feat[field.name()]
+                        perm.addFeature(new_feat)
+
+            with _suppress():
+                QgsProject.instance().removeMapLayer(temp_lyr.id())
+            setattr(self, temp_attr, None)
+
+        # Migrate cad_layers metadata: replace GPKG default with temp data.
+        if temp_cad_feats:
+            self._ensure_gpkg_file()
+            perm_cad = self._cad_lyr_layer
+            if self._layer_alive(perm_cad):
+                if not perm_cad.isEditable():
+                    perm_cad.startEditing()
+                default_fids = [f.id() for f in perm_cad.getFeatures()]
+                perm_cad.deleteFeatures(default_fids)
+                perm_fields = perm_cad.fields()
+                for feat in temp_cad_feats:
+                    new_feat = QgsFeature(perm_fields)
+                    for field in feat.fields():
+                        idx = perm_fields.indexOf(field.name())
+                        if idx >= 0:
+                            new_feat[field.name()] = feat[field.name()]
+                    perm_cad.addFeature(new_feat)
+                perm_cad.commitChanges()
+
+        if self._layer_alive(temp_cad):
+            with _suppress():
+                QgsProject.instance().removeMapLayer(temp_cad.id())
+        self._temp_cad_lyr_layer = None
+
+        # Clear undo history — layer IDs changed; old steps are invalid.
+        if self._action_history is not None:
+            self._action_history.clear()
+
+        print("[UgSurv] Temporary features migrated to GeoPackage.")
 
     def _ensure_gpkg_file(self):
         """Ensure the GPKG file and cad_layers metadata table exist. No geometry tables yet."""

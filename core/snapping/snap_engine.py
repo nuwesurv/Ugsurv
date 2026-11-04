@@ -17,6 +17,12 @@ from typing import Optional
 from qgis.core import QgsPointXY, QgsRectangle
 from ..events import SnapType
 
+# Beyond this map-unit radius the snap search rect becomes so large that
+# getFeatures() returns the entire dataset and the intersection provider's
+# O(n²) loop crashes QGIS.  500 m is already unreachable in normal drawing
+# work (EPSG:32636 units are metres).
+_MAX_TOLERANCE_MU = 2000.0
+
 
 @dataclass
 class SnapResult:
@@ -62,16 +68,25 @@ class SnapEngine:
         tolerance_mu = self._px_to_map_units(
             self._settings.tolerance_px, canvas
         )
-        search_rect  = QgsRectangle(
-            raw_point.x() - tolerance_mu, raw_point.y() - tolerance_mu,
-            raw_point.x() + tolerance_mu, raw_point.y() + tolerance_mu,
+        if tolerance_mu > _MAX_TOLERANCE_MU:
+            return None
+
+        # Providers query layers stored in EPSG:32636.  When the project CRS
+        # differs, raw_point is in project CRS so we must transform it before
+        # building the search rect and passing it to providers.
+        crs_mgr  = getattr(self, '_crs_mgr', None)
+        layer_raw = crs_mgr.project_to_layer(raw_point) if crs_mgr else raw_point
+
+        search_rect = QgsRectangle(
+            layer_raw.x() - tolerance_mu, layer_raw.y() - tolerance_mu,
+            layer_raw.x() + tolerance_mu, layer_raw.y() + tolerance_mu,
         )
 
         candidates: list[SnapResult] = []
         for key, provider in self._providers.items():
             if not self._settings.is_enabled(key):
                 continue
-            hits = provider.query(raw_point, search_rect, self._storage)
+            hits = provider.query(layer_raw, search_rect, self._storage)
             candidates.extend(hits)
 
         within = [r for r in candidates if r.distance <= tolerance_mu]
@@ -79,7 +94,35 @@ class SnapEngine:
             return None
 
         # Sort by (tier, distance): higher tier loses even if closer to cursor.
-        return min(within, key=lambda r: (_SNAP_TIER.get(r.snap_type, 99), r.distance))
+        best = min(within, key=lambda r: (_SNAP_TIER.get(r.snap_type, 99), r.distance))
+
+        if crs_mgr:
+            # Snap point is in layer CRS — convert back to project CRS for callers.
+            best = SnapResult(
+                crs_mgr.layer_to_project(best.point),
+                best.snap_type,
+                best.distance,
+            )
+            # ExtensionProvider exposes active_endpoint / active_direction so
+            # drawing tools can follow the extension line.  Both must be in
+            # project CRS after this transform.
+            ext_prov = self._providers.get("extension")
+            if ext_prov and ext_prov.active_endpoint:
+                ep_layer = ext_prov.active_endpoint
+                ep_proj  = crs_mgr.layer_to_project(ep_layer)
+                if ext_prov.active_direction:
+                    ux, uy = ext_prov.active_direction
+                    # Step one unit in layer CRS then project to get direction.
+                    ep2_proj = crs_mgr.layer_to_project(
+                        QgsPointXY(ep_layer.x() + ux, ep_layer.y() + uy)
+                    )
+                    dx, dy = ep2_proj.x() - ep_proj.x(), ep2_proj.y() - ep_proj.y()
+                    ln = (dx * dx + dy * dy) ** 0.5
+                    if ln > 1e-10:
+                        ext_prov.active_direction = (dx / ln, dy / ln)
+                ext_prov.active_endpoint = ep_proj
+
+        return best
 
     @staticmethod
     def _px_to_map_units(px: int, canvas) -> float:

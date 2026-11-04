@@ -93,8 +93,11 @@ class AddVertexTool(BaseTool):
     def _update_preview(self, cursor_pt: QgsPointXY):
         if self._pending_layer is None:
             return
-        feat = self._pending_layer.getFeature(self._pending_fid)
-        pts  = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        feat    = self._pending_layer.getFeature(self._pending_fid)
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        pts_lyr = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
+        pts     = ([crs_mgr.layer_to_project(p) for p in pts_lyr]
+                   if crs_mgr else pts_lyr)
         new_pts = pts[:self._insert_idx] + [cursor_pt] + pts[self._insert_idx:]
         if self._preview_rb is None:
             self._preview_rb = self._new_rubber_band(
@@ -106,9 +109,11 @@ class AddVertexTool(BaseTool):
     def _commit_insert(self, pt: QgsPointXY):
         if self._pending_layer is None:
             return
-        feat = self._pending_layer.getFeature(self._pending_fid)
+        feat    = self._pending_layer.getFeature(self._pending_fid)
+        crs_mgr = getattr(self._ctx, 'crs_manager', None)
+        layer_pt = crs_mgr.project_to_layer(pt) if crs_mgr else pt
         pts  = [QgsPointXY(v.x(), v.y()) for v in feat.geometry().vertices()]
-        new_pts = pts[:self._insert_idx] + [pt] + pts[self._insert_idx:]
+        new_pts = pts[:self._insert_idx] + [layer_pt] + pts[self._insert_idx:]
         g = _rebuild_geom(new_pts, self._pending_layer)
         if not self._pending_layer.isEditable():
             self._pending_layer.startEditing()

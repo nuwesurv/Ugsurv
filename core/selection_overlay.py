@@ -37,7 +37,7 @@ class SelectionOverlay:
             if geom.isEmpty():
                 continue
             rb = QgsRubberBand(self._canvas, geom.type())
-            rb.setToGeometry(geom)
+            rb.setToGeometry(geom, layer)
             rb.setColor(_style.SELECT_OVERLAY)
             rb.setFillColor(_style.SELECT_OVERLAY_FILL)
             rb.setWidth(_style.RB_WIDTH)

@@ -9,7 +9,7 @@ builds the toolbar and docks, and handles activate/deactivate.
 import os
 import contextlib
 
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon, QKeySequence
 from qgis.PyQt.QtWidgets import QAction, QShortcut, QToolBar
 
@@ -203,7 +203,8 @@ class Ugsurv:
         storage.set_crs_manager(crs_mgr)
         ctx.storage_manager = storage
         self._storage       = storage
-        snap_engine._storage = storage
+        snap_engine._storage  = storage
+        snap_engine._crs_mgr  = crs_mgr
 
         from .core.action_history import ActionHistory
         action_history = ActionHistory()
@@ -339,9 +340,19 @@ class Ugsurv:
         self._sel = sel
 
         layers_dock = CadLayersDock(cad_lyr_mgr, sel, storage, mw)
+
+        # Find any existing right-side dock to tabify into the same tab bar
+        from qgis.PyQt.QtWidgets import QDockWidget as _QDW
+        existing_right = [d for d in mw.findChildren(_QDW)
+                          if mw.dockWidgetArea(d) == Qt.DockWidgetArea.RightDockWidgetArea]
+
         iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, props_dock)
+        if existing_right:
+            mw.tabifyDockWidget(existing_right[0], props_dock)
+        props_dock.hide()
+
         mw.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, layers_dock)
-        mw.splitDockWidget(props_dock, layers_dock, Qt.Vertical)
+        mw.tabifyDockWidget(props_dock, layers_dock)
         layers_dock.hide()   # hidden by default; open with CADLAYERS / CL
         self._layers_dock = layers_dock
 
@@ -394,11 +405,11 @@ class Ugsurv:
 
         # Properties panel — hidden by default, toggle with PROPS / PR
         def _toggle_props():
-            if props.isVisible():
-                props.hide()
+            if props_dock.isVisible():
+                props_dock.hide()
             else:
-                props.show()
-                props.raise_()
+                props_dock.show()
+                props_dock.raise_()
         cmd_dock.register_ui_command("PROPS", "PR", callback=_toggle_props)
 
         # HELP command — prints all available commands to the log
@@ -606,6 +617,14 @@ class Ugsurv:
         tool_mgr.toolChanged.connect(_on_tool_for_cmdline)
         self._tool_for_cmdline_slot = _on_tool_for_cmdline
 
+        # When a tool activates from the command-line input, the QLineEdit keeps
+        # focus and swallows subsequent keystrokes instead of routing them through
+        # the canvas → GlobalKeyFilter → DynamicInputWidget.  Defer a focus
+        # hand-off to the canvas so the Enter event fully completes first.
+        cmd_dock.canvasFocusRequested.connect(
+            lambda: QTimer.singleShot(0, canvas.setFocus)
+        )
+
         # 6. Keyboard shortcuts ──────────────────────────────────────────
         self._shortcuts = _install_shortcuts(
             canvas, ortho, polar, snap_settings, tool_mgr, ortho_act
@@ -645,20 +664,11 @@ class Ugsurv:
         _key_filter._redo_callback = _do_redo
 
         # 7. Gating hint ─────────────────────────────────────────────────
+        # Tools are always enabled; the "temp mode" notification is shown by
+        # StorageManager on the first draw when no project file is saved.
         def _on_gating(enabled: bool):
-            if not enabled:
-                iface.messageBar().pushMessage(
-                    "UgSurv CAD",
-                    "Save the project before drafting.",
-                    level=0, duration=3
-                )
+            pass
         storage.gatingChanged.connect(_on_gating)
-        if not storage.enabled:
-            iface.messageBar().pushMessage(
-                "UgSurv CAD",
-                "Save the project before drafting.",
-                level=0, duration=3
-            )
 
         # 8. Extra utility panels (docks & tools) ────────────────────────
         self._register_extra_tools(cmd_dock, iface, canvas, mw)
@@ -748,6 +758,16 @@ class Ugsurv:
                     iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
                     if self._extra_docks:
                         mw.tabifyDockWidget(self._extra_docks[0], dock)
+                    else:
+                        # No plugin docks open yet — tabify with any existing
+                        # left-area dock (e.g. Layers panel) so the tool appears
+                        # as a tab rather than stacking below and expanding height.
+                        from qgis.PyQt.QtWidgets import QDockWidget as _QDW
+                        left = [d for d in mw.findChildren(_QDW)
+                                if mw.dockWidgetArea(d) == Qt.DockWidgetArea.LeftDockWidgetArea
+                                and d is not dock and not _sip.isdeleted(d)]
+                        if left:
+                            mw.tabifyDockWidget(left[0], dock)
                     self._extra_docks.append(dock)
                 state[0].show()
                 state[0].raise_()
@@ -763,9 +783,44 @@ class Ugsurv:
         cmd_dock.register_ui_command("CRSADJ", "CRS",
             callback=_make_toggle(lambda: CrsAdjustDock(mw)))
 
-        from .module_wz_dialogs.feature_navigator import FeatureNavigatorDock
+        from .module_wz_dialogs.feature_navigator import FeatureNavigatorDock, FileLocatorDock
         cmd_dock.register_ui_command("NAV", "FN",
             callback=_make_toggle(lambda: FeatureNavigatorDock(canvas, mw)))
+
+        _file_loc_state = [None]
+
+        def _open_file_locator_standalone():
+            from qgis.PyQt import sip as _sip
+            from qgis.PyQt.QtWidgets import QDockWidget as _QDW
+            self._extra_docks = [d for d in self._extra_docks if not _sip.isdeleted(d)]
+            if _file_loc_state[0] is not None and _sip.isdeleted(_file_loc_state[0]):
+                _file_loc_state[0] = None
+            if _file_loc_state[0] is None:
+                dock = FileLocatorDock(dock=None)
+                dock.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+                def _on_fl_destroyed(_d=dock):
+                    for i in reversed(range(len(self._extra_docks))):
+                        try:
+                            if self._extra_docks[i] is _d:
+                                self._extra_docks.pop(i); break
+                        except Exception:
+                            self._extra_docks.pop(i)
+                    if _file_loc_state[0] is _d:
+                        _file_loc_state[0] = None
+                dock.destroyed.connect(_on_fl_destroyed)
+                _file_loc_state[0] = dock
+                iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+                existing = [d for d in mw.findChildren(_QDW)
+                            if mw.dockWidgetArea(d) == Qt.DockWidgetArea.RightDockWidgetArea
+                            and d is not dock]
+                if existing:
+                    mw.tabifyDockWidget(existing[0], dock)
+                self._extra_docks.append(dock)
+            _file_loc_state[0].show()
+            _file_loc_state[0].raise_()
+
+        cmd_dock.register_ui_command("FILELOC", "FL",
+            callback=_open_file_locator_standalone)
 
         def _activate_revert():
             if self._revert_tool is None:
@@ -781,6 +836,43 @@ class Ugsurv:
         from .module_wz_dialogs.merge_lines import MergeLinesDock
         cmd_dock.register_ui_command("MERGE", "ML",
             callback=_make_toggle(lambda: MergeLinesDock(mw)))
+
+        from .module_wz_dialogs.map_styler import MapStylerDock
+        cmd_dock.register_ui_command("STYLE", "STY",
+            callback=_make_toggle(lambda: MapStylerDock(mw)))
+
+        _datacheck_state = [None]
+        def _open_datacheck():
+            from qgis.PyQt import sip as _sip
+            from qgis.PyQt.QtWidgets import QDockWidget as _QDW
+            from .module_wz_dialogs.data_check import DataCheckDock
+            self._extra_docks = [d for d in self._extra_docks if not _sip.isdeleted(d)]
+            if _datacheck_state[0] is not None and _sip.isdeleted(_datacheck_state[0]):
+                _datacheck_state[0] = None
+            if _datacheck_state[0] is None:
+                dock = DataCheckDock(mw)
+                dock.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+                def _on_dc_destroyed(_d=dock):
+                    for i in reversed(range(len(self._extra_docks))):
+                        try:
+                            if self._extra_docks[i] is _d:
+                                self._extra_docks.pop(i); break
+                        except Exception:
+                            self._extra_docks.pop(i)
+                    if _datacheck_state[0] is _d:
+                        _datacheck_state[0] = None
+                dock.destroyed.connect(_on_dc_destroyed)
+                _datacheck_state[0] = dock
+                iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+                existing = [d for d in mw.findChildren(_QDW)
+                            if mw.dockWidgetArea(d) == Qt.DockWidgetArea.RightDockWidgetArea
+                            and d is not dock]
+                if existing:
+                    mw.tabifyDockWidget(existing[0], dock)
+                self._extra_docks.append(dock)
+            _datacheck_state[0].show()
+            _datacheck_state[0].raise_()
+        cmd_dock.register_ui_command("DATACHECK", "DC", callback=_open_datacheck)
 
         _pd = self._props_dock
         cmd_dock.register_ui_command("PROPSDOCK", "PD",
@@ -849,9 +941,50 @@ class Ugsurv:
                 apply_point_color_renderer, apply_point_label_style,
                 apply_polyline_color_renderer, apply_circle_color_renderer,
             )
-            new_mode = _sm.toggle()
-            label = "Map Units (metres)" if new_mode == _sm.MAPUNITS else "Points / MM (screen-fixed)"
-            cmd_dock.log(f"Sizing mode → {label}", "#aaddff")
+            from qgis.PyQt.QtWidgets import (
+                QDialog, QVBoxLayout, QRadioButton,
+                QDialogButtonBox, QLabel,
+            )
+
+            _MODES = [
+                (_sm.POINTS,   "Points / MM  (screen-fixed)"),
+                (_sm.MAPUNITS, "Map Units  (metres)"),
+            ]
+            current = _sm.get()
+
+            dlg = QDialog(mw)
+            dlg.setWindowTitle("Sizing Mode")
+            dlg.setMinimumWidth(260)
+            layout = QVBoxLayout(dlg)
+            layout.addWidget(QLabel("Select sizing mode:"))
+
+            radios = []
+            for key, lbl in _MODES:
+                rb = QRadioButton(lbl)
+                if key == current:
+                    rb.setChecked(True)
+                layout.addWidget(rb)
+                radios.append(rb)
+
+            bbox = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok |
+                QDialogButtonBox.StandardButton.Cancel
+            )
+            bbox.accepted.connect(dlg.accept)
+            bbox.rejected.connect(dlg.reject)
+            layout.addWidget(bbox)
+
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            chosen_key, chosen_lbl = next(
+                (k, l) for rb, (k, l) in zip(radios, _MODES) if rb.isChecked()
+            )
+            if chosen_key == current:
+                return
+
+            _sm.put(chosen_key)
+            cmd_dock.log(f"Sizing mode → {chosen_lbl}", "#aaddff")
 
             # Re-apply renderers to all currently loaded plugin layers
             _LAYER_RENDERERS = {

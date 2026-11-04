@@ -110,9 +110,10 @@ QListWidget::item:selected, QListWidget::item:hover {
 
 
 class CommandLineWidget(QDockWidget):
-    commandEntered   = pyqtSignal(str)   # raw token or typed text
-    textValueEntered = pyqtSignal(str)   # used for mid-command text
-    closed           = pyqtSignal()      # emitted when dock is closed by user
+    commandEntered      = pyqtSignal(str)   # raw token or typed text
+    textValueEntered    = pyqtSignal(str)   # used for mid-command text
+    closed              = pyqtSignal()      # emitted when dock is closed by user
+    canvasFocusRequested = pyqtSignal()     # emitted when a tool activates — caller should return focus to the canvas
 
     def __init__(self, dispatcher, input_translator, parent=None):
         super().__init__("Command", parent)
@@ -216,6 +217,8 @@ class CommandLineWidget(QDockWidget):
                 self.clear_hint()
         except RuntimeError:  # nosec B110
             pass
+        if active:
+            self.canvasFocusRequested.emit()
 
     def log_hint(self, text: str):
         """Show a formatted tool hint as the last line of the log (temporary — not saved)."""

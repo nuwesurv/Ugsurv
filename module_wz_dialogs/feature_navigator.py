@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 import os
 
-from qgis.PyQt.QtCore import Qt, QRectF
+from qgis.PyQt.QtCore import Qt, QRectF, QVariant
 from qgis.PyQt.QtGui import QFont, QColor, QFontMetricsF
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton,
     QLineEdit, QCheckBox, QFrame, QSizePolicy, QFileDialog,
     QApplication, QSplitter, QScrollArea, QFormLayout, QComboBox,
+    QMenu, QInputDialog, QMessageBox,
 )
 
 from qgis.gui import (
     QgsMapLayerComboBox, QgsExpressionBuilderDialog,
     QgsRubberBand, QgsMapCanvasItem, QgsFieldComboBox,
+    QgsProjectionSelectionWidget,
 )
 
 from ..core import style as _style
@@ -25,11 +27,13 @@ from qgis.core import (
     QgsPointXY,
     QgsWkbTypes,
     QgsCoordinateTransform,
+    QgsCoordinateReferenceSystem,
     QgsProject,
     QgsDistanceArea,
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
+    QgsField,
 )
 
 _LABEL_FONT = QFont('Arial', 7)
@@ -113,6 +117,14 @@ class FeatureNavigatorDock(QDockWidget):
 
     def closeEvent(self, event):
         self._clear_dist_overlays()
+        win = getattr(self, '_file_loc_win', None)
+        if win is not None:
+            try:
+                win.close()
+                win.deleteLater()
+            except Exception:
+                pass
+            self._file_loc_win = None
         super().closeEvent(event)
 
     # ------------------------------------------------------------------ #
@@ -189,9 +201,16 @@ class FeatureNavigatorDock(QDockWidget):
         vbox.addWidget(hint)
 
         # ── Options ─────────────────────────────────────────────────────
+        zoom_row = QHBoxLayout()
         self.zoom_chk = QCheckBox('Zoom to feature')
         self.zoom_chk.setChecked(True)
-        vbox.addWidget(self.zoom_chk)
+        zoom_row.addWidget(self.zoom_chk)
+        zoom_row.addStretch()
+        self.is_clean_btn = QPushButton('Set is_clean')
+        self.is_clean_btn.setFixedWidth(110)
+        self.is_clean_btn.clicked.connect(self._toggle_is_clean)
+        zoom_row.addWidget(self.is_clean_btn)
+        vbox.addLayout(zoom_row)
 
         self.select_chk = QCheckBox('Select feature on layer')
         self.select_chk.setChecked(True)
@@ -217,16 +236,26 @@ class FeatureNavigatorDock(QDockWidget):
         poly_row.addWidget(self.poly_layer_combo)
         vbox.addLayout(poly_row)
 
-        # ── Advanced ─────────────────────────────────────────────────────
+        # ── Advanced / File Locator ───────────────────────────────────────
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.HLine)
         sep3.setFrameShadow(QFrame.Sunken)
         vbox.addWidget(sep3)
 
+        bottom_row = QHBoxLayout()
+
         self.adv_btn = QPushButton('Advanced')
         self.adv_btn.setToolTip('Open full-screen view with PDF viewer and attribute editor')
         self.adv_btn.clicked.connect(self._open_advanced)
-        vbox.addWidget(self.adv_btn)
+        bottom_row.addWidget(self.adv_btn)
+
+        self.file_loc_btn = QPushButton('File Locator')
+        self.file_loc_btn.setToolTip(
+            'Search a folder for CSV/Excel files containing the current feature ID')
+        self.file_loc_btn.clicked.connect(self._open_file_locator)
+        bottom_row.addWidget(self.file_loc_btn)
+
+        vbox.addLayout(bottom_row)
 
         self.setWidget(root)
 
@@ -253,6 +282,7 @@ class FeatureNavigatorDock(QDockWidget):
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
         self._clear_dist_overlays()
+        self._refresh_is_clean_btn()
 
     def _on_dist_toggle(self, state):
         if not state:
@@ -368,7 +398,62 @@ class FeatureNavigatorDock(QDockWidget):
                 self.canvas.refresh()
 
         self._update_nav_buttons()
+        self._refresh_is_clean_btn()
         self._update_vertex_distances()
+
+    # ------------------------------------------------------------------ #
+    #  is_clean toggle                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _ensure_is_clean_field(self, layer):
+        if layer.fields().indexOf('is_clean') >= 0:
+            return True
+        if not layer.isEditable():
+            layer.startEditing()
+        ok = layer.addAttribute(QgsField('is_clean', QVariant.Bool))
+        if ok:
+            layer.commitChanges()
+        else:
+            layer.rollBack()
+        return ok
+
+    def _toggle_is_clean(self):
+        layer = self.layer_combo.currentLayer()
+        if not isinstance(layer, QgsVectorLayer) or self._index < 0 or not self._fids:
+            return
+        if not self._ensure_is_clean_field(layer):
+            return
+        fid = self._fids[self._index]
+        field_idx = layer.fields().indexOf('is_clean')
+        attrs = layer.getFeature(fid).attributes()
+        current_val = attrs[field_idx] if field_idx < len(attrs) else None
+        new_val = not bool(current_val)
+        if not layer.isEditable():
+            layer.startEditing()
+        layer.changeAttributeValue(fid, field_idx, new_val)
+        self._refresh_is_clean_btn()
+
+    def _refresh_is_clean_btn(self):
+        layer = self.layer_combo.currentLayer()
+        if not isinstance(layer, QgsVectorLayer) or self._index < 0 or not self._fids:
+            self.is_clean_btn.setText('Set is_clean')
+            self.is_clean_btn.setStyleSheet('')
+            return
+        field_idx = layer.fields().indexOf('is_clean')
+        if field_idx < 0:
+            self.is_clean_btn.setText('Set is_clean')
+            self.is_clean_btn.setStyleSheet('')
+            return
+        attrs = layer.getFeature(self._fids[self._index]).attributes()
+        val = attrs[field_idx] if field_idx < len(attrs) else None
+        if val:
+            self.is_clean_btn.setText('✓  Clean')
+            self.is_clean_btn.setStyleSheet(
+                'background-color: #4CAF50; color: white; font-weight: bold;')
+        else:
+            self.is_clean_btn.setText('✗  Not Clean')
+            self.is_clean_btn.setStyleSheet(
+                'background-color: #e53935; color: white; font-weight: bold;')
 
     # ------------------------------------------------------------------ #
     #  Advanced window                                                     #
@@ -391,6 +476,23 @@ class FeatureNavigatorDock(QDockWidget):
         self._adv_win.show()
         self._adv_win.raise_()
         self._adv_win.activateWindow()
+
+    def _open_file_locator(self):
+        if not hasattr(self, '_file_loc_win') or self._file_loc_win is None:
+            from qgis.utils import iface
+            from qgis.PyQt.QtWidgets import QDockWidget as _QDW
+            self._file_loc_win = FileLocatorDock(dock=self, parent=None)
+            self._file_loc_win.destroyed.connect(
+                lambda: setattr(self, '_file_loc_win', None))
+            mw = iface.mainWindow()
+            iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._file_loc_win)
+            existing = [d for d in mw.findChildren(_QDW)
+                        if mw.dockWidgetArea(d) == Qt.DockWidgetArea.RightDockWidgetArea
+                        and d is not self._file_loc_win]
+            if existing:
+                mw.tabifyDockWidget(existing[0], self._file_loc_win)
+        self._file_loc_win.show()
+        self._file_loc_win.raise_()
 
     # ------------------------------------------------------------------ #
     #  Vertex → polygon distance                                           #
@@ -1108,8 +1210,11 @@ class AdvancedNavigatorWindow(QDialog):
                     path = os.path.join(folder, name)
                     btn = QPushButton(name)
                     btn.setStyleSheet('text-align: left; padding: 3px 6px;')
-                    btn.setToolTip(path)
+                    btn.setToolTip('Left-click to open  |  Right-click for options')
                     btn.clicked.connect(lambda _c, p=path: self._open_pdf(p))
+                    btn.setContextMenuPolicy(Qt.CustomContextMenu)
+                    btn.customContextMenuRequested.connect(
+                        lambda _pos, p=path: self._pdf_context_menu(p))
                     layout.addWidget(btn)
             else:
                 layout.addWidget(self._gray('No PDF files in folder.'))
@@ -1164,6 +1269,77 @@ class AdvancedNavigatorWindow(QDialog):
         if folder:
             self._folder_edit.setText(folder)
             self._refresh_pdf_list()
+
+    def _pdf_context_menu(self, path):
+        menu = QMenu(self)
+        menu.addAction('Open',   lambda: self._open_pdf(path))
+        menu.addSeparator()
+        menu.addAction('Rename', lambda: self._rename_pdf(path))
+        menu.addAction('Delete', lambda: self._delete_pdf(path))
+        menu.exec_(self.cursor().pos())
+
+    def _rename_pdf(self, path):
+        folder   = os.path.dirname(path)
+        old_name = os.path.basename(path)
+        stem     = old_name[:-4] if old_name.lower().endswith('.pdf') else old_name
+
+        new_stem, ok = QInputDialog.getText(
+            self, 'Rename PDF', 'New name (without .pdf):', text=stem)
+        if not ok:
+            return
+        new_stem = new_stem.strip()
+        if not new_stem:
+            QMessageBox.warning(self, 'Rename', 'Name cannot be empty.')
+            return
+
+        illegal = set(r'\/:*?"<>|')
+        if any(c in illegal for c in new_stem):
+            QMessageBox.warning(self, 'Rename',
+                                'Name contains illegal characters.')
+            return
+
+        new_name = new_stem + '.pdf'
+        new_path = os.path.join(folder, new_name)
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, 'Rename',
+                                f'"{new_name}" already exists in this folder.')
+            return
+
+        try:
+            os.rename(path, new_path)
+        except OSError as e:
+            QMessageBox.critical(self, 'Rename failed', str(e))
+            return
+
+        if self._current_pdf_name == old_name:
+            self._current_pdf_name = new_name
+            self._open_pdf(new_path)
+
+        self._refresh_pdf_list()
+
+    def _delete_pdf(self, path):
+        name = os.path.basename(path)
+        reply = QMessageBox.question(
+            self, 'Delete PDF',
+            f'Permanently delete "{name}"?\nThis cannot be undone.',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            os.remove(path)
+        except OSError as e:
+            QMessageBox.critical(self, 'Delete failed', str(e))
+            return
+
+        if self._current_pdf_name == name:
+            self._current_pdf_name = None
+            from qgis.PyQt.QtCore import QUrl
+            self._web_view.setUrl(QUrl())
+
+        self._refresh_pdf_list()
 
     # ------------------------------------------------------------------ #
     #  Attribute editor                                                    #
@@ -1364,3 +1540,413 @@ class AdvancedNavigatorWindow(QDialog):
             self._attr_status.setText('Saved.')
         except Exception as e:
             self._attr_status.setText(f'Save error: {e}')
+
+
+# ======================================================================== #
+#  X / Y column picker (helper for File Locator)                            #
+# ======================================================================== #
+
+def _detect_xy_columns(columns):
+    """Return best-guess (east_col, north_col) by delegating to parcel plotter's detector."""
+    from .parcel_plotter import _detect_columns
+    detected = _detect_columns(columns)
+    return detected.get('east'), detected.get('north')
+
+
+class _XYPickerDialog(QDialog):
+    """Choose X, Y columns and CRS before loading a tabular file as a point layer."""
+
+    def __init__(self, filename, headers, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f'Load as Point Layer — {filename}')
+        self.setMinimumWidth(340)
+        self._build_ui(headers)
+
+    def _build_ui(self, headers):
+        vbox = QVBoxLayout(self)
+        vbox.setSpacing(6)
+        vbox.setContentsMargins(8, 8, 8, 8)
+
+        form = QFormLayout()
+        form.setSpacing(4)
+
+        self._x_combo = QComboBox()
+        self._x_combo.addItems(headers)
+        form.addRow('X / Easting column:', self._x_combo)
+
+        self._y_combo = QComboBox()
+        self._y_combo.addItems(headers)
+        form.addRow('Y / Northing column:', self._y_combo)
+
+        self._crs_widget = QgsProjectionSelectionWidget()
+        self._crs_widget.setCrs(QgsCoordinateReferenceSystem('EPSG:32636'))
+        form.addRow('CRS:', self._crs_widget)
+
+        vbox.addLayout(form)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton('Load Layer')
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton('Cancel')
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        vbox.addLayout(btns)
+
+        east_col, north_col = _detect_xy_columns(headers)
+        if east_col:
+            self._x_combo.setCurrentText(east_col)
+        if north_col:
+            self._y_combo.setCurrentText(north_col)
+
+    def result_values(self):
+        return (
+            self._x_combo.currentText(),
+            self._y_combo.currentText(),
+            self._crs_widget.crs().authid(),
+        )
+
+
+# ======================================================================== #
+#  File Locator Dialog                                                       #
+# ======================================================================== #
+
+class FileLocatorDock(QDockWidget):
+    """
+    Right-side dock that searches a folder for CSV / Excel files containing
+    a given feature-field value as an exact cell match.  Matching files are
+    listed as clickable buttons; each can be opened in the system viewer or
+    loaded as a QGIS point layer.
+
+    The dock reads the current feature ID directly from the navigator dock on
+    every search / refresh, so it stays in sync without needing to be reopened.
+    """
+
+    def __init__(self, dock, parent=None):
+        super().__init__(parent)
+        self._dock = dock          # FeatureNavigatorDock, or None for standalone
+        self.setWindowTitle('File Locator')
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(380)
+        self._build_ui()
+        self._refresh_id_display()
+
+    # ------------------------------------------------------------------ #
+    #  UI                                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _build_ui(self):
+        root = QWidget()
+        vbox = QVBoxLayout(root)
+        vbox.setSpacing(6)
+        vbox.setContentsMargins(8, 8, 8, 8)
+
+        # ── Feature ID source ────────────────────────────────────────────
+        self._field_combo = QgsFieldComboBox()
+        if self._dock is not None:
+            layer = self._dock.layer_combo.currentLayer()
+            if isinstance(layer, QgsVectorLayer):
+                self._field_combo.setLayer(layer)
+            self._field_combo.fieldChanged.connect(self._refresh_id_display)
+            field_row = QHBoxLayout()
+            field_row.addWidget(QLabel('ID field:'))
+            field_row.addWidget(self._field_combo, 1)
+            vbox.addLayout(field_row)
+
+        id_row = QHBoxLayout()
+        id_row.addWidget(QLabel('Search ID:'))
+        self._id_edit = QLineEdit()
+        self._id_edit.setPlaceholderText('Type or auto-fill from feature…')
+        id_row.addWidget(self._id_edit, 1)
+        if self._dock is not None:
+            refresh_btn = QPushButton('Refresh')
+            refresh_btn.setFixedWidth(68)
+            refresh_btn.setToolTip('Pull ID from the current navigator feature')
+            refresh_btn.clicked.connect(self._on_refresh)
+            id_row.addWidget(refresh_btn)
+        vbox.addLayout(id_row)
+
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.HLine)
+        sep1.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep1)
+
+        # ── Search folder ────────────────────────────────────────────────
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel('Search folder:'))
+        self._folder_edit = QLineEdit()
+        self._folder_edit.setPlaceholderText('Browse to folder to search in…')
+        folder_row.addWidget(self._folder_edit, 1)
+        browse_btn = QPushButton('…')
+        browse_btn.setFixedWidth(28)
+        browse_btn.clicked.connect(self._browse_folder)
+        folder_row.addWidget(browse_btn)
+        vbox.addLayout(folder_row)
+
+        self._recursive_chk = QCheckBox('Include subfolders')
+        self._recursive_chk.setChecked(True)
+        vbox.addWidget(self._recursive_chk)
+
+        self._search_btn = QPushButton('Search')
+        self._search_btn.clicked.connect(self._run_search)
+        vbox.addWidget(self._search_btn)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setFrameShadow(QFrame.Sunken)
+        vbox.addWidget(sep2)
+
+        # ── Status + results ─────────────────────────────────────────────
+        self._status_lbl = QLabel('Configure a field, folder, and click Search.')
+        self._status_lbl.setStyleSheet('color: gray; font-size: 10px;')
+        vbox.addWidget(self._status_lbl)
+
+        self._results_scroll = QScrollArea()
+        self._results_scroll.setWidgetResizable(True)
+        self._results_scroll.setWidget(QWidget())
+        vbox.addWidget(self._results_scroll, 1)
+
+        self.setWidget(root)
+
+    # ------------------------------------------------------------------ #
+    #  ID helpers                                                          #
+    # ------------------------------------------------------------------ #
+
+    def _refresh_id_display(self):
+        if self._dock is None:
+            return
+        layer = self._dock.layer_combo.currentLayer()
+        if not isinstance(layer, QgsVectorLayer) or self._dock._index < 0 or not self._dock._fids:
+            return
+        field = self._field_combo.currentField()
+        if not field:
+            return
+        val = layer.getFeature(self._dock._fids[self._dock._index]).attribute(field)
+        if val is not None:
+            self._id_edit.setText(str(val).strip())
+
+    def _on_refresh(self):
+        if self._dock is None:
+            return
+        layer = self._dock.layer_combo.currentLayer()
+        if isinstance(layer, QgsVectorLayer):
+            self._field_combo.setLayer(layer)
+        self._refresh_id_display()
+
+    def _get_current_id(self):
+        return self._id_edit.text().strip() or None
+
+    # ------------------------------------------------------------------ #
+    #  Folder browse                                                       #
+    # ------------------------------------------------------------------ #
+
+    def _browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select search folder', self._folder_edit.text())
+        if folder:
+            self._folder_edit.setText(folder)
+
+    # ------------------------------------------------------------------ #
+    #  Search                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _run_search(self):
+        search_id = self._get_current_id()
+        if not search_id:
+            self._status_lbl.setText('No valid ID — navigate to a feature first.')
+            return
+
+        folder = self._folder_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            self._status_lbl.setText('Select a valid folder.')
+            return
+
+        self._search_btn.setEnabled(False)
+        self._status_lbl.setText(f'Searching for "{search_id}"…')
+        QApplication.processEvents()
+
+        found = []
+        recursive = self._recursive_chk.isChecked()
+
+        if recursive:
+            for root, _dirs, files in os.walk(folder):
+                for fname in files:
+                    if fname.lower().endswith(('.csv', '.xlsx', '.xls')):
+                        path = os.path.join(root, fname)
+                        self._status_lbl.setText(f'Checking {fname}…')
+                        QApplication.processEvents()
+                        if self._file_contains_id(path, search_id):
+                            found.append(path)
+        else:
+            try:
+                entries = os.listdir(folder)
+            except OSError:
+                entries = []
+            for fname in sorted(entries):
+                if fname.lower().endswith(('.csv', '.xlsx', '.xls')):
+                    path = os.path.join(folder, fname)
+                    if os.path.isfile(path):
+                        self._status_lbl.setText(f'Checking {fname}…')
+                        QApplication.processEvents()
+                        if self._file_contains_id(path, search_id):
+                            found.append(path)
+
+        self._search_btn.setEnabled(True)
+        count = len(found)
+        self._status_lbl.setText(
+            f'{count} file(s) found containing "{search_id}"' if count
+            else f'No files found containing "{search_id}"'
+        )
+        self._show_results(found)
+
+    @staticmethod
+    def _file_contains_id(path, search_id):
+        """Return True if search_id matches any cell exactly (as string)."""
+        try:
+            if path.lower().endswith('.csv'):
+                import csv
+                with open(path, newline='', encoding='utf-8-sig') as f:
+                    for row in csv.reader(f):
+                        if any(str(cell).strip() == search_id for cell in row):
+                            return True
+                return False
+            else:
+                import openpyxl
+                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                try:
+                    for ws in wb.worksheets:
+                        for row in ws.iter_rows(values_only=True):
+                            if any(cell is not None and str(cell).strip() == search_id
+                                   for cell in row):
+                                return True
+                finally:
+                    wb.close()
+                return False
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------ #
+    #  Results list                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _show_results(self, found_paths):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(4)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        for path in found_paths:
+            row_w = QWidget()
+            row = QHBoxLayout(row_w)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+
+            open_btn = QPushButton(os.path.basename(path))
+            open_btn.setToolTip(f'Open:  {path}')
+            open_btn.setStyleSheet('text-align: left; padding: 3px 6px;')
+            open_btn.clicked.connect(lambda _c, p=path: self._open_file(p))
+            row.addWidget(open_btn, 1)
+
+            load_btn = QPushButton('Load layer')
+            load_btn.setFixedWidth(88)
+            load_btn.setToolTip(f'Load as QGIS point layer\n{path}')
+            load_btn.clicked.connect(lambda _c, p=path: self._load_as_layer(p))
+            row.addWidget(load_btn)
+
+            layout.addWidget(row_w)
+
+        layout.addStretch()
+        self._results_scroll.setWidget(container)
+
+    # ------------------------------------------------------------------ #
+    #  Open in system viewer                                               #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _open_file(path):
+        try:
+            os.startfile(path)
+        except AttributeError:
+            import subprocess
+            subprocess.Popen(['xdg-open', path])
+
+    # ------------------------------------------------------------------ #
+    #  Load as QGIS point layer                                           #
+    # ------------------------------------------------------------------ #
+
+    def _load_as_layer(self, path):
+        headers = self._read_headers(path)
+        if not headers:
+            QMessageBox.warning(self, 'Load as layer',
+                                'Could not read column headers from file.')
+            return
+
+        dlg = _XYPickerDialog(os.path.basename(path), headers, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        x_col, y_col, crs_str = dlg.result_values()
+        self._do_load(path, x_col, y_col, crs_str)
+
+    @staticmethod
+    def _read_headers(path):
+        try:
+            if path.lower().endswith('.csv'):
+                import csv
+                with open(path, newline='', encoding='utf-8-sig') as f:
+                    return next(csv.reader(f), [])
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            row = next(wb.active.iter_rows(max_row=1, values_only=True), [])
+            wb.close()
+            return [str(c) for c in row if c is not None]
+        except Exception:
+            return []
+
+    def _do_load(self, path, x_col, y_col, crs_str):
+        import urllib.parse
+        layer_name = os.path.splitext(os.path.basename(path))[0]
+
+        try:
+            if path.lower().endswith('.csv'):
+                csv_path = path
+            else:
+                import tempfile
+                import csv as _csv
+                import openpyxl
+                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                rows = list(wb.active.iter_rows(values_only=True))
+                wb.close()
+                if not rows:
+                    QMessageBox.warning(self, 'Load as layer', 'File is empty.')
+                    return
+                hdrs = [str(c) for c in rows[0]]
+                tmp = tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.csv', delete=False,
+                    encoding='utf-8-sig', newline='')
+                writer = _csv.writer(tmp)
+                writer.writerow(hdrs)
+                for r in rows[1:]:
+                    writer.writerow(['' if c is None else str(c) for c in r])
+                tmp.close()
+                csv_path = tmp.name
+
+            x_enc = urllib.parse.quote(x_col)
+            y_enc = urllib.parse.quote(y_col)
+            fwd   = csv_path.replace(os.sep, '/')
+            uri   = (f'file:///{fwd}?delimiter=,&'
+                     f'xField={x_enc}&yField={y_enc}&crs={crs_str}')
+
+            vlayer = QgsVectorLayer(uri, layer_name, 'delimitedtext')
+            if not vlayer.isValid():
+                QMessageBox.warning(
+                    self, 'Load as layer',
+                    'Layer is not valid.\n'
+                    'Check that the selected X/Y columns contain numeric coordinates.')
+                return
+
+            QgsProject.instance().addMapLayer(vlayer)
+            self._status_lbl.setText(f'Loaded layer: {layer_name}')
+
+        except Exception as e:
+            QMessageBox.critical(self, 'Load as layer', str(e))

@@ -87,9 +87,14 @@ class PolylineTool(BaseTool):
         for c in self._ctx.constraints:
             c.set_reference(pt)
         if self._ctx.snap_engine:
+            crs_mgr = getattr(self._ctx, 'crs_manager', None)
+            layer_pts = (
+                [crs_mgr.project_to_layer(p) for p in self._points]
+                if crs_mgr else self._points
+            )
             for prov in self._ctx.snap_engine._providers.values():
                 if hasattr(prov, 'set_sketch_points'):
-                    prov.set_sketch_points(self._points)
+                    prov.set_sketch_points(layer_pts)
         if len(self._points) == 1:
             self._request_input("polar", "Specify next point:")
         elif len(self._points) > 1:

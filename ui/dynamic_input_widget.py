@@ -65,7 +65,7 @@ _CONFIGS = {
     "polar":     [("Dist",    "0.000"), ("Brg",     "0.0°" )],
     "value":     [("Value",   "0.000")],
     "text":      [("",        "pt")],                            # free-text single field
-    "unit":      [("Unit",    "ha")],                            # unit selection (area label)
+    "unit":      [("",        "ha")],                            # unit selection (area label)
     "integer":   [("",        "3" )],                            # integer entry (decimal places)
     "d1d2":      [("d1",      "2.000"), ("d2",      "2.000")],   # chamfer / fillet distances
     "rowcol":    [("Rows",    "3"),     ("Cols",    "3")],        # array row/col count
